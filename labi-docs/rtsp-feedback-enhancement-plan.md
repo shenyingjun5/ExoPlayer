@@ -69,7 +69,7 @@ Cast-SDK Android 接收端需要在 Android 4.4+ 设备上播放自家发送端�
 
 - 首帧超时、decoder recover 或明显落后时的自动 I 帧请求策略。
 - RTSP setup / keepalive / TCP fallback / 302 等剩余 P1 互操作回迁。
-- GitHub Pages Maven 远端发布和 Cast-SDK artifact 拉取验证。
+- Cast-SDK artifact 拉取验证。
 - Cast-SDK 仓库接入 patched artifact 与真机验证。
 
 ### Public API
@@ -184,7 +184,7 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | X6 | 实现 PLI/FIR builder 和 `requestKeyFrame(reason)` | 已完成 | `RtcpFeedbackPacketTest` + RTSP 单测 |
 | X7 | 暴露 RTP/reorder queue metrics | 已完成 | `RtpPacketReorderingQueueTest` |
 | X8 | Backport P0 RTSP 修复 | 已完成 | `:library-rtsp:test` |
-| X9 | 发布 `2.19.1-labi.1` artifact | 已完成本地发布 | `buildout/labi-maven-repo` 已生成 `com.zknowai.exoplayer` artifact 闭环；远端 GitHub Pages 推送另行执行/确认 |
+| X9 | 发布 `2.19.1-labi.1` artifact | 已发布 | `https://shenyingjun5.github.io/ExoPlayer/` 已可访问 POM/AAR；tag `exoplayer-rtsp-2.19.1-labi.1` 已推送 |
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
 
 ## 验收标准

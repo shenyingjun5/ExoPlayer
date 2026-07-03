@@ -26,7 +26,7 @@
 - 首帧超时自动请求 key frame。
 - decoder recover 或明显落后时自动请求 key frame。
 - RTSP setup/keepalive/TCP fallback/302 等剩余 P1 互操作回迁。
-- patched Maven artifact 本地发布已完成；GitHub Pages 远端发布和 Cast-SDK 接入验证未完成。
+- patched Maven artifact 本地和 GitHub Pages 远端发布已完成；Cast-SDK 接入验证未完成。
 
 ## 背景
 
@@ -320,11 +320,11 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID
 - 按 `media3-backport-review.md` 的 P0 顺序逐个回迁。
 - 每个 backport 单独提交，便于回滚。
 
-第五阶段：发布准备。状态：本地发布已完成。
+第五阶段：发布准备。状态：已完成发布。
 
 - 更新版本号策略：已完成，默认发布 `com.zknowai.exoplayer:*:2.19.1-labi.1`。
 - 准备 GitHub Actions 构建 AAR：未完成。
-- 发布 `2.19.1-labi.1` artifact：本地静态 Maven repo 已生成于 `buildout/labi-maven-repo`。
+- 发布 `2.19.1-labi.1` artifact：本地静态 Maven repo 已生成于 `buildout/labi-maven-repo`，远端已发布到 `https://shenyingjun5.github.io/ExoPlayer/`。
 
 ## 验收标准
 

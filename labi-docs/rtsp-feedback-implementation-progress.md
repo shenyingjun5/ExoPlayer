@@ -89,7 +89,7 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R1 | First-packet timeout triggers key-frame request | Not done | Needs timer/loader integration and false-positive guard |
 | R2 | Decoder recover or falling-behind trigger | Not done | Likely needs Cast-SDK/player evidence before touching renderer/core |
 | R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Not done | Keep as separate client-interop batch |
-| R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done locally | Static Maven repo generated at `buildout/labi-maven-repo` |
+| R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
 
 ## Publication Status
@@ -127,4 +127,10 @@ Result:
   `-x :library-core:test -x :library-core:testDebugUnitTest -x :library-core:testReleaseUnitTest`.
 - `library-core:lint`, `library-rtsp:lint`, and `library-rtsp:test` passed in the final publish run.
 
-Remote publication still requires pushing the release tag and static Maven repo to the chosen GitHub Pages branch.
+Remote publication:
+
+- release tag: `exoplayer-rtsp-2.19.1-labi.1`
+- Pages repo root: `https://shenyingjun5.github.io/ExoPlayer/`
+- RTSP POM: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.1/exoplayer-rtsp-2.19.1-labi.1.pom`
+- RTSP AAR: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.1/exoplayer-rtsp-2.19.1-labi.1.aar`
+- Verification: GitHub Pages status `built`; POM and AAR URLs returned HTTP 200.

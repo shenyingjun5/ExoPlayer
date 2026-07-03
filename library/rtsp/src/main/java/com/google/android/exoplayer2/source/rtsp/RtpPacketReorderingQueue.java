@@ -46,6 +46,9 @@ import java.util.TreeSet;
   // Use set to eliminate duplicating packets.
   @GuardedBy("this")
   private final TreeSet<RtpPacketContainer> packetQueue;
+  private final int trackId;
+  private final @RtspTransportMode.Mode int transportMode;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -56,8 +59,31 @@ import java.util.TreeSet;
   @GuardedBy("this")
   private boolean started;
 
+  @GuardedBy("this")
+  private int droppedBeforeEnqueueCount;
+
+  @GuardedBy("this")
+  private int duplicatePacketCount;
+
+  @GuardedBy("this")
+  private int resetCount;
+
   /** Creates an instance. */
   public RtpPacketReorderingQueue() {
+    this(
+        /* trackId= */ C.INDEX_UNSET,
+        RtspTransportMode.UNKNOWN,
+        /* rtspDiagnosticsListener= */ null);
+  }
+
+  /** Creates an instance. */
+  public RtpPacketReorderingQueue(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+    this.trackId = trackId;
+    this.transportMode = transportMode;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
@@ -65,14 +91,24 @@ import java.util.TreeSet;
                     packetContainer1.packet.sequenceNumber,
                     packetContainer2.packet.sequenceNumber));
 
-    reset();
+    reset(/* notifyDiagnostics= */ false);
   }
 
   public synchronized void reset() {
+    reset(/* notifyDiagnostics= */ true);
+  }
+
+  private synchronized void reset(boolean notifyDiagnostics) {
     packetQueue.clear();
     started = false;
     lastDequeuedSequenceNumber = C.INDEX_UNSET;
     lastReceivedSequenceNumber = C.INDEX_UNSET;
+    if (notifyDiagnostics) {
+      resetCount++;
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(/* sequenceGap= */ 0));
+      }
+    }
   }
 
   /**
@@ -99,7 +135,7 @@ import java.util.TreeSet;
 
     int packetSequenceNumber = packet.sequenceNumber;
     if (!started) {
-      reset();
+      reset(/* notifyDiagnostics= */ false);
       lastDequeuedSequenceNumber = RtpPacket.getPreviousSequenceNumber(packetSequenceNumber);
       started = true;
       addToQueue(new RtpPacketContainer(packet, receivedTimestampMs));
@@ -118,11 +154,16 @@ import java.util.TreeSet;
       }
     } else {
       // Discard all previous received packets and start subsequent receiving from here.
+      resetCount++;
       lastDequeuedSequenceNumber = RtpPacket.getPreviousSequenceNumber(packetSequenceNumber);
       packetQueue.clear();
       addToQueue(new RtpPacketContainer(packet, receivedTimestampMs));
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(sequenceNumberShift));
+      }
       return true;
     }
+    droppedBeforeEnqueueCount++;
     return false;
   }
 
@@ -156,9 +197,24 @@ import java.util.TreeSet;
 
   // Internals.
 
+  public synchronized RtpReorderingStats createStats(int sequenceGap) {
+    return new RtpReorderingStats(
+        trackId,
+        transportMode,
+        packetQueue.size(),
+        lastReceivedSequenceNumber,
+        lastDequeuedSequenceNumber,
+        sequenceGap,
+        droppedBeforeEnqueueCount,
+        duplicatePacketCount,
+        resetCount);
+  }
+
   private synchronized void addToQueue(RtpPacketContainer packet) {
     lastReceivedSequenceNumber = packet.packet.sequenceNumber;
-    packetQueue.add(packet);
+    if (!packetQueue.add(packet)) {
+      duplicatePacketCount++;
+    }
   }
 
   private static final class RtpPacketContainer {

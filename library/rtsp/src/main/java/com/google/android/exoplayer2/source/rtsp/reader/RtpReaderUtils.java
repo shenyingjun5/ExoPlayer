@@ -43,9 +43,10 @@ import com.google.android.exoplayer2.util.Util;
       long rtpTimestamp,
       long firstReceivedRtpTimestamp,
       int mediaFrequency) {
+    long rtpTimestampDelta = (rtpTimestamp - firstReceivedRtpTimestamp) & 0xFFFFFFFFL;
     return startTimeOffsetUs
         + Util.scaleLargeTimestamp(
-            rtpTimestamp - firstReceivedRtpTimestamp,
+            rtpTimestampDelta,
             /* multiplier= */ C.MICROS_PER_SECOND,
             /* divisor= */ mediaFrequency);
   }

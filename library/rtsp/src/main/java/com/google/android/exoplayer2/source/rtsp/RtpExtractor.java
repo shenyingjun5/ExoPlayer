@@ -48,6 +48,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final ParsableByteArray rtpPacketScratchBuffer;
   private final ParsableByteArray rtpPacketDataBuffer;
   private final int trackId;
+  private final @RtspTransportMode.Mode int transportMode;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   private final Object lock;
   private final RtpPacketReorderingQueue reorderingQueue;
 
@@ -66,14 +68,29 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private long playbackStartTimeUs;
 
   public RtpExtractor(RtpPayloadFormat payloadFormat, int trackId) {
+    this(
+        payloadFormat,
+        trackId,
+        RtspTransportMode.UNKNOWN,
+        /* rtspDiagnosticsListener= */ null);
+  }
+
+  public RtpExtractor(
+      RtpPayloadFormat payloadFormat,
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
     this.trackId = trackId;
+    this.transportMode = transportMode;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
 
     payloadReader =
         checkNotNull(new DefaultRtpPayloadReaderFactory().createPayloadReader(payloadFormat));
     rtpPacketScratchBuffer = new ParsableByteArray(RtpPacket.MAX_SIZE);
     rtpPacketDataBuffer = new ParsableByteArray();
     lock = new Object();
-    reorderingQueue = new RtpPacketReorderingQueue();
+    reorderingQueue =
+        new RtpPacketReorderingQueue(trackId, transportMode, rtspDiagnosticsListener);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     nextRtpTimestamp = C.TIME_UNSET;
@@ -148,7 +165,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     long packetArrivalTimeMs = SystemClock.elapsedRealtime();
     long packetCutoffTimeMs = getCutoffTimeMs(packetArrivalTimeMs);
-    reorderingQueue.offer(packet, packetArrivalTimeMs);
+    @Nullable RtpPacketStats parsedPacketStats = maybeCreatePacketStats(packet, packetArrivalTimeMs);
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onRtpPacketReceived(checkNotNull(parsedPacketStats));
+    }
+    if (!reorderingQueue.offer(packet, packetArrivalTimeMs)) {
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtpPacketDropped(
+            checkNotNull(parsedPacketStats), reorderingQueue.createStats(/* sequenceGap= */ 0));
+      }
+      return RESULT_CONTINUE;
+    }
     @Nullable RtpPacket dequeuedPacket = reorderingQueue.poll(packetCutoffTimeMs);
     if (dequeuedPacket == null) {
       // No packet is available for reading.
@@ -167,6 +194,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       }
       payloadReader.onReceivingFirstPacket(firstTimestamp, firstSequenceNumber);
       firstPacketRead = true;
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onFirstRtpPacketReceived(
+            checkNotNull(maybeCreatePacketStats(packet, packetArrivalTimeMs)));
+      }
     }
 
     synchronized (lock) {
@@ -182,6 +213,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       } else {
         do {
           // Deplete the reordering queue as much as possible.
+          if (rtspDiagnosticsListener != null) {
+            rtspDiagnosticsListener.onRtpPacketDequeued(
+                checkNotNull(maybeCreatePacketStats(packet, packetArrivalTimeMs)),
+                reorderingQueue.createStats(/* sequenceGap= */ 0));
+          }
           rtpPacketDataBuffer.reset(packet.payloadData);
           payloadReader.consume(
               rtpPacketDataBuffer, packet.timestamp, packet.sequenceNumber, packet.marker);
@@ -220,5 +256,21 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     // TODO(internal b/172331505) 30ms is roughly the time for one video frame. It is not rigorously
     // chosen and will need fine tuning in the future.
     return packetArrivalTimeMs - 30;
+  }
+
+  @Nullable
+  private RtpPacketStats maybeCreatePacketStats(RtpPacket packet, long packetArrivalTimeMs) {
+    if (rtspDiagnosticsListener == null) {
+      return null;
+    }
+    return new RtpPacketStats(
+        trackId,
+        transportMode,
+        packet.payloadType & 0xFF,
+        packet.sequenceNumber,
+        packet.timestamp,
+        packetArrivalTimeMs,
+        packet.ssrc,
+        packet.marker);
   }
 }

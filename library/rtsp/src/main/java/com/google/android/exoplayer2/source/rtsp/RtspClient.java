@@ -137,6 +137,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final String userAgent;
   private final SocketFactory socketFactory;
   private final boolean debugLoggingEnabled;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtspFeedbackListener rtspFeedbackListener;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final ArrayDeque<RtpLoadInfo> pendingSetupRtpLoadInfos;
   // TODO(b/172331505) Add a timeout monitor for pending requests.
   private final SparseArray<RtspRequest> pendingRequests;
@@ -179,11 +182,36 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       Uri uri,
       SocketFactory socketFactory,
       boolean debugLoggingEnabled) {
+    this(
+        sessionInfoListener,
+        playbackEventListener,
+        userAgent,
+        uri,
+        socketFactory,
+        debugLoggingEnabled,
+        /* rtspDiagnosticsListener= */ null,
+        /* rtspFeedbackListener= */ null,
+        RtcpFeedbackPolicy.DEFAULT);
+  }
+
+  public RtspClient(
+      SessionInfoListener sessionInfoListener,
+      PlaybackEventListener playbackEventListener,
+      String userAgent,
+      Uri uri,
+      SocketFactory socketFactory,
+      boolean debugLoggingEnabled,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtspFeedbackListener rtspFeedbackListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.sessionInfoListener = sessionInfoListener;
     this.playbackEventListener = playbackEventListener;
     this.userAgent = userAgent;
     this.socketFactory = socketFactory;
     this.debugLoggingEnabled = debugLoggingEnabled;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspFeedbackListener = rtspFeedbackListener;
+    this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
     this.pendingSetupRtpLoadInfos = new ArrayDeque<>();
     this.pendingRequests = new SparseArray<>();
     this.messageSender = new MessageSender();
@@ -192,6 +220,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtspAuthUserInfo = RtspMessageUtil.parseUserInfo(uri);
     this.pendingSeekPositionUs = C.TIME_UNSET;
     this.rtspState = RTSP_STATE_UNINITIALIZED;
+  }
+
+  /* package */ @Nullable RtspDiagnosticsListener getRtspDiagnosticsListener() {
+    return rtspDiagnosticsListener;
+  }
+
+  /* package */ @Nullable RtspFeedbackListener getRtspFeedbackListener() {
+    return rtspFeedbackListener;
+  }
+
+  /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
+    return rtcpFeedbackPolicy;
   }
 
   /**

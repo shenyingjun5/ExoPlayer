@@ -104,6 +104,27 @@ public final class RtpPacketTest {
   }
 
   @Test
+  public void parseRtpPacketWithHeaderExtension_skipsExtensionData() {
+    byte[] packetData =
+        getBytesFromHexString("90e000010000000200000003bede000111223344aabb");
+
+    RtpPacket packet = checkNotNull(RtpPacket.parse(packetData, packetData.length));
+
+    assertThat(packet.sequenceNumber).isEqualTo(1);
+    assertThat(packet.timestamp).isEqualTo(2);
+    assertThat(packet.ssrc).isEqualTo(3);
+    assertThat(packet.payloadData).isEqualTo(getBytesFromHexString("aabb"));
+  }
+
+  @Test
+  public void parseRtpPacketWithTruncatedHeaderExtension_returnsNull() {
+    byte[] packetData =
+        getBytesFromHexString("90e000010000000200000003bede0001112233");
+
+    assertThat(RtpPacket.parse(packetData, packetData.length)).isNull();
+  }
+
+  @Test
   public void writetoBuffer_withProperlySizedBuffer_writesPacket() {
     int packetByteLength = rtpData.length;
     RtpPacket packet = checkNotNull(RtpPacket.parse(rtpData, packetByteLength));

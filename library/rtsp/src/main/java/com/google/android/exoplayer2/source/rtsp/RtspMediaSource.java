@@ -38,6 +38,7 @@ import com.google.android.exoplayer2.upstream.Allocator;
 import com.google.android.exoplayer2.upstream.LoadErrorHandlingPolicy;
 import com.google.android.exoplayer2.upstream.TransferListener;
 import com.google.android.exoplayer2.util.Util;
+import com.google.common.base.Ascii;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.IOException;
 import javax.net.SocketFactory;
@@ -78,11 +79,15 @@ public final class RtspMediaSource extends BaseMediaSource {
     private SocketFactory socketFactory;
     private boolean forceUseRtpTcp;
     private boolean debugLoggingEnabled;
+    @Nullable private RtspDiagnosticsListener rtspDiagnosticsListener;
+    @Nullable private RtspFeedbackListener rtspFeedbackListener;
+    private RtcpFeedbackPolicy rtcpFeedbackPolicy;
 
     public Factory() {
       timeoutMs = DEFAULT_TIMEOUT_MS;
       userAgent = ExoPlayerLibraryInfo.VERSION_SLASHY;
       socketFactory = SocketFactory.getDefault();
+      rtcpFeedbackPolicy = RtcpFeedbackPolicy.DEFAULT;
     }
 
     /**
@@ -143,6 +148,50 @@ public final class RtspMediaSource extends BaseMediaSource {
     }
 
     /**
+     * Sets an optional listener for low-level RTSP/RTP diagnostics.
+     *
+     * <p>The default value is {@code null}. RTSP transport callbacks are invoked on the playback
+     * thread. RTP packet callbacks are invoked on the RTP loader thread.
+     *
+     * @param listener The diagnostics listener, or {@code null} to disable diagnostics callbacks.
+     * @return This Factory, for convenience.
+     */
+    @CanIgnoreReturnValue
+    public Factory setRtspDiagnosticsListener(@Nullable RtspDiagnosticsListener listener) {
+      this.rtspDiagnosticsListener = listener;
+      return this;
+    }
+
+    /**
+     * Sets an optional listener for RTCP feedback lifecycle events.
+     *
+     * <p>The default value is {@code null}. This first implementation phase wires the listener
+     * through the RTSP stack without sending RTCP feedback packets.
+     *
+     * @param listener The feedback listener, or {@code null} to disable callbacks.
+     * @return This Factory, for convenience.
+     */
+    @CanIgnoreReturnValue
+    public Factory setRtspFeedbackListener(@Nullable RtspFeedbackListener listener) {
+      this.rtspFeedbackListener = listener;
+      return this;
+    }
+
+    /**
+     * Sets the policy for RTCP key-frame feedback requests.
+     *
+     * <p>The default value is {@link RtcpFeedbackPolicy#DEFAULT}.
+     *
+     * @param policy The RTCP feedback policy.
+     * @return This Factory, for convenience.
+     */
+    @CanIgnoreReturnValue
+    public Factory setRtcpFeedbackPolicy(RtcpFeedbackPolicy policy) {
+      this.rtcpFeedbackPolicy = checkNotNull(policy);
+      return this;
+    }
+
+    /**
      * Sets the timeout in milliseconds, the default value is {@link #DEFAULT_TIMEOUT_MS}.
      *
      * <p>A positive number of milliseconds to wait before lack of received RTP packets is treated
@@ -188,12 +237,23 @@ public final class RtspMediaSource extends BaseMediaSource {
       checkNotNull(mediaItem.localConfiguration);
       return new RtspMediaSource(
           mediaItem,
-          forceUseRtpTcp
+          shouldForceUseRtpTcp(mediaItem)
               ? new TransferRtpDataChannelFactory(timeoutMs)
               : new UdpDataSourceRtpDataChannelFactory(timeoutMs),
           userAgent,
           socketFactory,
-          debugLoggingEnabled);
+          debugLoggingEnabled,
+          rtspDiagnosticsListener,
+          rtspFeedbackListener,
+          rtcpFeedbackPolicy);
+    }
+
+    private boolean shouldForceUseRtpTcp(MediaItem mediaItem) {
+      if (forceUseRtpTcp) {
+        return true;
+      }
+      @Nullable String scheme = checkNotNull(mediaItem.localConfiguration).uri.getScheme();
+      return scheme != null && Ascii.equalsIgnoreCase("rtspt", scheme);
     }
   }
 
@@ -225,6 +285,9 @@ public final class RtspMediaSource extends BaseMediaSource {
   private final Uri uri;
   private final SocketFactory socketFactory;
   private final boolean debugLoggingEnabled;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtspFeedbackListener rtspFeedbackListener;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
 
   private long timelineDurationUs;
   private boolean timelineIsSeekable;
@@ -238,12 +301,36 @@ public final class RtspMediaSource extends BaseMediaSource {
       String userAgent,
       SocketFactory socketFactory,
       boolean debugLoggingEnabled) {
+    this(
+        mediaItem,
+        rtpDataChannelFactory,
+        userAgent,
+        socketFactory,
+        debugLoggingEnabled,
+        /* rtspDiagnosticsListener= */ null,
+        /* rtspFeedbackListener= */ null,
+        RtcpFeedbackPolicy.DEFAULT);
+  }
+
+  @VisibleForTesting
+  /* package */ RtspMediaSource(
+      MediaItem mediaItem,
+      RtpDataChannel.Factory rtpDataChannelFactory,
+      String userAgent,
+      SocketFactory socketFactory,
+      boolean debugLoggingEnabled,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtspFeedbackListener rtspFeedbackListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.mediaItem = mediaItem;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.userAgent = userAgent;
-    this.uri = checkNotNull(this.mediaItem.localConfiguration).uri;
+    this.uri = maybeConvertRtsptUriScheme(checkNotNull(this.mediaItem.localConfiguration).uri);
     this.socketFactory = socketFactory;
     this.debugLoggingEnabled = debugLoggingEnabled;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspFeedbackListener = rtspFeedbackListener;
+    this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
     this.timelineDurationUs = C.TIME_UNSET;
     this.timelineIsPlaceholder = true;
   }
@@ -292,7 +379,10 @@ public final class RtspMediaSource extends BaseMediaSource {
         },
         userAgent,
         socketFactory,
-        debugLoggingEnabled);
+        debugLoggingEnabled,
+        rtspDiagnosticsListener,
+        rtspFeedbackListener,
+        rtcpFeedbackPolicy);
   }
 
   @Override
@@ -301,6 +391,14 @@ public final class RtspMediaSource extends BaseMediaSource {
   }
 
   // Internal methods.
+
+  private static Uri maybeConvertRtsptUriScheme(Uri uri) {
+    @Nullable String scheme = uri.getScheme();
+    if (scheme == null || !Ascii.equalsIgnoreCase("rtspt", scheme)) {
+      return uri;
+    }
+    return Uri.parse("rtsp" + uri.toString().substring(5));
+  }
 
   private void notifySourceInfoRefreshed() {
     Timeline timeline =
@@ -331,5 +429,30 @@ public final class RtspMediaSource extends BaseMediaSource {
           };
     }
     refreshSourceInfo(timeline);
+  }
+
+  @VisibleForTesting
+  /* package */ @Nullable RtspDiagnosticsListener getRtspDiagnosticsListener() {
+    return rtspDiagnosticsListener;
+  }
+
+  @VisibleForTesting
+  /* package */ @Nullable RtspFeedbackListener getRtspFeedbackListener() {
+    return rtspFeedbackListener;
+  }
+
+  @VisibleForTesting
+  /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
+    return rtcpFeedbackPolicy;
+  }
+
+  @VisibleForTesting
+  /* package */ Uri getUri() {
+    return uri;
+  }
+
+  @VisibleForTesting
+  /* package */ RtpDataChannel.Factory getRtpDataChannelFactory() {
+    return rtpDataChannelFactory;
   }
 }

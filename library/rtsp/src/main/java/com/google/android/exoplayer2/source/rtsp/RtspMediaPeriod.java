@@ -92,6 +92,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final List<RtpLoadInfo> selectedLoadInfos;
   private final Listener listener;
   private final RtpDataChannel.Factory rtpDataChannelFactory;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtspFeedbackListener rtspFeedbackListener;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
 
   private @MonotonicNonNull Callback callback;
   private @MonotonicNonNull ImmutableList<TrackGroup> trackGroups;
@@ -128,9 +131,36 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       String userAgent,
       SocketFactory socketFactory,
       boolean debugLoggingEnabled) {
+    this(
+        allocator,
+        rtpDataChannelFactory,
+        uri,
+        listener,
+        userAgent,
+        socketFactory,
+        debugLoggingEnabled,
+        /* rtspDiagnosticsListener= */ null,
+        /* rtspFeedbackListener= */ null,
+        RtcpFeedbackPolicy.DEFAULT);
+  }
+
+  public RtspMediaPeriod(
+      Allocator allocator,
+      RtpDataChannel.Factory rtpDataChannelFactory,
+      Uri uri,
+      Listener listener,
+      String userAgent,
+      SocketFactory socketFactory,
+      boolean debugLoggingEnabled,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtspFeedbackListener rtspFeedbackListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.allocator = allocator;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.listener = listener;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspFeedbackListener = rtspFeedbackListener;
+    this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
 
     handler = Util.createHandlerForCurrentLooper();
     internalListener = new InternalListener();
@@ -141,13 +171,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             /* userAgent= */ userAgent,
             /* uri= */ uri,
             socketFactory,
-            debugLoggingEnabled);
+            debugLoggingEnabled,
+            rtspDiagnosticsListener,
+            rtspFeedbackListener,
+            rtcpFeedbackPolicy);
     rtspLoaderWrappers = new ArrayList<>();
     selectedLoadInfos = new ArrayList<>();
 
     pendingSeekPositionUs = C.TIME_UNSET;
     requestedSeekPositionUs = C.TIME_UNSET;
     pendingSeekPositionUsForTcpRetry = C.TIME_UNSET;
+  }
+
+  /* package */ @Nullable RtspDiagnosticsListener getRtspDiagnosticsListener() {
+    return rtspDiagnosticsListener;
+  }
+
+  /* package */ @Nullable RtspFeedbackListener getRtspFeedbackListener() {
+    return rtspFeedbackListener;
+  }
+
+  /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
+    return rtcpFeedbackPolicy;
   }
 
   /** Releases the {@link RtspMediaPeriod}. */
@@ -891,10 +936,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             @Nullable
             RtspMessageChannel.InterleavedBinaryDataListener interleavedBinaryDataListener =
                 rtpDataChannel.getInterleavedBinaryDataListener();
+            @RtspTransportMode.Mode
+            int transportMode =
+                interleavedBinaryDataListener != null
+                    ? RtspTransportMode.TCP_INTERLEAVED
+                    : RtspTransportMode.UDP;
             if (interleavedBinaryDataListener != null) {
               rtspClient.registerInterleavedDataChannel(
                   rtpDataChannel.getLocalPort(), interleavedBinaryDataListener);
               isUsingRtpTcp = true;
+            }
+            if (rtspDiagnosticsListener != null) {
+              rtspDiagnosticsListener.onTransportReady(trackId, transportMode, transport);
             }
             maybeSetupTracks();
           };
@@ -905,7 +958,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               mediaTrack,
               /* eventListener= */ transportEventListener,
               /* output= */ internalListener,
-              rtpDataChannelFactory);
+              rtpDataChannelFactory,
+              rtspDiagnosticsListener);
     }
 
     /**

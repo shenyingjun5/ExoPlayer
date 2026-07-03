@@ -271,6 +271,39 @@ public class SessionDescriptionTest {
   }
 
   @Test
+  public void parse_sdpStringWithTrailingWhitespace_succeeds() throws Exception {
+    String testMediaSdpInfo =
+        "v=0   \r\n"
+            + "o=MNobody 2890844526 2890842807 IN IP4 192.0.2.46  \r\n"
+            + "s=SDP Seminar  \r\n"
+            + "t=0 0 \r\n"
+            + "m=audio 3456 RTP/AVP 97  \r\n"
+            + "a=rtpmap:97 AC3/44100  \r\n";
+
+    SessionDescription sessionDescription = SessionDescriptionParser.parse(testMediaSdpInfo);
+
+    assertThat(sessionDescription.origin)
+        .isEqualTo("MNobody 2890844526 2890842807 IN IP4 192.0.2.46");
+    assertThat(sessionDescription.sessionName).isEqualTo("SDP Seminar");
+    assertThat(sessionDescription.timing).isEqualTo("0 0");
+    assertThat(sessionDescription.mediaDescriptionList).hasSize(1);
+  }
+
+  @Test
+  public void parse_sdpStringWithEmptySessionInformation_succeeds() throws Exception {
+    String testMediaSdpInfo =
+        "v=0\r\n"
+            + "o=MNobody 2890844526 2890842807 IN IP4 192.0.2.46\r\n"
+            + "s=SDP Seminar\r\n"
+            + "i=\r\n"
+            + "t=0 0\r\n";
+
+    SessionDescription sessionDescription = SessionDescriptionParser.parse(testMediaSdpInfo);
+
+    assertThat(sessionDescription.sessionInfo).isEmpty();
+  }
+
+  @Test
   public void buildMediaDescription_withInvalidRtpmapAttribute_throwsIllegalStateException() {
     assertThrows(
         IllegalStateException.class,

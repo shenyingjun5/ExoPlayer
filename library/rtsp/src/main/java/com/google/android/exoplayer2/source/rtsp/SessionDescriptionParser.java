@@ -40,7 +40,7 @@ import java.util.regex.Pattern;
 /* package */ final class SessionDescriptionParser {
   // SDP line always starts with an one letter tag, followed by an equal sign. The information
   // under the given tag follows an optional space.
-  private static final Pattern SDP_LINE_PATTERN = Pattern.compile("([a-z])=\\s?(.+)");
+  private static final Pattern SDP_LINE_PATTERN = Pattern.compile("([a-z])=\\s?(.*)");
   // Matches an attribute line (with a= sdp tag removed. Example: range:npt=0-50.0).
   // Attribute can also be a flag, i.e. without a value, like recvonly. Reference RFC4566 Section 9
   // Page 43, under "token-char".
@@ -81,6 +81,7 @@ import java.util.regex.Pattern;
 
     // Lines are separated by an CRLF.
     for (String line : RtspMessageUtil.splitRtspMessageBody(sdpString)) {
+      line = line.trim();
       if ("".equals(line)) {
         continue;
       }

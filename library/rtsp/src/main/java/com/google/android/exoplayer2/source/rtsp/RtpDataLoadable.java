@@ -79,6 +79,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final ExtractorOutput output;
   private final Handler playbackThreadHandler;
   private final RtpDataChannel.Factory rtpDataChannelFactory;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
 
   @Nullable private RtpDataChannel dataChannel;
   private @MonotonicNonNull RtpExtractor extractor;
@@ -105,12 +106,29 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       EventListener eventListener,
       ExtractorOutput output,
       RtpDataChannel.Factory rtpDataChannelFactory) {
+    this(
+        trackId,
+        rtspMediaTrack,
+        eventListener,
+        output,
+        rtpDataChannelFactory,
+        /* rtspDiagnosticsListener= */ null);
+  }
+
+  public RtpDataLoadable(
+      int trackId,
+      RtspMediaTrack rtspMediaTrack,
+      EventListener eventListener,
+      ExtractorOutput output,
+      RtpDataChannel.Factory rtpDataChannelFactory,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
     this.trackId = trackId;
     this.rtspMediaTrack = rtspMediaTrack;
     this.eventListener = eventListener;
     this.output = output;
     this.playbackThreadHandler = Util.createHandlerForCurrentLooper();
     this.rtpDataChannelFactory = rtpDataChannelFactory;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     pendingSeekPositionUs = C.TIME_UNSET;
   }
 
@@ -156,6 +174,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (dataChannel == null) {
         dataChannel = rtpDataChannelFactory.createAndOpenDataChannel(trackId);
         String transport = dataChannel.getTransport();
+        @RtspTransportMode.Mode
+        int transportMode =
+            dataChannel.getInterleavedBinaryDataListener() != null
+                ? RtspTransportMode.TCP_INTERLEAVED
+                : RtspTransportMode.UDP;
 
         RtpDataChannel finalDataChannel = dataChannel;
         playbackThreadHandler.post(
@@ -164,7 +187,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         extractorInput =
             new DefaultExtractorInput(
                 checkNotNull(dataChannel), /* position= */ 0, /* length= */ C.LENGTH_UNSET);
-        extractor = new RtpExtractor(rtspMediaTrack.payloadFormat, trackId);
+        extractor =
+            new RtpExtractor(
+                rtspMediaTrack.payloadFormat, trackId, transportMode, rtspDiagnosticsListener);
         extractor.init(output);
       }
 

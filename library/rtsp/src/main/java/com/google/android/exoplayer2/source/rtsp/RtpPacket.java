@@ -30,7 +30,7 @@ import java.nio.ByteBuffer;
 /**
  * Represents the header and the payload of an RTP packet.
  *
- * <p>Not supported parsing at the moment: header extension and CSRC.
+ * <p>Header extension data is skipped when parsing and is not preserved in this object.
  *
  * <p>Structure of an RTP header (RFC3550, Section 5.1).
  *
@@ -204,6 +204,7 @@ public final class RtpPacket {
     int firstByte = packetBuffer.readUnsignedByte();
     byte version = (byte) (firstByte >> 6);
     boolean padding = ((firstByte >> 5) & 0x1) == 1;
+    boolean hasExtension = ((firstByte >> 4) & 0x1) == 1;
     byte csrcCount = (byte) (firstByte & 0xF);
 
     if (version != RTP_VERSION) {
@@ -225,12 +226,29 @@ public final class RtpPacket {
     // CSRC.
     byte[] csrc;
     if (csrcCount > 0) {
+      if (packetBuffer.bytesLeft() < csrcCount * CSRC_SIZE) {
+        return null;
+      }
       csrc = new byte[csrcCount * CSRC_SIZE];
       for (int i = 0; i < csrcCount; i++) {
         packetBuffer.readBytes(csrc, i * CSRC_SIZE, CSRC_SIZE);
       }
     } else {
       csrc = EMPTY;
+    }
+
+    if (hasExtension) {
+      if (packetBuffer.bytesLeft() < 4) {
+        return null;
+      }
+      // Skip profile-defined extension ID.
+      packetBuffer.skipBytes(2);
+      int headerExtensionPayloadLength = packetBuffer.readUnsignedShort();
+      int extensionPayloadBytes = headerExtensionPayloadLength * 4;
+      if (packetBuffer.bytesLeft() < extensionPayloadBytes) {
+        return null;
+      }
+      packetBuffer.skipBytes(extensionPayloadBytes);
     }
 
     // Everything else will be RTP payload.

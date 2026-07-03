@@ -6,6 +6,28 @@
 
 本阶段不修改 Cast-SDK 仓库，只在 ExoPlayer fork 中完成 RTSP 模块增强、单元测试和可发布 artifact 的准备。
 
+## 当前实现状态
+
+截至 2026-07-03，ExoPlayer fork 内已完成：
+
+- `RtspMediaSource.Factory` 可选 diagnostics/feedback/policy API。
+- `RtspDiagnosticsListener`、`RtspFeedbackListener`、`RtcpFeedbackPolicy`、`RtcpFeedbackRequest`、`RtcpFeedbackReason`、`RtcpFeedbackType`、`RtspTransportMode`、`RtpPacketStats`、`RtpReorderingStats`。
+- RTP packet 与 reorder queue diagnostics。
+- TCP interleaved RTCP binary frame send。
+- UDP RTCP feedback send。
+- RTCP PLI/FIR packet builder。
+- `RtspMediaPeriod.requestKeyFrame(reason)` 内部请求链路。
+- RTP sequence gap 和 queue reset 自动触发 key-frame request。
+- Media3 P0 RTSP payload reader backport 与低风险 P1 parser/factory hardening。
+- `:library-rtsp:testDebugUnitTest`、目标 RTCP 单测和 `:library-rtsp:assembleRelease` 已通过。
+
+仍未完成：
+
+- 首帧超时自动请求 key frame。
+- decoder recover 或明显落后时自动请求 key frame。
+- RTSP setup/keepalive/TCP fallback/302 等剩余 P1 互操作回迁。
+- patched Maven artifact 本地发布已完成；GitHub Pages 远端发布和 Cast-SDK 接入验证未完成。
+
 ## 背景
 
 Cast-SDK 发送端已经具备：
@@ -214,13 +236,13 @@ boolean requestKeyFrame(RtcpFeedbackReason reason);
 
 ## 低延迟触发建议
 
-本 fork 只提供底层能力，不直接绑定 Cast-SDK 策略。
+本 fork 主要提供底层能力，不直接绑定 Cast-SDK 策略。
 
 可以提供基础 helper：
 
-- first packet timeout 时 request key frame。
-- sequence gap 达到阈值时 request key frame。
-- queue reset 时 request key frame。
+- first packet timeout 时 request key frame：未完成。
+- sequence gap 达到阈值时 request key frame：已完成。
+- queue reset 时 request key frame：已完成。
 
 更复杂的策略由 Cast-SDK 接收端通过 listener 和 `requestKeyFrame` 能力决定。
 
@@ -266,53 +288,53 @@ boolean requestKeyFrame(RtcpFeedbackReason reason);
 建议先跑：
 
 ```bash
-./gradlew :library:rtsp:test
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest
 ```
 
-如果模块路径不同，以当前 ExoPlayer Gradle 项目实际名称为准。
+当前 ExoPlayer fork 的 RTSP Gradle target 是 `:library-rtsp`，不是 `:exoplayer-rtsp` 或 `:library:rtsp`。
 
 ## 交付顺序
 
-第一阶段：API 和 diagnostics 骨架。
+第一阶段：API 和 diagnostics 骨架。状态：已完成。
 
 - 新增 listener/policy/stats 类型。
 - `RtspMediaSource.Factory` 接入配置。
 - `RtspMediaPeriod` / `RtpDataLoadable` 传递 listener。
 - 不改变默认行为。
 
-第二阶段：RTCP feedback。
+第二阶段：RTCP feedback。状态：已完成。
 
 - PLI/FIR builder。
 - TCP interleaved RTCP send。
 - UDP RTCP send。
 - 限流和 diagnostics。
 
-第三阶段：RTP metrics。
+第三阶段：RTP metrics。状态：已完成。
 
 - `RtpExtractor` packet metrics。
 - `RtpPacketReorderingQueue` queue metrics。
 - gap/drop/late/reset 上报。
 
-第四阶段：Media3 P0 backport。
+第四阶段：Media3 P0 backport。状态：已完成。
 
 - 按 `media3-backport-review.md` 的 P0 顺序逐个回迁。
 - 每个 backport 单独提交，便于回滚。
 
-第五阶段：发布准备。
+第五阶段：发布准备。状态：本地发布已完成。
 
-- 更新版本号策略。
-- 准备 GitHub Actions 构建 AAR。
-- 发布 `2.19.1-labi.1` artifact。
+- 更新版本号策略：已完成，默认发布 `com.zknowai.exoplayer:*:2.19.1-labi.1`。
+- 准备 GitHub Actions 构建 AAR：未完成。
+- 发布 `2.19.1-labi.1` artifact：本地静态 Maven repo 已生成于 `buildout/labi-maven-repo`。
 
 ## 验收标准
 
-- Android 4.4 兼容基线不破坏。
-- 原有 RTSP 用法不需要修改即可继续工作。
-- Cast-SDK 能通过 listener 收到 RTP/RTCP diagnostics。
-- Cast-SDK 能触发 PLI/FIR，并由发送端收到后强制 IDR。
-- P0 Media3 RTSP 修复至少完成评估，能回迁的完成回迁。
-- 关键协议行为有单测。
-- 不引入 Media3 整体依赖。
+- Android 4.4 兼容基线不破坏：代码层保持 `minSdkVersion=16`，仍需 Android 4.4 设备验证。
+- 原有 RTSP 用法不需要修改即可继续工作：单测通过，仍需回归验证真实流。
+- Cast-SDK 能通过 listener 收到 RTP/RTCP diagnostics：ExoPlayer fork 已具备 API，Cast-SDK 接入未完成。
+- Cast-SDK 能触发 PLI/FIR，并由发送端收到后强制 IDR：ExoPlayer fork 已具备发送链路，Cast-SDK 联调未完成。
+- P0 Media3 RTSP 修复至少完成评估，能回迁的完成回迁：已完成。
+- 关键协议行为有单测：已完成。
+- 不引入 Media3 整体依赖：已满足。
 
 ## 明确禁止
 

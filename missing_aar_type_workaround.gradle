@@ -72,6 +72,7 @@ def addMissingAarTypeToXml(xml) {
                     String dependencyName = groupId + ":" + artifactId
                     boolean isProjectLibrary =
      groupId == 'com.google.android.exoplayer'
+         || groupId == 'com.zknowai.exoplayer'
                     boolean hasJar =
                         jar_only_dependencies.contains(dependencyName)
                     boolean hasAar =

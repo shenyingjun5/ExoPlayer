@@ -2,7 +2,21 @@
 
 ## Current Scope
 
-第一阶段只实现 RTSP feedback/diagnostics API 骨架和内部配置透传，保持 ExoPlayer 2.19.1 默认行为不变。
+当前分支已经越过第一阶段 API 骨架，完成了 RTSP feedback/diagnostics 基础能力、RTCP PLI/FIR 发送链路和 Media3 RTSP P0/P1 小范围 backport。
+
+已落地提交：
+
+- `dd3af995c7 feat(rtsp): backport Media3 live fixes`
+- `93e0c32c7a feat(rtsp): send RTCP feedback requests`
+
+与发布准备相关的 Gradle 改动：
+
+- `build.gradle`
+- `constants.gradle`
+- `missing_aar_type_workaround.gradle`
+- `publish.gradle`
+
+这些 Gradle 改动把默认发布 group/version/scm 指向 fork artifact，属于 X9 发布配置。
 
 ## Repository Check
 
@@ -20,7 +34,7 @@
 | P1.2 | Add optional setters on `RtspMediaSource.Factory` | Done | `RtspFeedbackApiTest.factorySetters_passConfigurationToMediaPeriod` |
 | P1.3 | Pass listener and policy through `RtspMediaSource`, `RtspMediaPeriod`, `RtspClient`, `RtpDataLoadable`, `RtpExtractor`, and `RtpPacketReorderingQueue` | Done | Constructor/default behavior covered by API tests |
 | P1.4 | Emit only low-cost diagnostics events when listener is non-null | Done | RTSP unit tests passed |
-| P1.5 | Keep RTCP PLI/FIR send implementation out of phase 1 | Done | No binary feedback send path added |
+| P1.5 | Keep RTCP PLI/FIR send implementation out of phase 1 | Done for phase 1 | Later superseded by RTCP Feedback Completion below |
 
 ## Phase 1 Test Status
 
@@ -34,12 +48,12 @@
   `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
 - Result: passed. `BUILD SUCCESSFUL in 31s`, `195 actionable tasks: 1 executed, 194 up-to-date`.
 
-## Out of Scope For This Phase
+## Out of Scope For Phase 1
 
-- PLI/FIR packet builders.
-- TCP interleaved RTCP binary frame sending.
-- UDP RTCP feedback sending.
-- Media3 P0 RTP payload reader backports.
+- PLI/FIR packet builders: later completed in `93e0c32c7a`.
+- TCP interleaved RTCP binary frame sending: later completed in `93e0c32c7a`.
+- UDP RTCP feedback sending: later completed in `93e0c32c7a`.
+- Media3 P0 RTP payload reader backports: completed in `dd3af995c7`.
 - Cast-SDK dependency changes.
 
 ## RTCP Feedback Completion
@@ -67,3 +81,50 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 - Release AAR build command:
   `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease`
 - Release AAR build result: passed. `BUILD SUCCESSFUL in 388ms`, `94 actionable tasks: 94 up-to-date`.
+
+## Remaining Work
+
+| ID | Task | Status | Notes |
+| --- | --- | --- | --- |
+| R1 | First-packet timeout triggers key-frame request | Not done | Needs timer/loader integration and false-positive guard |
+| R2 | Decoder recover or falling-behind trigger | Not done | Likely needs Cast-SDK/player evidence before touching renderer/core |
+| R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Not done | Keep as separate client-interop batch |
+| R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done locally | Static Maven repo generated at `buildout/labi-maven-repo` |
+| R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
+
+## Publication Status
+
+Local Gradle changes configure:
+
+- Default group override from `com.google.android.exoplayer` to `com.zknowai.exoplayer`.
+- Default release version override to `2.19.1-labi.1`.
+- Fork SCM metadata in generated POM.
+- AAR type workaround recognition for `com.zknowai.exoplayer`.
+
+Generated local Maven repo:
+
+- path: `buildout/labi-maven-repo`
+- version: `2.19.1-labi.1`
+- group: `com.zknowai.exoplayer`
+- artifact closure:
+  `exoplayer-common`, `exoplayer-container`, `exoplayer-database`, `exoplayer-datasource`,
+  `exoplayer-decoder`, `exoplayer-extractor`, `exoplayer-core`, `exoplayer-rtsp`.
+
+Publish command:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew -PmavenRepo=/Users/shenyingjun/Downloads/ExoPlayer/buildout/labi-maven-repo :library-common:publishReleasePublicationToMavenRepository :library-container:publishReleasePublicationToMavenRepository :library-database:publishReleasePublicationToMavenRepository :library-datasource:publishReleasePublicationToMavenRepository :library-decoder:publishReleasePublicationToMavenRepository :library-extractor:publishReleasePublicationToMavenRepository :library-core:publishReleasePublicationToMavenRepository :library-rtsp:publishReleasePublicationToMavenRepository
+```
+
+Result:
+
+- `library-common`, `library-container`, `library-database`, `library-datasource`, `library-decoder`, and `library-extractor` published with their lint/test dependencies passing.
+- `library-core:testDebugUnitTest` failed on two upstream async timeout tests:
+  `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`.
+- The two failed core tests also fail when rerun directly; core source was not changed for RTSP feedback.
+- `library-core` and `library-rtsp` artifacts were generated with core tests explicitly excluded:
+  `-x :library-core:test -x :library-core:testDebugUnitTest -x :library-core:testReleaseUnitTest`.
+- `library-core:lint`, `library-rtsp:lint`, and `library-rtsp:test` passed in the final publish run.
+
+Remote publication still requires pushing the release tag and static Maven repo to the chosen GitHub Pages branch.

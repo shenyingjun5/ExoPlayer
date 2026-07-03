@@ -47,6 +47,31 @@ Cast-SDK Android 接收端需要在 Android 4.4+ 设备上播放自家发送端�
 
 ## 增强设计
 
+## 当前实施状态
+
+截至 2026-07-03，当前分支已包含两个本地提交：
+
+- `dd3af995c7 feat(rtsp): backport Media3 live fixes`
+- `93e0c32c7a feat(rtsp): send RTCP feedback requests`
+
+已完成：
+
+- RTSP diagnostics/feedback API 和配置透传。
+- RTP packet/reorder queue diagnostics。
+- TCP interleaved 和 UDP RTCP feedback 发送。
+- RTCP PLI/FIR packet builder。
+- `RtspMediaPeriod.requestKeyFrame(reason)` 到各 RTP track 的内部请求链路。
+- RTP sequence gap 和 queue reset 触发 key-frame request。
+- Media3 P0/P1 RTSP 小范围 backport。
+- `:library-rtsp:testDebugUnitTest`、目标 RTCP 单测和 `:library-rtsp:assembleRelease` 验证通过。
+
+仍未完成：
+
+- 首帧超时、decoder recover 或明显落后时的自动 I 帧请求策略。
+- RTSP setup / keepalive / TCP fallback / 302 等剩余 P1 互操作回迁。
+- GitHub Pages Maven 远端发布和 Cast-SDK artifact 拉取验证。
+- Cast-SDK 仓库接入 patched artifact 与真机验证。
+
 ### Public API
 
 在 `RtspMediaSource.Factory` 增加可选配置：
@@ -86,9 +111,10 @@ API 必须保持可选，不影响现有官方用法。
 
 目标能力：
 
-- 首帧超时请求 I 帧。
-- sequence gap 持续出现时请求 I 帧。
-- decoder recover 或明显落后时请求 I 帧。
+- 首帧超时请求 I 帧：未完成。
+- sequence gap 持续出现时请求 I 帧：已完成，基于 `RtcpFeedbackPolicy.sequenceGapRequestThreshold`。
+- queue reset 请求 I 帧：已完成。
+- decoder recover 或明显落后时请求 I 帧：未完成，需要 Cast-SDK 真机证据或 renderer 层证据后再评估。
 - 诊断事件可被 Cast-SDK 接收端 debug state 输出。
 
 ## Media3 Backport 策略
@@ -158,14 +184,14 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | X6 | 实现 PLI/FIR builder 和 `requestKeyFrame(reason)` | 已完成 | `RtcpFeedbackPacketTest` + RTSP 单测 |
 | X7 | 暴露 RTP/reorder queue metrics | 已完成 | `RtpPacketReorderingQueueTest` |
 | X8 | Backport P0 RTSP 修复 | 已完成 | `:library-rtsp:test` |
-| X9 | 发布 `2.19.1-labi.1` artifact | 待发布 | `:library-rtsp:assembleRelease` 已通过；GitHub Pages 发布需后续 release/tag 流程 |
+| X9 | 发布 `2.19.1-labi.1` artifact | 已完成本地发布 | `buildout/labi-maven-repo` 已生成 `com.zknowai.exoplayer` artifact 闭环；远端 GitHub Pages 推送另行执行/确认 |
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
 
 ## 验收标准
 
-- patched RTSP 模块保持 Android 4.4 可用。
-- Cast-SDK 接收端能收到 diagnostics。
-- Cast-SDK 接收端能触发 RTCP PLI/FIR。
-- Cast-SDK 发送端能收到 PLI/FIR 并强制 IDR。
-- H.264/H.265 RTP 关键 backport 有单测覆盖。
-- 真机 RTSP live 摄像头和屏幕链路不回退、不黑屏、不明显增加延迟。
+- patched RTSP 模块保持 Android 4.4 可用：代码层保持 `minSdkVersion=16`，仍需真机覆盖。
+- Cast-SDK 接收端能收到 diagnostics：ExoPlayer fork API 已具备，Cast-SDK 接入未完成。
+- Cast-SDK 接收端能触发 RTCP PLI/FIR：ExoPlayer fork 内部链路已具备，Cast-SDK 接入未完成。
+- Cast-SDK 发送端能收到 PLI/FIR 并强制 IDR：需 Cast-SDK 联调验证。
+- H.264/H.265 RTP 关键 backport 有单测覆盖：已完成。
+- 真机 RTSP live 摄像头和屏幕链路不回退、不黑屏、不明显增加延迟：未完成，发布 artifact 后验证。

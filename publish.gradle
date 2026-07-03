@@ -26,7 +26,7 @@ afterEvaluate {
             release(MavenPublication) {
                 from components.release
                 artifact androidSourcesJar
-                groupId = 'com.google.android.exoplayer'
+                groupId = findProperty('releaseGroupId') ?: project.group
                 artifactId = releaseArtifactId
                 version releaseVersion
                 pom {
@@ -45,8 +45,8 @@ afterEvaluate {
                         }
                     }
                     scm {
-                        connection = 'scm:git:https://github.com/google/ExoPlayer.git'
-                        url = 'https://github.com/google/ExoPlayer'
+                        connection = 'scm:git:https://github.com/shenyingjun5/ExoPlayer.git'
+                        url = 'https://github.com/shenyingjun5/ExoPlayer'
                     }
                     withXml {
                         addMissingAarTypeToXml(it)

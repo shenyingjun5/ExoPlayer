@@ -19,6 +19,10 @@ import static com.google.common.truth.Truth.assertThat;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.upstream.UdpDataSource;
+import com.google.android.exoplayer2.util.Util;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -32,5 +36,34 @@ public class UdpDataSourceRtpDataChannelTest {
         new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
 
     assertThat(udpDataSourceRtpDataChannel.getInterleavedBinaryDataListener()).isNull();
+  }
+
+  @Test
+  public void sendRtcpPacket_withRemoteRtcpEndpoint_sendsFromRtcpChannel() throws Exception {
+    UdpDataSourceRtpDataChannel rtpChannel =
+        new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
+    UdpDataSourceRtpDataChannel rtcpChannel =
+        new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
+    DatagramSocket receiver = new DatagramSocket(/* port= */ 0, InetAddress.getByName(null));
+    byte[] packet = Util.getBytesFromHexString("81CE00020102030411223344");
+
+    try {
+      rtpChannel.open(RtpUtils.getIncomingRtpDataSpec(/* portNumber= */ 0));
+      rtcpChannel.open(RtpUtils.getIncomingRtpDataSpec(/* portNumber= */ 0));
+      rtpChannel.setRtcpChannel(rtcpChannel);
+      rtpChannel.setRemoteRtcpEndpoint("127.0.0.1", receiver.getLocalPort());
+
+      assertThat(rtpChannel.sendRtcpPacket(packet)).isTrue();
+
+      byte[] received = new byte[packet.length];
+      DatagramPacket receivedPacket = new DatagramPacket(received, received.length);
+      receiver.receive(receivedPacket);
+      assertThat(receivedPacket.getLength()).isEqualTo(packet.length);
+      assertThat(received).isEqualTo(packet);
+      assertThat(receivedPacket.getPort()).isEqualTo(rtcpChannel.getLocalPort());
+    } finally {
+      rtpChannel.close();
+      receiver.close();
+    }
   }
 }

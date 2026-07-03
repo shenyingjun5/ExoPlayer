@@ -152,13 +152,13 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | --- | --- | --- | --- |
 | X1 | 建立 fork 项目文档和 Agent 规则 | 已完成 | 人工检查 `AGENTS.md` 和本文 |
 | X2 | 梳理 Media3 RTSP backport 清单 | 已完成 | `labi-docs/media3-backport-review.md` |
-| X3 | 定义 RTSP diagnostics/feedback API | 未开始 | API review |
-| X4 | 实现 TCP interleaved RTCP 发送 | 未开始 | 单测 |
-| X5 | 实现 UDP RTCP 发送 | 未开始 | 单测 |
-| X6 | 实现 PLI/FIR builder 和 `requestKeyFrame(reason)` | 未开始 | fixture 单测 |
-| X7 | 暴露 RTP/reorder queue metrics | 未开始 | queue/gap/drop 单测 |
+| X3 | 定义 RTSP diagnostics/feedback API | 已完成 | `RtspFeedbackApiTest` |
+| X4 | 实现 TCP interleaved RTCP 发送 | 已完成 | `RtspMessageChannelTest` |
+| X5 | 实现 UDP RTCP 发送 | 已完成 | `UdpDataSourceRtpDataChannelTest` |
+| X6 | 实现 PLI/FIR builder 和 `requestKeyFrame(reason)` | 已完成 | `RtcpFeedbackPacketTest` + RTSP 单测 |
+| X7 | 暴露 RTP/reorder queue metrics | 已完成 | `RtpPacketReorderingQueueTest` |
 | X8 | Backport P0 RTSP 修复 | 已完成 | `:library-rtsp:test` |
-| X9 | 发布 `2.19.1-labi.1` artifact | 未开始 | Maven 拉取验证 |
+| X9 | 发布 `2.19.1-labi.1` artifact | 待发布 | `:library-rtsp:assembleRelease` 已通过；GitHub Pages 发布需后续 release/tag 流程 |
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
 
 ## 验收标准

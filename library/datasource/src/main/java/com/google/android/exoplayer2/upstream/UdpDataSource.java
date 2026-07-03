@@ -199,4 +199,16 @@ public final class UdpDataSource extends BaseDataSource {
     }
     return socket.getLocalPort();
   }
+
+  /** Sends one UDP datagram from the opened socket. */
+  public void send(byte[] data, InetAddress remoteAddress, int remotePort)
+      throws UdpDataSourceException {
+    try {
+      checkNotNull(socket)
+          .send(new DatagramPacket(data, data.length, remoteAddress, remotePort));
+    } catch (IOException e) {
+      throw new UdpDataSourceException(
+          e, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED);
+    }
+  }
 }

@@ -42,4 +42,16 @@ public interface RtspDiagnosticsListener {
 
   /** Called when the RTP reordering queue is reset. */
   default void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {}
+
+  /** Called when an RTCP feedback request is blocked by policy. */
+  default void onRtcpFeedbackThrottled(RtcpFeedbackRequest request) {}
+
+  /** Called when an RTCP PLI packet is sent. */
+  default void onRtcpPliSent(RtcpFeedbackRequest request) {}
+
+  /** Called when an RTCP FIR packet is sent. */
+  default void onRtcpFirSent(RtcpFeedbackRequest request) {}
+
+  /** Called when an RTCP feedback request failed to send. */
+  default void onRtcpFeedbackSendFailed(RtcpFeedbackRequest request, Exception error) {}
 }

@@ -154,6 +154,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private KeepAliveMonitor keepAliveMonitor;
   @Nullable private RtspAuthenticationInfo rtspAuthenticationInfo;
   private @RtspState int rtspState;
+  @Nullable private RtpLoadInfo currentSetupRtpLoadInfo;
   private boolean hasUpdatedTimelineAndTracks;
   private boolean receivedAuthorizationRequest;
   private boolean hasPendingPauseRequest;
@@ -335,13 +336,38 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     messageChannel.registerInterleavedBinaryDataListener(channel, interleavedBinaryDataListener);
   }
 
+  /** Sends RTCP feedback using an RTSP interleaved binary frame. */
+  public void sendInterleavedBinaryData(int channel, byte[] data) {
+    messageChannel.sendInterleavedBinaryData(channel, data);
+  }
+
   private void continueSetupRtspTrack() {
     @Nullable RtpLoadInfo loadInfo = pendingSetupRtpLoadInfos.pollFirst();
     if (loadInfo == null) {
+      currentSetupRtpLoadInfo = null;
       playbackEventListener.onRtspSetupCompleted();
       return;
     }
+    currentSetupRtpLoadInfo = loadInfo;
     messageSender.sendSetupRequest(loadInfo.getTrackUri(), loadInfo.getTransport(), sessionId);
+  }
+
+  @Nullable
+  private static Integer parseServerRtcpPort(String transportHeader) {
+    for (String transportParameter : Util.split(transportHeader, ";")) {
+      String[] keyValue = Util.splitAtFirst(transportParameter.trim(), "=");
+      if (keyValue.length == 2 && keyValue[0].equals("server_port")) {
+        String[] ports = Util.splitAtFirst(keyValue[1], "-");
+        if (ports.length == 2) {
+          try {
+            return Integer.parseInt(ports[1]);
+          } catch (NumberFormatException e) {
+            return null;
+          }
+        }
+      }
+    }
+    return null;
   }
 
   private void maybeLogMessage(List<String> message) {
@@ -554,6 +580,23 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     @Override
     public void onRtspMessageReceived(List<String> message) {
       messageHandler.post(() -> handleRtspMessage(message));
+    }
+
+    @Override
+    public void onInterleavedBinaryDataSendingFailed(int channel, byte[] data, Exception e) {
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtcpFeedbackSendFailed(
+            new RtcpFeedbackRequest(
+                /* trackId= */ C.INDEX_UNSET,
+                RtcpFeedbackType.UNKNOWN,
+                RtcpFeedbackReason.UNKNOWN,
+                RtspTransportMode.TCP_INTERLEAVED,
+                rtcpFeedbackPolicy.senderSsrc,
+                /* mediaSsrc= */ 0,
+                android.os.SystemClock.elapsedRealtime(),
+                "RTSP interleaved channel " + channel + " send failed"),
+            e);
+      }
     }
 
     private void handleRtspMessage(List<String> message) {
@@ -776,6 +819,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
       rtspState = RTSP_STATE_READY;
       sessionId = response.sessionHeader.sessionId;
+      @Nullable Integer serverRtcpPort = parseServerRtcpPort(response.transport);
+      if (currentSetupRtpLoadInfo != null && serverRtcpPort != null) {
+        currentSetupRtpLoadInfo.setRemoteRtcpEndpoint(checkNotNull(uri.getHost()), serverRtcpPort);
+      }
       continueSetupRtspTrack();
     }
 

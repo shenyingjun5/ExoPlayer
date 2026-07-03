@@ -41,6 +41,7 @@ import com.google.android.exoplayer2.util.Util;
 import com.google.common.base.Ascii;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.IOException;
+import java.util.ArrayList;
 import javax.net.SocketFactory;
 
 /**
@@ -288,6 +289,7 @@ public final class RtspMediaSource extends BaseMediaSource {
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final ArrayList<RtspMediaPeriod> activeMediaPeriods;
 
   private long timelineDurationUs;
   private boolean timelineIsSeekable;
@@ -331,6 +333,7 @@ public final class RtspMediaSource extends BaseMediaSource {
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
+    this.activeMediaPeriods = new ArrayList<>();
     this.timelineDurationUs = C.TIME_UNSET;
     this.timelineIsPlaceholder = true;
   }
@@ -357,7 +360,8 @@ public final class RtspMediaSource extends BaseMediaSource {
 
   @Override
   public MediaPeriod createPeriod(MediaPeriodId id, Allocator allocator, long startPositionUs) {
-    return new RtspMediaPeriod(
+    RtspMediaPeriod mediaPeriod =
+        new RtspMediaPeriod(
         allocator,
         rtpDataChannelFactory,
         uri,
@@ -383,11 +387,28 @@ public final class RtspMediaSource extends BaseMediaSource {
         rtspDiagnosticsListener,
         rtspFeedbackListener,
         rtcpFeedbackPolicy);
+    activeMediaPeriods.add(mediaPeriod);
+    return mediaPeriod;
   }
 
   @Override
   public void releasePeriod(MediaPeriod mediaPeriod) {
-    ((RtspMediaPeriod) mediaPeriod).release();
+    RtspMediaPeriod rtspMediaPeriod = (RtspMediaPeriod) mediaPeriod;
+    activeMediaPeriods.remove(rtspMediaPeriod);
+    rtspMediaPeriod.release();
+  }
+
+  /**
+   * Requests an RTCP PLI/FIR key-frame feedback packet on active RTSP periods.
+   *
+   * @return Whether at least one request was sent.
+   */
+  public boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+    boolean requested = false;
+    for (int i = 0; i < activeMediaPeriods.size(); i++) {
+      requested |= activeMediaPeriods.get(i).requestKeyFrame(reason);
+    }
+    return requested;
   }
 
   // Internal methods.

@@ -80,6 +80,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final Handler playbackThreadHandler;
   private final RtpDataChannel.Factory rtpDataChannelFactory;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
 
   @Nullable private RtpDataChannel dataChannel;
   private @MonotonicNonNull RtpExtractor extractor;
@@ -112,7 +114,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         eventListener,
         output,
         rtpDataChannelFactory,
-        /* rtspDiagnosticsListener= */ null);
+        /* rtspDiagnosticsListener= */ null,
+        /* rtcpFeedbackRequester= */ null,
+        RtcpFeedbackPolicy.DEFAULT);
   }
 
   public RtpDataLoadable(
@@ -121,7 +125,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       EventListener eventListener,
       ExtractorOutput output,
       RtpDataChannel.Factory rtpDataChannelFactory,
-      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.trackId = trackId;
     this.rtspMediaTrack = rtspMediaTrack;
     this.eventListener = eventListener;
@@ -129,6 +135,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.playbackThreadHandler = Util.createHandlerForCurrentLooper();
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
     pendingSeekPositionUs = C.TIME_UNSET;
   }
 
@@ -156,6 +164,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (!checkNotNull(extractor).hasReadFirstRtpPacket()) {
       extractor.setFirstSequenceNumber(sequenceNumber);
     }
+  }
+
+  /** Returns the latest RTP SSRC seen by the loadable, or {@link C#INDEX_UNSET}. */
+  public int getLastSsrc() {
+    return extractor == null ? C.INDEX_UNSET : extractor.getLastSsrc();
   }
 
   @Override
@@ -189,7 +202,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 checkNotNull(dataChannel), /* position= */ 0, /* length= */ C.LENGTH_UNSET);
         extractor =
             new RtpExtractor(
-                rtspMediaTrack.payloadFormat, trackId, transportMode, rtspDiagnosticsListener);
+                rtspMediaTrack.payloadFormat,
+                trackId,
+                transportMode,
+                rtspDiagnosticsListener,
+                rtcpFeedbackRequester,
+                rtcpFeedbackPolicy);
         extractor.init(output);
       }
 

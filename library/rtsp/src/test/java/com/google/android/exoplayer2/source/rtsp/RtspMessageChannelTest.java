@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.LinkedListMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.primitives.Bytes;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
@@ -176,5 +177,57 @@ public final class RtspMessageChannelTest {
             Bytes.asList(Util.getBytesFromHexString("0102030405")),
             /* channel */ 1,
             Bytes.asList(Util.getBytesFromHexString("AABBCCDD")));
+  }
+
+  @Test
+  public void sendInterleavedBinaryData_serializesWithRtspMessagesInOrder() throws Exception {
+    ImmutableList<String> optionsRequest =
+        ImmutableList.of("OPTIONS rtsp://localhost/test RTSP/1.0", "CSeq: 1", "");
+    ImmutableList<String> playRequest =
+        ImmutableList.of("PLAY rtsp://localhost/test RTSP/1.0", "CSeq: 2", "");
+    byte[] interleavedData = Util.getBytesFromHexString("01020304");
+
+    AtomicReference<Exception> receivingException = new AtomicReference<>();
+    AtomicReference<byte[]> receivedBytes = new AtomicReference<>();
+    ServerSocket serverSocket =
+        new ServerSocket(/* port= */ 0, /* backlog= */ 1, InetAddress.getByName(/* host= */ null));
+    Thread serverListenThread =
+        new Thread(
+            () -> {
+              try (Socket socket = serverSocket.accept()) {
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+                while ((bytesRead = socket.getInputStream().read(buffer)) != -1) {
+                  output.write(buffer, /* off= */ 0, bytesRead);
+                }
+                receivedBytes.set(output.toByteArray());
+              } catch (IOException e) {
+                receivingException.set(e);
+              }
+            },
+            "RtspMessageChannelTest:SendServerListenThread");
+    serverListenThread.start();
+
+    Socket clientSideSocket =
+        SocketFactory.getDefault()
+            .createSocket("localhost", serverSocket.getLocalPort());
+    RtspMessageChannel rtspMessageChannel = new RtspMessageChannel(message -> {});
+    rtspMessageChannel.open(clientSideSocket);
+
+    rtspMessageChannel.send(optionsRequest);
+    rtspMessageChannel.sendInterleavedBinaryData(/* channel= */ 3, interleavedData);
+    rtspMessageChannel.send(playRequest);
+    Util.closeQuietly(rtspMessageChannel);
+    serverListenThread.join();
+    serverSocket.close();
+
+    assertThat(receivingException.get()).isNull();
+    assertThat(receivedBytes.get())
+        .isEqualTo(
+            Bytes.concat(
+                convertMessageToByteArray(optionsRequest),
+                Util.getBytesFromHexString("2403000401020304"),
+                convertMessageToByteArray(playRequest)));
   }
 }

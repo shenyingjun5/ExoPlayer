@@ -50,6 +50,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final int trackId;
   private final @RtspTransportMode.Mode int transportMode;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final Object lock;
   private final RtpPacketReorderingQueue reorderingQueue;
 
@@ -57,6 +59,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private boolean firstPacketRead;
   private volatile long firstTimestamp;
   private volatile int firstSequenceNumber;
+  private volatile int lastSsrc;
 
   @GuardedBy("lock")
   private boolean isSeekPending;
@@ -72,17 +75,23 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         payloadFormat,
         trackId,
         RtspTransportMode.UNKNOWN,
-        /* rtspDiagnosticsListener= */ null);
+        /* rtspDiagnosticsListener= */ null,
+        /* rtcpFeedbackRequester= */ null,
+        RtcpFeedbackPolicy.DEFAULT);
   }
 
   public RtpExtractor(
       RtpPayloadFormat payloadFormat,
       int trackId,
       @RtspTransportMode.Mode int transportMode,
-      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
 
     payloadReader =
         checkNotNull(new DefaultRtpPayloadReaderFactory().createPayloadReader(payloadFormat));
@@ -90,9 +99,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     rtpPacketDataBuffer = new ParsableByteArray();
     lock = new Object();
     reorderingQueue =
-        new RtpPacketReorderingQueue(trackId, transportMode, rtspDiagnosticsListener);
+        new RtpPacketReorderingQueue(
+            trackId,
+            transportMode,
+            rtspDiagnosticsListener,
+            rtcpFeedbackRequester,
+            rtcpFeedbackPolicy.sequenceGapRequestThreshold);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
+    lastSsrc = C.INDEX_UNSET;
     nextRtpTimestamp = C.TIME_UNSET;
     playbackStartTimeUs = C.TIME_UNSET;
   }
@@ -110,6 +125,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   /** Returns whether the first RTP packet is processed. */
   public boolean hasReadFirstRtpPacket() {
     return firstPacketRead;
+  }
+
+  /** Returns the latest RTP SSRC seen by this extractor, or {@link C#INDEX_UNSET}. */
+  public int getLastSsrc() {
+    return lastSsrc;
   }
 
   /**
@@ -162,6 +182,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (packet == null) {
       return RESULT_CONTINUE;
     }
+    lastSsrc = packet.ssrc;
 
     long packetArrivalTimeMs = SystemClock.elapsedRealtime();
     long packetCutoffTimeMs = getCutoffTimeMs(packetArrivalTimeMs);

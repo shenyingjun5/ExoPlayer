@@ -24,6 +24,7 @@ import static java.lang.Math.min;
 
 import android.net.Uri;
 import android.os.Handler;
+import android.os.SystemClock;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
@@ -193,6 +194,20 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
     return rtcpFeedbackPolicy;
+  }
+
+  /* package */ boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+    boolean requested = false;
+    List<RtpLoadInfo> loadInfos = selectedLoadInfos.isEmpty() ? new ArrayList<>() : selectedLoadInfos;
+    if (selectedLoadInfos.isEmpty()) {
+      for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
+        loadInfos.add(rtspLoaderWrappers.get(i).loadInfo);
+      }
+    }
+    for (int i = 0; i < loadInfos.size(); i++) {
+      requested |= loadInfos.get(i).requestKeyFrame(reason);
+    }
+    return requested;
   }
 
   /** Releases the {@link RtspMediaPeriod}. */
@@ -920,24 +935,32 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     public final RtspMediaTrack mediaTrack;
 
     private final RtpDataLoadable loadable;
+    private final int trackId;
 
     @Nullable private String transport;
+    @Nullable private RtpDataChannel rtpDataChannel;
+    private @RtspTransportMode.Mode int transportMode;
+    private long lastFeedbackRequestElapsedRealtimeMs;
+    private int firSequenceNumber;
 
     /** Creates a new instance. */
     public RtpLoadInfo(
         RtspMediaTrack mediaTrack, int trackId, RtpDataChannel.Factory rtpDataChannelFactory) {
       this.mediaTrack = mediaTrack;
+      this.trackId = trackId;
+      this.transportMode = RtspTransportMode.UNKNOWN;
+      this.lastFeedbackRequestElapsedRealtimeMs = C.TIME_UNSET;
 
       // This listener runs on the playback thread, posted by the Loader thread.
       RtpDataLoadable.EventListener transportEventListener =
           (transport, rtpDataChannel) -> {
             RtpLoadInfo.this.transport = transport;
+            RtpLoadInfo.this.rtpDataChannel = rtpDataChannel;
 
             @Nullable
             RtspMessageChannel.InterleavedBinaryDataListener interleavedBinaryDataListener =
                 rtpDataChannel.getInterleavedBinaryDataListener();
-            @RtspTransportMode.Mode
-            int transportMode =
+            RtpLoadInfo.this.transportMode =
                 interleavedBinaryDataListener != null
                     ? RtspTransportMode.TCP_INTERLEAVED
                     : RtspTransportMode.UDP;
@@ -959,7 +982,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               /* eventListener= */ transportEventListener,
               /* output= */ internalListener,
               rtpDataChannelFactory,
-              rtspDiagnosticsListener);
+              rtspDiagnosticsListener,
+              this::requestKeyFrame,
+              rtcpFeedbackPolicy);
     }
 
     /**
@@ -983,6 +1008,129 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     /** Gets the {@link Uri} for the loading RTSP track. */
     public Uri getTrackUri() {
       return loadable.rtspMediaTrack.uri;
+    }
+
+    public void setRemoteRtcpEndpoint(String host, int port) {
+      if (rtpDataChannel == null) {
+        return;
+      }
+      try {
+        rtpDataChannel.setRemoteRtcpEndpoint(host, port);
+      } catch (IOException e) {
+        notifyRtcpFeedbackSendFailed(
+            createFeedbackRequest(
+                RtcpFeedbackType.UNKNOWN,
+                RtcpFeedbackReason.UNKNOWN,
+                SystemClock.elapsedRealtime(),
+                "Failed to set remote RTCP endpoint"),
+            e);
+      }
+    }
+
+    public boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+      long nowMs = SystemClock.elapsedRealtime();
+      @RtcpFeedbackType.Type int feedbackType = getFeedbackType();
+      RtcpFeedbackRequest request =
+          createFeedbackRequest(feedbackType, reason, nowMs, /* detail= */ null);
+      if (feedbackType == RtcpFeedbackType.UNKNOWN) {
+        notifyRtcpFeedbackSendFailed(request, new IllegalStateException("RTCP feedback disabled"));
+        return false;
+      }
+      if (lastFeedbackRequestElapsedRealtimeMs != C.TIME_UNSET
+          && nowMs - lastFeedbackRequestElapsedRealtimeMs
+              < rtcpFeedbackPolicy.minRequestIntervalMs) {
+        notifyRtcpFeedbackThrottled(request);
+        return false;
+      }
+
+      byte[] packet =
+          feedbackType == RtcpFeedbackType.PLI
+              ? RtcpFeedbackPacket.buildPli(rtcpFeedbackPolicy.senderSsrc, request.mediaSsrc)
+              : RtcpFeedbackPacket.buildFir(
+                  rtcpFeedbackPolicy.senderSsrc, request.mediaSsrc, firSequenceNumber++);
+
+      if (rtspFeedbackListener != null) {
+        rtspFeedbackListener.onRtcpFeedbackRequested(request);
+      }
+      try {
+        boolean sent;
+        if (transportMode == RtspTransportMode.TCP_INTERLEAVED) {
+          rtspClient.sendInterleavedBinaryData(trackId * 2 + 1, packet);
+          sent = true;
+        } else {
+          sent = rtpDataChannel != null && rtpDataChannel.sendRtcpPacket(packet);
+        }
+        if (!sent) {
+          throw new IOException("RTCP feedback channel is not ready");
+        }
+        lastFeedbackRequestElapsedRealtimeMs = nowMs;
+        notifyRtcpFeedbackSent(request);
+        return true;
+      } catch (IOException | RuntimeException e) {
+        notifyRtcpFeedbackSendFailed(request, e);
+        return false;
+      }
+    }
+
+    private @RtcpFeedbackType.Type int getFeedbackType() {
+      if (rtcpFeedbackPolicy.pliEnabled) {
+        return RtcpFeedbackType.PLI;
+      }
+      if (rtcpFeedbackPolicy.firEnabled) {
+        return RtcpFeedbackType.FIR;
+      }
+      return RtcpFeedbackType.UNKNOWN;
+    }
+
+    private RtcpFeedbackRequest createFeedbackRequest(
+        @RtcpFeedbackType.Type int feedbackType,
+        @RtcpFeedbackReason.Reason int reason,
+        long requestElapsedRealtimeMs,
+        @Nullable String detail) {
+      int mediaSsrc = loadable.getLastSsrc();
+      if (mediaSsrc == C.INDEX_UNSET) {
+        mediaSsrc = 0;
+      }
+      return new RtcpFeedbackRequest(
+          trackId,
+          feedbackType,
+          reason,
+          transportMode,
+          rtcpFeedbackPolicy.senderSsrc,
+          mediaSsrc,
+          requestElapsedRealtimeMs,
+          detail);
+    }
+
+    private void notifyRtcpFeedbackThrottled(RtcpFeedbackRequest request) {
+      if (rtspFeedbackListener != null) {
+        rtspFeedbackListener.onRtcpFeedbackThrottled(request);
+      }
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtcpFeedbackThrottled(request);
+      }
+    }
+
+    private void notifyRtcpFeedbackSent(RtcpFeedbackRequest request) {
+      if (rtspFeedbackListener != null) {
+        rtspFeedbackListener.onRtcpFeedbackSent(request);
+      }
+      if (rtspDiagnosticsListener != null) {
+        if (request.feedbackType == RtcpFeedbackType.PLI) {
+          rtspDiagnosticsListener.onRtcpPliSent(request);
+        } else if (request.feedbackType == RtcpFeedbackType.FIR) {
+          rtspDiagnosticsListener.onRtcpFirSent(request);
+        }
+      }
+    }
+
+    private void notifyRtcpFeedbackSendFailed(RtcpFeedbackRequest request, Exception error) {
+      if (rtspFeedbackListener != null) {
+        rtspFeedbackListener.onRtcpFeedbackSendFailed(request, error);
+      }
+      if (rtspDiagnosticsListener != null) {
+        rtspDiagnosticsListener.onRtcpFeedbackSendFailed(request, error);
+      }
     }
   }
 }

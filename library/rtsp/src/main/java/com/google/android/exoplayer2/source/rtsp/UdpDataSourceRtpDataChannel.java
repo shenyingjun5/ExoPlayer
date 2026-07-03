@@ -28,6 +28,7 @@ import com.google.android.exoplayer2.upstream.UdpDataSource;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.primitives.Ints;
 import java.io.IOException;
+import java.net.InetAddress;
 
 /**
  * An {@link RtpDataChannel} for UDP transport.
@@ -46,6 +47,8 @@ import java.io.IOException;
 
   /** The associated RTCP channel; {@code null} if the current channel is an RTCP channel. */
   @Nullable private UdpDataSourceRtpDataChannel rtcpChannel;
+  @Nullable private InetAddress remoteRtcpAddress;
+  private int remoteRtcpPort;
 
   /**
    * Creates a new instance.
@@ -122,5 +125,27 @@ import java.io.IOException;
   public void setRtcpChannel(UdpDataSourceRtpDataChannel rtcpChannel) {
     checkArgument(this != rtcpChannel);
     this.rtcpChannel = rtcpChannel;
+  }
+
+  @Override
+  public void setRemoteRtcpEndpoint(String host, int port) throws IOException {
+    checkArgument(port > 0);
+    remoteRtcpAddress = InetAddress.getByName(host);
+    remoteRtcpPort = port;
+    if (rtcpChannel != null) {
+      rtcpChannel.remoteRtcpAddress = remoteRtcpAddress;
+      rtcpChannel.remoteRtcpPort = remoteRtcpPort;
+    }
+  }
+
+  @Override
+  public boolean sendRtcpPacket(byte[] packet) throws IOException {
+    if (rtcpChannel == null
+        || rtcpChannel.remoteRtcpAddress == null
+        || rtcpChannel.remoteRtcpPort <= 0) {
+      return false;
+    }
+    rtcpChannel.dataSource.send(packet, rtcpChannel.remoteRtcpAddress, rtcpChannel.remoteRtcpPort);
+    return true;
   }
 }

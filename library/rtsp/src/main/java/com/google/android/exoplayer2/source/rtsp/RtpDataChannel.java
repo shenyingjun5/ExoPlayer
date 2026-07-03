@@ -68,4 +68,12 @@ import java.io.IOException;
    */
   @Nullable
   InterleavedBinaryDataListener getInterleavedBinaryDataListener();
+
+  /** Sets the remote RTCP endpoint, if this channel supports UDP RTCP feedback. */
+  default void setRemoteRtcpEndpoint(String host, int port) throws IOException {}
+
+  /** Sends one RTCP packet, if this channel supports direct RTCP feedback. */
+  default boolean sendRtcpPacket(byte[] packet) throws IOException {
+    return false;
+  }
 }

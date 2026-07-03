@@ -49,6 +49,8 @@ import java.util.TreeSet;
   private final int trackId;
   private final @RtspTransportMode.Mode int transportMode;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
+  private final int sequenceGapRequestThreshold;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -73,17 +75,23 @@ import java.util.TreeSet;
     this(
         /* trackId= */ C.INDEX_UNSET,
         RtspTransportMode.UNKNOWN,
-        /* rtspDiagnosticsListener= */ null);
+        /* rtspDiagnosticsListener= */ null,
+        /* rtcpFeedbackRequester= */ null,
+        /* sequenceGapRequestThreshold= */ 0);
   }
 
   /** Creates an instance. */
   public RtpPacketReorderingQueue(
       int trackId,
       @RtspTransportMode.Mode int transportMode,
-      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      int sequenceGapRequestThreshold) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
@@ -147,6 +155,11 @@ import java.util.TreeSet;
     int sequenceNumberShift =
         calculateSequenceNumberShift(packetSequenceNumber, expectedSequenceNumber);
     if (abs(sequenceNumberShift) < MAX_SEQUENCE_LEAP_ALLOWED) {
+      if (sequenceNumberShift >= sequenceGapRequestThreshold
+          && sequenceGapRequestThreshold > 0
+          && rtcpFeedbackRequester != null) {
+        rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.SEQUENCE_GAP);
+      }
       if (calculateSequenceNumberShift(packetSequenceNumber, lastDequeuedSequenceNumber) > 0) {
         // Add the packet in the queue only if a succeeding packet has not been dequeued already.
         addToQueue(new RtpPacketContainer(packet, receivedTimestampMs));
@@ -160,6 +173,9 @@ import java.util.TreeSet;
       addToQueue(new RtpPacketContainer(packet, receivedTimestampMs));
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(sequenceNumberShift));
+      }
+      if (rtcpFeedbackRequester != null) {
+        rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
       }
       return true;
     }

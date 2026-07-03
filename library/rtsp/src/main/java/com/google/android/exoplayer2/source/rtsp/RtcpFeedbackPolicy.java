@@ -25,6 +25,8 @@ public final class RtcpFeedbackPolicy {
 
   /** Default minimum interval between RTCP feedback requests for the same track. */
   public static final long DEFAULT_MIN_REQUEST_INTERVAL_MS = 400;
+  /** Default sequence gap threshold for automatic key-frame requests. */
+  public static final int DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD = 8;
 
   /** Default policy. */
   public static final RtcpFeedbackPolicy DEFAULT =
@@ -36,11 +38,17 @@ public final class RtcpFeedbackPolicy {
   public final boolean pliEnabled;
   /** Whether Full Intra Request feedback may be used as a fallback. */
   public final boolean firEnabled;
+  /** Sender SSRC used in generated RTCP feedback packets. */
+  public final int senderSsrc;
+  /** Sequence gap threshold at which the RTP queue requests a key frame. */
+  public final int sequenceGapRequestThreshold;
 
   private RtcpFeedbackPolicy(Builder builder) {
     this.minRequestIntervalMs = builder.minRequestIntervalMs;
     this.pliEnabled = builder.pliEnabled;
     this.firEnabled = builder.firEnabled;
+    this.senderSsrc = builder.senderSsrc;
+    this.sequenceGapRequestThreshold = builder.sequenceGapRequestThreshold;
   }
 
   @Override
@@ -54,7 +62,9 @@ public final class RtcpFeedbackPolicy {
     RtcpFeedbackPolicy other = (RtcpFeedbackPolicy) obj;
     return minRequestIntervalMs == other.minRequestIntervalMs
         && pliEnabled == other.pliEnabled
-        && firEnabled == other.firEnabled;
+        && firEnabled == other.firEnabled
+        && senderSsrc == other.senderSsrc
+        && sequenceGapRequestThreshold == other.sequenceGapRequestThreshold;
   }
 
   @Override
@@ -62,14 +72,21 @@ public final class RtcpFeedbackPolicy {
     int result = (int) (minRequestIntervalMs ^ (minRequestIntervalMs >>> 32));
     result = 31 * result + (pliEnabled ? 1 : 0);
     result = 31 * result + (firEnabled ? 1 : 0);
+    result = 31 * result + senderSsrc;
+    result = 31 * result + sequenceGapRequestThreshold;
     return result;
   }
 
   @Override
   public String toString() {
     return Util.formatInvariant(
-        "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b)",
-        minRequestIntervalMs, pliEnabled, firEnabled);
+        "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b, "
+            + "senderSsrc=%x, sequenceGapRequestThreshold=%d)",
+        minRequestIntervalMs,
+        pliEnabled,
+        firEnabled,
+        senderSsrc,
+        sequenceGapRequestThreshold);
   }
 
   /** Builder for {@link RtcpFeedbackPolicy}. */
@@ -77,12 +94,16 @@ public final class RtcpFeedbackPolicy {
     private long minRequestIntervalMs;
     private boolean pliEnabled;
     private boolean firEnabled;
+    private int senderSsrc;
+    private int sequenceGapRequestThreshold;
 
     /** Creates a builder with the default RTCP feedback policy. */
     public Builder() {
       minRequestIntervalMs = DEFAULT_MIN_REQUEST_INTERVAL_MS;
       pliEnabled = true;
       firEnabled = true;
+      senderSsrc = 0;
+      sequenceGapRequestThreshold = DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD;
     }
 
     /** Sets the minimum interval between feedback requests for the same track. */
@@ -104,6 +125,25 @@ public final class RtcpFeedbackPolicy {
     @CanIgnoreReturnValue
     public Builder setFirEnabled(boolean firEnabled) {
       this.firEnabled = firEnabled;
+      return this;
+    }
+
+    /** Sets the sender SSRC used in generated RTCP feedback packets. */
+    @CanIgnoreReturnValue
+    public Builder setSenderSsrc(int senderSsrc) {
+      this.senderSsrc = senderSsrc;
+      return this;
+    }
+
+    /**
+     * Sets the sequence gap threshold at which the RTP queue requests a key frame.
+     *
+     * <p>A value of {@code 0} disables automatic sequence-gap requests.
+     */
+    @CanIgnoreReturnValue
+    public Builder setSequenceGapRequestThreshold(int sequenceGapRequestThreshold) {
+      checkArgument(sequenceGapRequestThreshold >= 0);
+      this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
       return this;
     }
 

@@ -88,6 +88,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     default void onSendingFailed(List<String> message, Exception e) {}
 
     /**
+     * Called when failed to send RTSP interleaved binary data.
+     *
+     * @param channel The interleaved channel number.
+     * @param data The binary data that failed to send.
+     * @param e The thrown {@link Exception}.
+     */
+    default void onInterleavedBinaryDataSendingFailed(int channel, byte[] data, Exception e) {}
+
+    /**
      * Called when failed to receive an RTSP message.
      *
      * @param e The thrown {@link Exception}.
@@ -197,6 +206,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     sender.send(message);
   }
 
+  /** Sends one RTSP interleaved binary frame. */
+  public void sendInterleavedBinaryData(int channel, byte[] data) {
+    checkStateNotNull(sender);
+    sender.sendInterleavedBinaryData(channel, data);
+  }
+
   /**
    * Registers an {@link InterleavedBinaryDataListener} to receive RTSP interleaved data.
    *
@@ -245,6 +260,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             } catch (Exception e) {
               if (!closed) {
                 messageListener.onSendingFailed(message, e);
+              }
+            }
+          });
+    }
+
+    /** Sends one RTSP interleaved binary frame. */
+    public void sendInterleavedBinaryData(int channel, byte[] data) {
+      checkArgument(channel >= 0 && channel <= 255);
+      checkArgument(data.length <= 0xFFFF);
+      byte[] frame = new byte[data.length + 4];
+      frame[0] = '$';
+      frame[1] = (byte) channel;
+      frame[2] = (byte) (data.length >> 8);
+      frame[3] = (byte) data.length;
+      System.arraycopy(data, /* srcPos= */ 0, frame, /* destPos= */ 4, data.length);
+      senderThreadHandler.post(
+          () -> {
+            try {
+              outputStream.write(frame);
+            } catch (Exception e) {
+              if (!closed) {
+                messageListener.onInterleavedBinaryDataSendingFailed(channel, data, e);
               }
             }
           });

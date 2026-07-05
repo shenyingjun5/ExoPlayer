@@ -24,6 +24,7 @@ import static java.lang.Math.min;
 
 import android.net.Uri;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
@@ -96,6 +97,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final boolean rtspPacketDiagnosticsEnabled;
 
   private @MonotonicNonNull Callback callback;
   private @MonotonicNonNull ImmutableList<TrackGroup> trackGroups;
@@ -142,7 +144,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         debugLoggingEnabled,
         /* rtspDiagnosticsListener= */ null,
         /* rtspFeedbackListener= */ null,
-        RtcpFeedbackPolicy.DEFAULT);
+        RtcpFeedbackPolicy.DEFAULT,
+        /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
   public RtspMediaPeriod(
@@ -155,13 +158,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       boolean debugLoggingEnabled,
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtspFeedbackListener rtspFeedbackListener,
-      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
     this.allocator = allocator;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.listener = listener;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
+    this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
 
     handler = Util.createHandlerForCurrentLooper();
     internalListener = new InternalListener();
@@ -196,7 +201,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return rtcpFeedbackPolicy;
   }
 
+  /* package */ boolean getRtspPacketDiagnosticsEnabled() {
+    return rtspPacketDiagnosticsEnabled;
+  }
+
   /* package */ boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+    if (Looper.myLooper() != handler.getLooper()) {
+      return handler.post(() -> requestKeyFrameInternal(reason));
+    }
+    return requestKeyFrameInternal(reason);
+  }
+
+  private boolean requestKeyFrameInternal(@RtcpFeedbackReason.Reason int reason) {
     boolean requested = false;
     List<RtpLoadInfo> loadInfos = selectedLoadInfos.isEmpty() ? new ArrayList<>() : selectedLoadInfos;
     if (selectedLoadInfos.isEmpty()) {
@@ -984,7 +1000,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               rtpDataChannelFactory,
               rtspDiagnosticsListener,
               this::requestKeyFrame,
-              rtcpFeedbackPolicy);
+              rtcpFeedbackPolicy,
+              rtspPacketDiagnosticsEnabled);
     }
 
     /**
@@ -1028,6 +1045,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     public boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+      if (Looper.myLooper() != handler.getLooper()) {
+        return handler.post(() -> requestKeyFrameInternal(reason));
+      }
+      return requestKeyFrameInternal(reason);
+    }
+
+    private boolean requestKeyFrameInternal(@RtcpFeedbackReason.Reason int reason) {
       long nowMs = SystemClock.elapsedRealtime();
       @RtcpFeedbackType.Type int feedbackType = getFeedbackType();
       RtcpFeedbackRequest request =
@@ -1055,7 +1079,24 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       try {
         boolean sent;
         if (transportMode == RtspTransportMode.TCP_INTERLEAVED) {
-          rtspClient.sendInterleavedBinaryData(trackId * 2 + 1, packet);
+          rtspClient.sendInterleavedBinaryData(
+              trackId * 2 + 1,
+              packet,
+              new RtspMessageChannel.InterleavedBinaryDataSendListener() {
+                @Override
+                public void onSent(int channel, byte[] data) {
+                  handler.post(
+                      () -> {
+                        notifyRtcpFeedbackSent(request);
+                      });
+                }
+
+                @Override
+                public void onSendFailed(int channel, byte[] data, Exception e) {
+                  handler.post(() -> notifyRtcpFeedbackSendFailed(request, e));
+                }
+              });
+          lastFeedbackRequestElapsedRealtimeMs = nowMs;
           sent = true;
         } else {
           sent = rtpDataChannel != null && rtpDataChannel.sendRtcpPacket(packet);
@@ -1063,8 +1104,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         if (!sent) {
           throw new IOException("RTCP feedback channel is not ready");
         }
-        lastFeedbackRequestElapsedRealtimeMs = nowMs;
-        notifyRtcpFeedbackSent(request);
+        if (transportMode != RtspTransportMode.TCP_INTERLEAVED) {
+          lastFeedbackRequestElapsedRealtimeMs = nowMs;
+          notifyRtcpFeedbackSent(request);
+        }
         return true;
       } catch (IOException | RuntimeException e) {
         notifyRtcpFeedbackSendFailed(request, e);

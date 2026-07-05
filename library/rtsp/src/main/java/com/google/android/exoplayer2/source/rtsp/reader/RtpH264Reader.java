@@ -409,18 +409,20 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       currentAccessUnitHasIdr = true;
     } else if (nalUnitType == NAL_UNIT_TYPE_SPS) {
       currentAccessUnitHasSps = true;
-      hasOutputSps = true;
     } else if (nalUnitType == NAL_UNIT_TYPE_PPS) {
       currentAccessUnitHasPps = true;
-      hasOutputPps = true;
     }
   }
 
   private void maybeNotifyFirstDecodableAccessUnitReady() {
-    if (!isFirstDecodableAccessUnitDiagnosticsEnabled()
-        || !currentAccessUnitHasIdr
-        || !hasOutputSps
-        || !hasOutputPps) {
+    if (!isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+      return;
+    }
+    boolean hasSpsForAccessUnit = hasOutputSps || currentAccessUnitHasSps;
+    boolean hasPpsForAccessUnit = hasOutputPps || currentAccessUnitHasPps;
+    hasOutputSps |= currentAccessUnitHasSps;
+    hasOutputPps |= currentAccessUnitHasPps;
+    if (!currentAccessUnitHasIdr || !hasSpsForAccessUnit || !hasPpsForAccessUnit) {
       return;
     }
     firstDecodableAccessUnitDiagnosticsEnabled = false;
@@ -433,8 +435,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             trackId,
             currentAccessUnitFirstSequenceNumber,
             currentAccessUnitRtpTimestamp,
-            hasOutputSps || currentAccessUnitHasSps,
-            hasOutputPps || currentAccessUnitHasPps,
+            hasSpsForAccessUnit,
+            hasPpsForAccessUnit,
             NAL_UNIT_TYPE_IDR,
             RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR,
             elapsedFromFirstRtpMs));

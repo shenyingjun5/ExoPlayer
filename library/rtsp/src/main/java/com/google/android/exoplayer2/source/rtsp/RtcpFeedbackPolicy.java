@@ -28,9 +28,12 @@ public final class RtcpFeedbackPolicy {
   /** Default sequence gap threshold for automatic key-frame requests. */
   public static final int DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD = 8;
 
-  /** Default policy. */
-  public static final RtcpFeedbackPolicy DEFAULT =
-      new Builder().setMinRequestIntervalMs(DEFAULT_MIN_REQUEST_INTERVAL_MS).build();
+  /** Default policy. Does not send RTCP feedback automatically. */
+  public static final RtcpFeedbackPolicy DEFAULT = new Builder().build();
+
+  /** Low-latency policy for trusted RTSP live sources that support RTCP PLI/FIR. */
+  public static final RtcpFeedbackPolicy LOW_LATENCY_DEFAULT =
+      new Builder().setLowLatencyDefaults().build();
 
   /** Minimum interval between RTCP feedback requests for the same track. */
   public final long minRequestIntervalMs;
@@ -42,6 +45,8 @@ public final class RtcpFeedbackPolicy {
   public final int senderSsrc;
   /** Sequence gap threshold at which the RTP queue requests a key frame. */
   public final int sequenceGapRequestThreshold;
+  /** Whether a large RTP reordering-queue reset requests a key frame. */
+  public final boolean requestKeyFrameOnQueueReset;
 
   private RtcpFeedbackPolicy(Builder builder) {
     this.minRequestIntervalMs = builder.minRequestIntervalMs;
@@ -49,6 +54,7 @@ public final class RtcpFeedbackPolicy {
     this.firEnabled = builder.firEnabled;
     this.senderSsrc = builder.senderSsrc;
     this.sequenceGapRequestThreshold = builder.sequenceGapRequestThreshold;
+    this.requestKeyFrameOnQueueReset = builder.requestKeyFrameOnQueueReset;
   }
 
   @Override
@@ -64,7 +70,8 @@ public final class RtcpFeedbackPolicy {
         && pliEnabled == other.pliEnabled
         && firEnabled == other.firEnabled
         && senderSsrc == other.senderSsrc
-        && sequenceGapRequestThreshold == other.sequenceGapRequestThreshold;
+        && sequenceGapRequestThreshold == other.sequenceGapRequestThreshold
+        && requestKeyFrameOnQueueReset == other.requestKeyFrameOnQueueReset;
   }
 
   @Override
@@ -74,6 +81,7 @@ public final class RtcpFeedbackPolicy {
     result = 31 * result + (firEnabled ? 1 : 0);
     result = 31 * result + senderSsrc;
     result = 31 * result + sequenceGapRequestThreshold;
+    result = 31 * result + (requestKeyFrameOnQueueReset ? 1 : 0);
     return result;
   }
 
@@ -81,12 +89,14 @@ public final class RtcpFeedbackPolicy {
   public String toString() {
     return Util.formatInvariant(
         "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b, "
-            + "senderSsrc=%x, sequenceGapRequestThreshold=%d)",
+            + "senderSsrc=%x, sequenceGapRequestThreshold=%d, "
+            + "requestKeyFrameOnQueueReset=%b)",
         minRequestIntervalMs,
         pliEnabled,
         firEnabled,
         senderSsrc,
-        sequenceGapRequestThreshold);
+        sequenceGapRequestThreshold,
+        requestKeyFrameOnQueueReset);
   }
 
   /** Builder for {@link RtcpFeedbackPolicy}. */
@@ -96,14 +106,27 @@ public final class RtcpFeedbackPolicy {
     private boolean firEnabled;
     private int senderSsrc;
     private int sequenceGapRequestThreshold;
+    private boolean requestKeyFrameOnQueueReset;
 
-    /** Creates a builder with the default RTCP feedback policy. */
+    /** Creates a builder with the default passive RTCP feedback policy. */
     public Builder() {
+      minRequestIntervalMs = DEFAULT_MIN_REQUEST_INTERVAL_MS;
+      pliEnabled = false;
+      firEnabled = false;
+      senderSsrc = 0;
+      sequenceGapRequestThreshold = 0;
+      requestKeyFrameOnQueueReset = false;
+    }
+
+    /** Sets the builder to the low-latency preset values. */
+    @CanIgnoreReturnValue
+    public Builder setLowLatencyDefaults() {
       minRequestIntervalMs = DEFAULT_MIN_REQUEST_INTERVAL_MS;
       pliEnabled = true;
       firEnabled = true;
-      senderSsrc = 0;
       sequenceGapRequestThreshold = DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD;
+      requestKeyFrameOnQueueReset = true;
+      return this;
     }
 
     /** Sets the minimum interval between feedback requests for the same track. */
@@ -144,6 +167,13 @@ public final class RtcpFeedbackPolicy {
     public Builder setSequenceGapRequestThreshold(int sequenceGapRequestThreshold) {
       checkArgument(sequenceGapRequestThreshold >= 0);
       this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
+      return this;
+    }
+
+    /** Sets whether queue resets automatically request a key frame. */
+    @CanIgnoreReturnValue
+    public Builder setRequestKeyFrameOnQueueReset(boolean requestKeyFrameOnQueueReset) {
+      this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
       return this;
     }
 

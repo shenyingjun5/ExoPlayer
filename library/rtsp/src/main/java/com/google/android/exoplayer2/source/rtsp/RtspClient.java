@@ -343,6 +343,14 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     messageChannel.sendInterleavedBinaryData(channel, data);
   }
 
+  /** Sends RTCP feedback using an RTSP interleaved binary frame. */
+  public void sendInterleavedBinaryData(
+      int channel,
+      byte[] data,
+      @Nullable RtspMessageChannel.InterleavedBinaryDataSendListener sendListener) {
+    messageChannel.sendInterleavedBinaryData(channel, data, sendListener);
+  }
+
   private void continueSetupRtspTrack() {
     @Nullable RtpLoadInfo loadInfo = pendingSetupRtpLoadInfos.pollFirst();
     if (loadInfo == null) {

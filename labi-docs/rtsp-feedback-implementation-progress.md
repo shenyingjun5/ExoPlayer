@@ -47,7 +47,8 @@
 | H5 | Document Cast-SDK loading fallback semantics | Done | `labi-docs/rtsp-feedback-enhancement-plan.md` |
 | H6 | Publish `2.19.1-labi.2` artifact | Done | GitHub Pages POM/AAR returned HTTP 200 |
 | H7 | Tighten default no-listener performance path | Done | No access-unit diagnostics state is maintained without listener |
-| H8 | Publish `2.19.1-labi.3` artifact | In progress | Full RTSP test and release AAR build passed |
+| H8 | Publish `2.19.1-labi.3` artifact | Done | Full RTSP test and release AAR build passed |
+| H9 | Split passive defaults, low-latency policy, and packet diagnostics for `2.19.1-labi.4` | Done | Targeted RTSP tests, full RTSP unit tests, release AAR build, Maven publish passed |
 
 API:
 
@@ -147,7 +148,8 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
 | R6 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.2` with H.264 access-unit diagnostic | Done | Published to GitHub Pages |
-| R7 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.3` with no-listener performance tightening | In progress | Maven publication pending |
+| R7 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.3` with no-listener performance tightening | Done | Published to GitHub Pages |
+| R8 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.4` with passive defaults and packet diagnostics gating | Done | Published to GitHub Pages; gh-pages commit `c6acf50ca6` |
 
 ## RTSP P1 Interop Completion
 
@@ -175,14 +177,14 @@ Verification:
 Local Gradle changes configure:
 
 - Default group override from `com.google.android.exoplayer` to `com.zknowai.exoplayer`.
-- Default release version override to `2.19.1-labi.3`.
+- Default release version override to `2.19.1-labi.4`.
 - Fork SCM metadata in generated POM.
 - AAR type workaround recognition for `com.zknowai.exoplayer`.
 
 Generated local Maven repo:
 
 - path: `buildout/labi-maven-repo`
-- current version: `2.19.1-labi.3`
+- current version: `2.19.1-labi.4`
 - group: `com.zknowai.exoplayer`
 - artifact closure:
   `exoplayer-common`, `exoplayer-container`, `exoplayer-database`, `exoplayer-datasource`,

@@ -174,7 +174,8 @@ public class RtpPacketReorderingQueueTest {
               requestReason.set(reason);
               return true;
             },
-            /* sequenceGapRequestThreshold= */ 2);
+            /* sequenceGapRequestThreshold= */ 2,
+            /* requestKeyFrameOnQueueReset= */ true);
 
     queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
     queue.offer(makePacket(/* sequenceNumber= */ 4), /* receivedTimestampMs= */ 2);
@@ -194,7 +195,8 @@ public class RtpPacketReorderingQueueTest {
               requestReason.set(reason);
               return true;
             },
-            /* sequenceGapRequestThreshold= */ 0);
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ true);
 
     queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
     queue.offer(
@@ -202,6 +204,29 @@ public class RtpPacketReorderingQueueTest {
         /* receivedTimestampMs= */ 2);
 
     assertThat(requestReason.get()).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+  }
+
+  @Test
+  public void offer_withQueueResetAndDisabledPolicy_doesNotRequestKeyFrame() {
+    AtomicInteger requestReason = new AtomicInteger(RtcpFeedbackReason.UNKNOWN);
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 1,
+            RtspTransportMode.UDP,
+            /* rtspDiagnosticsListener= */ null,
+            reason -> {
+              requestReason.set(reason);
+              return true;
+            },
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ false);
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    queue.offer(
+        makePacket(/* sequenceNumber= */ 10 + RtpPacketReorderingQueue.MAX_SEQUENCE_LEAP_ALLOWED),
+        /* receivedTimestampMs= */ 2);
+
+    assertThat(requestReason.get()).isEqualTo(RtcpFeedbackReason.UNKNOWN);
   }
 
   @Test

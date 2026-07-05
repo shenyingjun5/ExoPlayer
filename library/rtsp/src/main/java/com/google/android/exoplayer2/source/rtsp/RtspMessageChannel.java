@@ -116,6 +116,16 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     void onInterleavedBinaryDataReceived(byte[] data);
   }
 
+  /** A listener for sent interleaved binary data. */
+  public interface InterleavedBinaryDataSendListener {
+
+    /** Called after interleaved binary data is written to the RTSP socket. */
+    void onSent(int channel, byte[] data);
+
+    /** Called when interleaved binary data failed to write to the RTSP socket. */
+    void onSendFailed(int channel, byte[] data, Exception e);
+  }
+
   /**
    * The IANA-registered default port for RTSP. See <a
    * href="https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml">here</a>
@@ -209,7 +219,14 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   /** Sends one RTSP interleaved binary frame. */
   public void sendInterleavedBinaryData(int channel, byte[] data) {
     checkStateNotNull(sender);
-    sender.sendInterleavedBinaryData(channel, data);
+    sender.sendInterleavedBinaryData(channel, data, /* sendListener= */ null);
+  }
+
+  /** Sends one RTSP interleaved binary frame. */
+  public void sendInterleavedBinaryData(
+      int channel, byte[] data, @Nullable InterleavedBinaryDataSendListener sendListener) {
+    checkStateNotNull(sender);
+    sender.sendInterleavedBinaryData(channel, data, sendListener);
   }
 
   /**
@@ -266,7 +283,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     /** Sends one RTSP interleaved binary frame. */
-    public void sendInterleavedBinaryData(int channel, byte[] data) {
+    public void sendInterleavedBinaryData(
+        int channel, byte[] data, @Nullable InterleavedBinaryDataSendListener sendListener) {
       checkArgument(channel >= 0 && channel <= 255);
       checkArgument(data.length <= 0xFFFF);
       byte[] frame = new byte[data.length + 4];
@@ -279,9 +297,16 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           () -> {
             try {
               outputStream.write(frame);
+              if (sendListener != null) {
+                sendListener.onSent(channel, data);
+              }
             } catch (Exception e) {
               if (!closed) {
-                messageListener.onInterleavedBinaryDataSendingFailed(channel, data, e);
+                if (sendListener != null) {
+                  sendListener.onSendFailed(channel, data, e);
+                } else {
+                  messageListener.onInterleavedBinaryDataSendingFailed(channel, data, e);
+                }
               }
             }
           });

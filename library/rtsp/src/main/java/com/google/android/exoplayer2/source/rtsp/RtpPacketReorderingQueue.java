@@ -51,6 +51,7 @@ import java.util.TreeSet;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final int sequenceGapRequestThreshold;
+  private final boolean requestKeyFrameOnQueueReset;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -77,7 +78,8 @@ import java.util.TreeSet;
         RtspTransportMode.UNKNOWN,
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
-        /* sequenceGapRequestThreshold= */ 0);
+        /* sequenceGapRequestThreshold= */ 0,
+        /* requestKeyFrameOnQueueReset= */ false);
   }
 
   /** Creates an instance. */
@@ -86,12 +88,14 @@ import java.util.TreeSet;
       @RtspTransportMode.Mode int transportMode,
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
-      int sequenceGapRequestThreshold) {
+      int sequenceGapRequestThreshold,
+      boolean requestKeyFrameOnQueueReset) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
+    this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
@@ -174,7 +178,7 @@ import java.util.TreeSet;
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(sequenceNumberShift));
       }
-      if (rtcpFeedbackRequester != null) {
+      if (requestKeyFrameOnQueueReset && rtcpFeedbackRequester != null) {
         rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
       }
       return true;

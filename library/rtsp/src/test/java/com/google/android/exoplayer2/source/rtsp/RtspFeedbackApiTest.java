@@ -38,6 +38,12 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaSource.getRtspDiagnosticsListener()).isNull();
     assertThat(mediaSource.getRtspFeedbackListener()).isNull();
     assertThat(mediaSource.getRtcpFeedbackPolicy()).isEqualTo(RtcpFeedbackPolicy.DEFAULT);
+    assertThat(mediaSource.getRtspPacketDiagnosticsEnabled()).isFalse();
+    assertThat(RtcpFeedbackPolicy.DEFAULT.pliEnabled).isFalse();
+    assertThat(RtcpFeedbackPolicy.DEFAULT.firEnabled).isFalse();
+    assertThat(RtcpFeedbackPolicy.DEFAULT.sequenceGapRequestThreshold).isEqualTo(0);
+    assertThat(RtcpFeedbackPolicy.DEFAULT.requestKeyFrameOnQueueReset).isFalse();
+    assertThat(new RtcpFeedbackPolicy.Builder().build()).isEqualTo(RtcpFeedbackPolicy.DEFAULT);
 
     RtspMediaPeriod mediaPeriod =
         (RtspMediaPeriod)
@@ -49,6 +55,7 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaPeriod.getRtspDiagnosticsListener()).isNull();
     assertThat(mediaPeriod.getRtspFeedbackListener()).isNull();
     assertThat(mediaPeriod.getRtcpFeedbackPolicy()).isEqualTo(RtcpFeedbackPolicy.DEFAULT);
+    assertThat(mediaPeriod.getRtspPacketDiagnosticsEnabled()).isFalse();
 
     mediaSource.releasePeriod(mediaPeriod);
   }
@@ -69,11 +76,13 @@ public final class RtspFeedbackApiTest {
             .setRtspDiagnosticsListener(diagnosticsListener)
             .setRtspFeedbackListener(feedbackListener)
             .setRtcpFeedbackPolicy(feedbackPolicy)
+            .setRtspPacketDiagnosticsEnabled(true)
             .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
 
     assertThat(mediaSource.getRtspDiagnosticsListener()).isSameInstanceAs(diagnosticsListener);
     assertThat(mediaSource.getRtspFeedbackListener()).isSameInstanceAs(feedbackListener);
     assertThat(mediaSource.getRtcpFeedbackPolicy()).isEqualTo(feedbackPolicy);
+    assertThat(mediaSource.getRtspPacketDiagnosticsEnabled()).isTrue();
 
     RtspMediaPeriod mediaPeriod =
         (RtspMediaPeriod)
@@ -85,6 +94,7 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaPeriod.getRtspDiagnosticsListener()).isSameInstanceAs(diagnosticsListener);
     assertThat(mediaPeriod.getRtspFeedbackListener()).isSameInstanceAs(feedbackListener);
     assertThat(mediaPeriod.getRtcpFeedbackPolicy()).isEqualTo(feedbackPolicy);
+    assertThat(mediaPeriod.getRtspPacketDiagnosticsEnabled()).isTrue();
 
     mediaSource.releasePeriod(mediaPeriod);
   }
@@ -120,6 +130,20 @@ public final class RtspFeedbackApiTest {
                 .setFirEnabled(true)
                 .build());
     assertThat(policy.toString()).contains("minRequestIntervalMs=123");
+  }
+
+  @Test
+  public void rtcpFeedbackPolicyLowLatencyDefault_enablesAutomaticFeedback() {
+    RtcpFeedbackPolicy policy = RtcpFeedbackPolicy.LOW_LATENCY_DEFAULT;
+
+    assertThat(policy.minRequestIntervalMs)
+        .isEqualTo(RtcpFeedbackPolicy.DEFAULT_MIN_REQUEST_INTERVAL_MS);
+    assertThat(policy.pliEnabled).isTrue();
+    assertThat(policy.firEnabled).isTrue();
+    assertThat(policy.sequenceGapRequestThreshold)
+        .isEqualTo(RtcpFeedbackPolicy.DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD);
+    assertThat(policy.requestKeyFrameOnQueueReset).isTrue();
+    assertThat(new RtcpFeedbackPolicy.Builder().setLowLatencyDefaults().build()).isEqualTo(policy);
   }
 
   @Test

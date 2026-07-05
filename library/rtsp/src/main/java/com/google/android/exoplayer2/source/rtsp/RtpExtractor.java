@@ -52,6 +52,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final boolean rtspPacketDiagnosticsEnabled;
   private final Object lock;
   private final RtpPacketReorderingQueue reorderingQueue;
 
@@ -77,7 +78,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         RtspTransportMode.UNKNOWN,
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
-        RtcpFeedbackPolicy.DEFAULT);
+        RtcpFeedbackPolicy.DEFAULT,
+        /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
   public RtpExtractor(
@@ -86,12 +88,14 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @RtspTransportMode.Mode int transportMode,
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
-      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
+    this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
 
     payloadReader =
         checkNotNull(
@@ -106,7 +110,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             transportMode,
             rtspDiagnosticsListener,
             rtcpFeedbackRequester,
-            rtcpFeedbackPolicy.sequenceGapRequestThreshold);
+            rtcpFeedbackPolicy.sequenceGapRequestThreshold,
+            rtcpFeedbackPolicy.requestKeyFrameOnQueueReset);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;
@@ -188,12 +193,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     long packetArrivalTimeMs = SystemClock.elapsedRealtime();
     long packetCutoffTimeMs = getCutoffTimeMs(packetArrivalTimeMs);
-    @Nullable RtpPacketStats parsedPacketStats = maybeCreatePacketStats(packet, packetArrivalTimeMs);
-    if (rtspDiagnosticsListener != null) {
+    boolean emitPacketDiagnostics =
+        rtspDiagnosticsListener != null && rtspPacketDiagnosticsEnabled;
+    @Nullable RtpPacketStats parsedPacketStats =
+        emitPacketDiagnostics ? createPacketStats(packet, packetArrivalTimeMs) : null;
+    if (emitPacketDiagnostics) {
       rtspDiagnosticsListener.onRtpPacketReceived(checkNotNull(parsedPacketStats));
     }
     if (!reorderingQueue.offer(packet, packetArrivalTimeMs)) {
-      if (rtspDiagnosticsListener != null) {
+      if (emitPacketDiagnostics) {
         rtspDiagnosticsListener.onRtpPacketDropped(
             checkNotNull(parsedPacketStats), reorderingQueue.createStats(/* sequenceGap= */ 0));
       }
@@ -224,7 +232,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       firstPacketRead = true;
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onFirstRtpPacketReceived(
-            checkNotNull(maybeCreatePacketStats(packet, packetArrivalTimeMs)));
+            createPacketStats(packet, packetArrivalTimeMs));
       }
     }
 
@@ -241,9 +249,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       } else {
         do {
           // Deplete the reordering queue as much as possible.
-          if (rtspDiagnosticsListener != null) {
+          if (emitPacketDiagnostics) {
             rtspDiagnosticsListener.onRtpPacketDequeued(
-                checkNotNull(maybeCreatePacketStats(packet, packetArrivalTimeMs)),
+                createPacketStats(packet, packetArrivalTimeMs),
                 reorderingQueue.createStats(/* sequenceGap= */ 0));
           }
           rtpPacketDataBuffer.reset(packet.payloadData);
@@ -286,11 +294,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return packetArrivalTimeMs - 30;
   }
 
-  @Nullable
-  private RtpPacketStats maybeCreatePacketStats(RtpPacket packet, long packetArrivalTimeMs) {
-    if (rtspDiagnosticsListener == null) {
-      return null;
-    }
+  private RtpPacketStats createPacketStats(RtpPacket packet, long packetArrivalTimeMs) {
     return new RtpPacketStats(
         trackId,
         transportMode,

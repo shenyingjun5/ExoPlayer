@@ -157,6 +157,91 @@ public final class RtpH264ReaderTest {
   }
 
   @Test
+  public void consume_idrAfterCompleteInBandSpsPps_reportsFirstDecodableAccessUnit()
+      throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(/* hasInitializationData= */ false, diagnosticsListener);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 1);
+    h264Reader.onReceivingFirstPacket(
+        RTP_TIMESTAMP_1,
+        /* sequenceNumber= */ 1,
+        FIRST_RTP_ARRIVAL_ELAPSED_REALTIME_MS);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("6742001E")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("68CE06E2")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2 + 90_000,
+            /* sequenceNumber= */ 3,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+
+    assertThat(diagnosticsListener.accessUnitStats).hasSize(1);
+    RtspH264AccessUnitStats stats = diagnosticsListener.accessUnitStats.get(0);
+    assertThat(stats.rtpSequenceNumber).isEqualTo(3);
+    assertThat(stats.hasSps).isTrue();
+    assertThat(stats.hasPps).isTrue();
+  }
+
+  @Test
+  public void consume_idrAfterCorruptedFragmentedSps_doesNotReportFirstDecodableAccessUnit()
+      throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(/* hasInitializationData= */ false, diagnosticsListener);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 1);
+    h264Reader.onReceivingFirstPacket(
+        RTP_TIMESTAMP_1,
+        /* sequenceNumber= */ 1,
+        FIRST_RTP_ARRIVAL_ELAPSED_REALTIME_MS);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ false,
+            getBytesFromHexString("7C871122")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 3,
+            /* marker= */ true,
+            getBytesFromHexString("7C473344")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 4,
+            /* marker= */ true,
+            getBytesFromHexString("68CE06E2")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2 + 90_000,
+            /* sequenceNumber= */ 5,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+
+    assertThat(diagnosticsListener.accessUnitStats).isEmpty();
+  }
+
+  @Test
   public void consume_nonIdrWithSpsPps_doesNotReportFirstDecodableAccessUnit()
       throws ParserException {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();

@@ -82,6 +82,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final boolean rtspPacketDiagnosticsEnabled;
 
   @Nullable private RtpDataChannel dataChannel;
   private @MonotonicNonNull RtpExtractor extractor;
@@ -116,7 +117,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         rtpDataChannelFactory,
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
-        RtcpFeedbackPolicy.DEFAULT);
+        RtcpFeedbackPolicy.DEFAULT,
+        /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
   public RtpDataLoadable(
@@ -127,7 +129,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       RtpDataChannel.Factory rtpDataChannelFactory,
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
-      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
     this.trackId = trackId;
     this.rtspMediaTrack = rtspMediaTrack;
     this.eventListener = eventListener;
@@ -137,6 +140,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
+    this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     pendingSeekPositionUs = C.TIME_UNSET;
   }
 
@@ -207,7 +211,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 transportMode,
                 rtspDiagnosticsListener,
                 rtcpFeedbackRequester,
-                rtcpFeedbackPolicy);
+                rtcpFeedbackPolicy,
+                rtspPacketDiagnosticsEnabled);
         extractor.init(output);
       }
 

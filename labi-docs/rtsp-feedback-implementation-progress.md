@@ -2,7 +2,7 @@
 
 ## Current Scope
 
-当前分支已经越过第一阶段 API 骨架，完成了 RTSP feedback/diagnostics 基础能力、RTCP PLI/FIR 发送链路和 Media3 RTSP P0/P1 小范围 backport。
+当前分支已经越过第一阶段 API 骨架，完成了 RTSP feedback/diagnostics 基础能力、RTCP PLI/FIR 发送链路、Media3 RTSP P0/P1 小范围 backport，以及 H.264 低延迟 loading 兜底诊断事件。
 
 已落地提交：
 
@@ -35,6 +35,58 @@
 | P1.3 | Pass listener and policy through `RtspMediaSource`, `RtspMediaPeriod`, `RtspClient`, `RtpDataLoadable`, `RtpExtractor`, and `RtpPacketReorderingQueue` | Done | Constructor/default behavior covered by API tests |
 | P1.4 | Emit only low-cost diagnostics events when listener is non-null | Done | RTSP unit tests passed |
 | P1.5 | Keep RTCP PLI/FIR send implementation out of phase 1 | Done for phase 1 | Later superseded by RTCP Feedback Completion below |
+
+## H.264 Low-Latency Loading Diagnostic
+
+| ID | Task | Status | Verification |
+| --- | --- | --- | --- |
+| H1 | Add public H.264 access-unit diagnostics value type | Done | `RtspFeedbackApiTest.diagnosticsValueTypes_haveStableEquality` |
+| H2 | Add no-op default listener callback | Done | `RtspFeedbackApiTest.emptyListeners_allowNoOpCallbacks` |
+| H3 | Pass RTSP diagnostics listener into `RtpH264Reader` | Done | Targeted RTSP tests passed |
+| H4 | Report only first complete IDR access unit with SPS/PPS available | Done | `RtpH264ReaderTest` single packet/FU-A/missing SPS-PPS/non-IDR cases |
+| H5 | Document Cast-SDK loading fallback semantics | Done | `labi-docs/rtsp-feedback-enhancement-plan.md` |
+| H6 | Publish `2.19.1-labi.2` artifact | In progress | Full RTSP verification passed |
+
+API:
+
+- `RtspDiagnosticsListener.onFirstDecodableVideoAccessUnitReady(RtspH264AccessUnitStats)`
+
+Semantics:
+
+- This is not a rendered-frame callback.
+- It fires after the RTP/H.264 reader has assembled a complete IDR access unit and SPS/PPS are available.
+- It fires once per H.264 track.
+- Cast-SDK loading priority should stay `renderedFirstFrame` first, then this event, then `videoSize` / `PLAYING` poll fallback.
+
+Targeted test command:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.reader.RtpH264ReaderTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest
+```
+
+Targeted result:
+
+- passed. `BUILD SUCCESSFUL in 3s`, `195 actionable tasks: 4 executed, 191 up-to-date`.
+
+Full RTSP unit test command:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest
+```
+
+Full RTSP unit result:
+
+- passed. `BUILD SUCCESSFUL in 17s`, `195 actionable tasks: 1 executed, 194 up-to-date`.
+
+Release AAR build command:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease
+```
+
+Release AAR build result:
+
+- passed. `BUILD SUCCESSFUL in 4s`, `94 actionable tasks: 4 executed, 90 up-to-date`.
 
 ## Phase 1 Test Status
 
@@ -91,6 +143,7 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Partially done | 302/Public/keepalive/invalid SDP/user-info completed; TCP fallback race/hang remains |
 | R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
+| R6 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.2` with H.264 access-unit diagnostic | In progress | Full RTSP unit test and release AAR build passed; Maven publication pending |
 
 ## RTSP P1 Interop Completion
 
@@ -118,7 +171,7 @@ Verification:
 Local Gradle changes configure:
 
 - Default group override from `com.google.android.exoplayer` to `com.zknowai.exoplayer`.
-- Default release version override to `2.19.1-labi.1`.
+- Default release version override to `2.19.1-labi.2`.
 - Fork SCM metadata in generated POM.
 - AAR type workaround recognition for `com.zknowai.exoplayer`.
 

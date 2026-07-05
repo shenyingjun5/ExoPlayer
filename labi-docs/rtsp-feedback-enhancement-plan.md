@@ -58,6 +58,7 @@ Cast-SDK Android 接收端需要在 Android 4.4+ 设备上播放自家发送端�
 
 - RTSP diagnostics/feedback API 和配置透传。
 - RTP packet/reorder queue diagnostics。
+- H.264 首个可解码 IDR access unit 诊断事件。
 - TCP interleaved 和 UDP RTCP feedback 发送。
 - RTCP PLI/FIR packet builder。
 - `RtspMediaPeriod.requestKeyFrame(reason)` 到各 RTP track 的内部请求链路。
@@ -98,6 +99,7 @@ API 必须保持可选，不影响现有官方用法。
 需要暴露：
 
 - first RTP packet time。
+- first decodable H.264 IDR access unit ready time。
 - RTP timestamp。
 - sequence number。
 - arrival time。
@@ -106,6 +108,37 @@ API 必须保持可选，不影响现有官方用法。
 - late/drop/reset 计数。
 - timestamp wraparound。
 - transport mode: TCP interleaved / UDP。
+
+### H.264 Low-Latency Loading Diagnostic
+
+API：
+
+- `RtspDiagnosticsListener.onFirstDecodableVideoAccessUnitReady(RtspH264AccessUnitStats)`
+
+触发条件：
+
+- RTP/H.264 depacketize 链路已经组出完整 access unit，不是单个 RTP packet 到达。
+- access unit 包含 IDR NAL，`accessUnitType=IDR`。
+- 已有 SPS/PPS，可配置解码器。
+- 每个 H.264 track 只上报首个满足条件的 access unit。
+
+诊断字段：
+
+- `trackId`
+- `rtpSequenceNumber`
+- `rtpTimestamp`
+- `hasSps`
+- `hasPps`
+- `nalUnitType`
+- `accessUnitType`
+- `firstRtpPacketElapsedRealtimeMs`
+
+语义边界：
+
+- 该事件不是 rendered frame callback，不代表画面已经进入 Surface。
+- 该事件只表示 RTP depacketizer 已组出首个具备解码条件的 H.264 IDR access unit，并已经提交给 extractor output。
+- Cast-SDK 接收端 loading 退出优先级应为：`renderedFirstFrame`，其次 `onFirstDecodableVideoAccessUnitReady`，最后 `videoSize` / `PLAYING` poll 兜底。
+- 默认无 listener 时不改变 ExoPlayer 2.19.1 播放行为。
 
 ### 低延迟恢复
 
@@ -192,11 +225,14 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | X9 | 发布 `2.19.1-labi.1` artifact | 已发布 | `https://shenyingjun5.github.io/ExoPlayer/` 已可访问 POM/AAR；tag `exoplayer-rtsp-2.19.1-labi.1` 已推送 |
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
 | X11 | Backport P1 RTSP 互操作修复 | 部分完成 | 302/Public/keepalive/invalid SDP/user-info 已完成；TCP fallback race/hang 待评估 |
+| X12 | 暴露首个可解码 H.264 IDR access unit 诊断事件 | 已完成 | `RtpH264ReaderTest` + `RtspFeedbackApiTest` |
+| X13 | 发布 `2.19.1-labi.2` artifact | 待执行 | 包含 X12 API 后发布 |
 
 ## 验收标准
 
 - patched RTSP 模块保持 Android 4.4 可用：代码层保持 `minSdkVersion=16`，仍需真机覆盖。
 - Cast-SDK 接收端能收到 diagnostics：ExoPlayer fork API 已具备，Cast-SDK 接入未完成。
+- Cast-SDK 接收端能用低延迟 H.264 access unit 事件作为 loading 兜底：ExoPlayer fork API 已具备，Cast-SDK 接入未完成。
 - Cast-SDK 接收端能触发 RTCP PLI/FIR：ExoPlayer fork 内部链路已具备，Cast-SDK 接入未完成。
 - Cast-SDK 发送端能收到 PLI/FIR 并强制 IDR：需 Cast-SDK 联调验证。
 - H.264/H.265 RTP 关键 backport 有单测覆盖：已完成。

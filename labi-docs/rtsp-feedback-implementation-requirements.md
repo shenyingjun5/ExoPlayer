@@ -135,6 +135,7 @@ public Factory setRtspFeedbackListener(@Nullable RtspFeedbackListener listener);
 - TCP interleaved channel pair。
 - UDP RTP/RTCP port pair。
 - first RTP packet received。
+- first decodable H.264 IDR access unit ready。
 - RTP packet parsed。
 - RTP sequence gap。
 - RTP packet late/drop。
@@ -158,6 +159,14 @@ public Factory setRtspFeedbackListener(@Nullable RtspFeedbackListener listener);
 - gap size。
 - reason。
 - throwable message，失败时可选。
+
+H.264 access unit 级别事件：
+
+- API 名称：`RtspDiagnosticsListener.onFirstDecodableVideoAccessUnitReady(RtspH264AccessUnitStats)`。
+- 触发条件：完整 access unit 已组出、包含 IDR/keyframe、SPS/PPS 已可用、每个 H.264 track 只触发一次。
+- 诊断字段：`trackId`、`rtpSequenceNumber`、`rtpTimestamp`、`hasSps`、`hasPps`、`nalUnitType`、`accessUnitType`、`firstRtpPacketElapsedRealtimeMs`。
+- 语义限制：这不是 rendered frame，只能作为自家低延迟 RTSP live loading 的兜底信号。
+- Cast-SDK UI 优先级：`renderedFirstFrame`，其次该 access-unit 事件，再其次 `videoSize` / `PLAYING` poll。
 
 ## RTCP Feedback 需求
 
@@ -284,6 +293,7 @@ boolean requestKeyFrame(RtcpFeedbackReason reason);
 - RTP timestamp wraparound。
 - H.264 fragmented NAL missing packet。
 - H.264 access unit across multiple RTP packets。
+- H.264 first decodable IDR access unit diagnostics: single-packet IDR、FU-A IDR、missing SPS/PPS、non-IDR。
 - diagnostics listener 空实现时不改变原行为。
 
 建议先跑：

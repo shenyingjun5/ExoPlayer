@@ -30,6 +30,14 @@ public interface RtspDiagnosticsListener {
   /** Called when the first RTP packet for one track is dequeued for processing. */
   default void onFirstRtpPacketReceived(RtpPacketStats packetStats) {}
 
+  /**
+   * Called when the first complete H.264 IDR access unit with SPS/PPS available is assembled.
+   *
+   * <p>This is not a rendered-frame callback. It only means the RTP depacketizer has assembled a
+   * decodable key access unit and submitted it to the extractor output.
+   */
+  default void onFirstDecodableVideoAccessUnitReady(RtspH264AccessUnitStats accessUnitStats) {}
+
   /** Called when an RTP packet is parsed. */
   default void onRtpPacketReceived(RtpPacketStats packetStats) {}
 

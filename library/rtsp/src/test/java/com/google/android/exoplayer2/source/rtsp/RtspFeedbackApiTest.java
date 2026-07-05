@@ -151,6 +151,16 @@ public final class RtspFeedbackApiTest {
             RtcpFeedbackReason.SEQUENCE_GAP,
             /* requestElapsedRealtimeMs= */ 999,
             /* detail= */ "gap");
+    RtspH264AccessUnitStats accessUnitStats =
+        new RtspH264AccessUnitStats(
+            /* trackId= */ 1,
+            /* rtpSequenceNumber= */ 12,
+            /* rtpTimestamp= */ 1234,
+            /* hasSps= */ true,
+            /* hasPps= */ true,
+            /* nalUnitType= */ 5,
+            RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR,
+            /* firstRtpPacketElapsedRealtimeMs= */ 88);
 
     assertThat(packetStats)
         .isEqualTo(
@@ -162,9 +172,14 @@ public final class RtspFeedbackApiTest {
                 1, RtspTransportMode.TCP_INTERLEAVED, 2, 11, 10, 1, 3, 4, 5));
     assertThat(feedbackRequest)
         .isEqualTo(new RtcpFeedbackRequest(1, RtcpFeedbackReason.SEQUENCE_GAP, 999, "gap"));
+    assertThat(accessUnitStats)
+        .isEqualTo(
+            new RtspH264AccessUnitStats(
+                1, 12, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
     assertThat(packetStats.toString()).contains("sequenceNumber=10");
     assertThat(reorderingStats.toString()).contains("queueDepth=2");
     assertThat(feedbackRequest.toString()).contains("detail=gap");
+    assertThat(accessUnitStats.toString()).contains("accessUnitType=IDR");
   }
 
   @Test
@@ -184,6 +199,9 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onTransportReady(
         /* trackId= */ 1, RtspTransportMode.UDP, "RTP/AVP;unicast;client_port=1000-1001");
     diagnosticsListener.onFirstRtpPacketReceived(packetStats);
+    diagnosticsListener.onFirstDecodableVideoAccessUnitReady(
+        new RtspH264AccessUnitStats(
+            1, 10, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
     diagnosticsListener.onRtpPacketReceived(packetStats);
     diagnosticsListener.onRtpPacketDequeued(packetStats, reorderingStats);
     diagnosticsListener.onRtpPacketDropped(packetStats, reorderingStats);

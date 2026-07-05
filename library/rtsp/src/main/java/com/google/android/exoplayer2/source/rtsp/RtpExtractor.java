@@ -94,7 +94,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
 
     payloadReader =
-        checkNotNull(new DefaultRtpPayloadReaderFactory().createPayloadReader(payloadFormat));
+        checkNotNull(
+            new DefaultRtpPayloadReaderFactory(rtspDiagnosticsListener)
+                .createPayloadReader(payloadFormat));
     rtpPacketScratchBuffer = new ParsableByteArray(RtpPacket.MAX_SIZE);
     rtpPacketDataBuffer = new ParsableByteArray();
     lock = new Object();
@@ -213,7 +215,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (firstSequenceNumber == C.INDEX_UNSET) {
         firstSequenceNumber = packet.sequenceNumber;
       }
-      payloadReader.onReceivingFirstPacket(firstTimestamp, firstSequenceNumber);
+      payloadReader.onReceivingFirstPacket(
+          firstTimestamp, firstSequenceNumber, packetArrivalTimeMs);
       firstPacketRead = true;
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onFirstRtpPacketReceived(

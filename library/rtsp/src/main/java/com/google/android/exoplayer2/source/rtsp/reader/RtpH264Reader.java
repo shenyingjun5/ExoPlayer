@@ -20,17 +20,21 @@ import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkStateNotNull;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
 
+import android.os.SystemClock;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.extractor.TrackOutput;
 import com.google.android.exoplayer2.source.rtsp.RtpPacket;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
+import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
+import com.google.android.exoplayer2.source.rtsp.RtspH264AccessUnitStats;
 import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.NalUnitUtil;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.Util;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
 /**
@@ -57,6 +61,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   /** IDR NAL unit type. */
   private static final int NAL_UNIT_TYPE_IDR = 5;
+  /** SPS NAL unit type. */
+  private static final int NAL_UNIT_TYPE_SPS = 7;
+  /** PPS NAL unit type. */
+  private static final int NAL_UNIT_TYPE_PPS = 8;
 
   /** Scratch for Fragmentation Unit RTP packets. */
   private final ParsableByteArray fuScratchBuffer;
@@ -65,11 +73,14 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       new ParsableByteArray(NalUnitUtil.NAL_START_CODE);
 
   private final RtpPayloadFormat payloadFormat;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
 
   private @MonotonicNonNull TrackOutput trackOutput;
   private @C.BufferFlags int bufferFlags;
+  private int trackId;
 
   private long firstReceivedTimestamp;
+  private long firstRtpPacketArrivalElapsedRealtimeMs;
   private int previousSequenceNumber;
   private long previousTimestamp;
   /** The combined size of a sample that is fragmented into multiple RTP packets. */
@@ -82,20 +93,41 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
    */
   private boolean isCurrentAccessUnitCorrupted;
   private boolean isProcessingFragmentationUnit;
+  private boolean hasOutputSps;
+  private boolean hasOutputPps;
+  private boolean hasReportedFirstDecodableAccessUnit;
+  private boolean currentAccessUnitHasIdr;
+  private boolean currentAccessUnitHasSps;
+  private boolean currentAccessUnitHasPps;
+  private int currentAccessUnitFirstSequenceNumber;
+  private long currentAccessUnitRtpTimestamp;
 
   /** Creates an instance. */
   public RtpH264Reader(RtpPayloadFormat payloadFormat) {
+    this(payloadFormat, /* rtspDiagnosticsListener= */ null);
+  }
+
+  /** Creates an instance. */
+  public RtpH264Reader(
+      RtpPayloadFormat payloadFormat, @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
     this.payloadFormat = payloadFormat;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     fuScratchBuffer = new ParsableByteArray();
     firstReceivedTimestamp = C.TIME_UNSET;
+    firstRtpPacketArrivalElapsedRealtimeMs = C.TIME_UNSET;
     previousSequenceNumber = C.INDEX_UNSET;
     previousTimestamp = C.TIME_UNSET;
     isCurrentAccessUnitCorrupted = false;
     isProcessingFragmentationUnit = false;
+    hasOutputSps = payloadFormat.format.initializationData.size() >= 1;
+    hasOutputPps = payloadFormat.format.initializationData.size() >= 2;
+    currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
+    currentAccessUnitRtpTimestamp = C.TIME_UNSET;
   }
 
   @Override
   public void createTracks(ExtractorOutput extractorOutput, int trackId) {
+    this.trackId = trackId;
     trackOutput = extractorOutput.track(trackId, C.TRACK_TYPE_VIDEO);
 
     castNonNull(trackOutput).format(payloadFormat.format);
@@ -103,6 +135,12 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {}
+
+  @Override
+  public void onReceivingFirstPacket(
+      long timestamp, int sequenceNumber, long arrivalElapsedRealtimeMs) {
+    firstRtpPacketArrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
+  }
 
   @Override
   public void consume(ParsableByteArray data, long timestamp, int sequenceNumber, boolean rtpMarker)
@@ -114,6 +152,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
     checkStateNotNull(trackOutput);
     if (!isCurrentAccessUnitCorrupted) {
+      if (currentAccessUnitFirstSequenceNumber == C.INDEX_UNSET) {
+        currentAccessUnitFirstSequenceNumber = sequenceNumber;
+        currentAccessUnitRtpTimestamp = timestamp;
+      }
       int rtpH264PacketMode;
       try {
         // RFC6184 Section 5.6, 5.7 and 5.8.
@@ -155,6 +197,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             fragmentedSampleSizeBytes,
             /* offset= */ 0,
             /* cryptoData= */ null);
+        maybeNotifyFirstDecodableAccessUnitReady();
       }
       resetReaderStateForNewAccessUnit();
     }
@@ -200,6 +243,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     fragmentedSampleSizeBytes += numBytesInData;
 
     int nalHeaderType = data.getData()[0] & 0x1F;
+    recordNalUnitType(nalHeaderType);
     bufferFlags = getBufferFlagsFromNalType(nalHeaderType);
   }
 
@@ -239,6 +283,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     while (data.bytesLeft() > 4) {
       nalUnitLength = data.readUnsignedShort();
       fragmentedSampleSizeBytes += writeStartCode();
+      recordNalUnitType(data.getData()[data.getPosition()] & 0x1F);
       trackOutput.sampleData(data, nalUnitLength);
       fragmentedSampleSizeBytes += nalUnitLength;
     }
@@ -291,6 +336,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         fragmentedSampleSizeBytes = 0;
       }
       isProcessingFragmentationUnit = true;
+      recordNalUnitType(nalHeader & 0x1F);
       // Prepends starter code.
       fragmentedSampleSizeBytes += writeStartCode();
 
@@ -336,6 +382,48 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     isProcessingFragmentationUnit = false;
     fragmentedSampleSizeBytes = 0;
     bufferFlags = 0;
+    currentAccessUnitHasIdr = false;
+    currentAccessUnitHasSps = false;
+    currentAccessUnitHasPps = false;
+    currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
+    currentAccessUnitRtpTimestamp = C.TIME_UNSET;
+  }
+
+  private void recordNalUnitType(int nalUnitType) {
+    if (nalUnitType == NAL_UNIT_TYPE_IDR) {
+      currentAccessUnitHasIdr = true;
+    } else if (nalUnitType == NAL_UNIT_TYPE_SPS) {
+      currentAccessUnitHasSps = true;
+      hasOutputSps = true;
+    } else if (nalUnitType == NAL_UNIT_TYPE_PPS) {
+      currentAccessUnitHasPps = true;
+      hasOutputPps = true;
+    }
+  }
+
+  private void maybeNotifyFirstDecodableAccessUnitReady() {
+    if (hasReportedFirstDecodableAccessUnit
+        || rtspDiagnosticsListener == null
+        || !currentAccessUnitHasIdr
+        || !hasOutputSps
+        || !hasOutputPps) {
+      return;
+    }
+    hasReportedFirstDecodableAccessUnit = true;
+    long elapsedFromFirstRtpMs =
+        firstRtpPacketArrivalElapsedRealtimeMs == C.TIME_UNSET
+            ? C.TIME_UNSET
+            : Math.max(0, SystemClock.elapsedRealtime() - firstRtpPacketArrivalElapsedRealtimeMs);
+    rtspDiagnosticsListener.onFirstDecodableVideoAccessUnitReady(
+        new RtspH264AccessUnitStats(
+            trackId,
+            currentAccessUnitFirstSequenceNumber,
+            currentAccessUnitRtpTimestamp,
+            hasOutputSps || currentAccessUnitHasSps,
+            hasOutputPps || currentAccessUnitHasPps,
+            NAL_UNIT_TYPE_IDR,
+            RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR,
+            elapsedFromFirstRtpMs));
   }
 
   private int writeStartCode() {

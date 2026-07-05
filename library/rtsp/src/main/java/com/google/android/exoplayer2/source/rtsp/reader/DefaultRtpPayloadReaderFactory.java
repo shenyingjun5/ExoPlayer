@@ -20,6 +20,7 @@ import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
+import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
 import com.google.android.exoplayer2.util.MimeTypes;
 
 /**
@@ -32,6 +33,17 @@ import com.google.android.exoplayer2.util.MimeTypes;
  */
 /* package */ public final class DefaultRtpPayloadReaderFactory
     implements RtpPayloadReader.Factory {
+
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+
+  public DefaultRtpPayloadReaderFactory() {
+    this(/* rtspDiagnosticsListener= */ null);
+  }
+
+  public DefaultRtpPayloadReaderFactory(
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+  }
 
   @Override
   @Nullable
@@ -57,7 +69,7 @@ import com.google.android.exoplayer2.util.MimeTypes;
       case MimeTypes.VIDEO_H263:
         return new RtpH263Reader(payloadFormat);
       case MimeTypes.VIDEO_H264:
-        return new RtpH264Reader(payloadFormat);
+        return new RtpH264Reader(payloadFormat, rtspDiagnosticsListener);
       case MimeTypes.VIDEO_H265:
         return new RtpH265Reader(payloadFormat);
       case MimeTypes.VIDEO_MP4V:

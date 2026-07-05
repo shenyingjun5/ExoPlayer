@@ -64,6 +64,18 @@ import org.checkerframework.checker.nullness.qual.Nullable;
   void onReceivingFirstPacket(long timestamp, int sequenceNumber);
 
   /**
+   * This method should be called on reading the first packet in a stream of incoming packets.
+   *
+   * @param timestamp The timestamp associated with the first received RTP packet.
+   * @param sequenceNumber The sequence associated with the first received RTP packet.
+   * @param arrivalElapsedRealtimeMs The elapsed realtime when the first RTP packet arrived.
+   */
+  default void onReceivingFirstPacket(
+      long timestamp, int sequenceNumber, long arrivalElapsedRealtimeMs) {
+    onReceivingFirstPacket(timestamp, sequenceNumber);
+  }
+
+  /**
    * Consumes the payload from the an RTP packet.
    *
    * @param data The RTP payload to consume.

@@ -88,9 +88,30 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | --- | --- | --- | --- |
 | R1 | First-packet timeout triggers key-frame request | Not done | Needs timer/loader integration and false-positive guard |
 | R2 | Decoder recover or falling-behind trigger | Not done | Likely needs Cast-SDK/player evidence before touching renderer/core |
-| R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Not done | Keep as separate client-interop batch |
+| R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Partially done | 302/Public/keepalive/invalid SDP/user-info completed; TCP fallback race/hang remains |
 | R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
+
+## RTSP P1 Interop Completion
+
+| ID | Task | Status | Verification |
+| --- | --- | --- | --- |
+| I1 | Preserve RTSP 302 `Location` URI as provided | Done | `RtspClientTest` |
+| I2 | Ignore custom methods in OPTIONS `Public` header | Done | `RtspMessageUtilTest` |
+| I3 | Use RTSP `Session` timeout for keepalive interval | Done | Full `:library-rtsp:testDebugUnitTest` |
+| I4 | Skip invalid SDP media descriptions | Done | `SessionDescriptionTest` |
+| I5 | Handle URL encoded `@` in RTSP user-info | Done | `RtspMessageUtilTest` |
+| I6 | RTSP setup loading-state check | Already present | Existing `RtspClient` setup path |
+| I7 | TCP fallback race/hang | Not done | Needs focused Media3 1.2.x diff pass |
+
+Verification:
+
+- Targeted command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspMessageUtilTest --tests com.google.android.exoplayer2.source.rtsp.RtspClientTest --tests com.google.android.exoplayer2.source.rtsp.SessionDescriptionTest`
+- Targeted result: passed. `BUILD SUCCESSFUL in 2s`.
+- Full command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
+- Full result: passed. `BUILD SUCCESSFUL in 12s`.
 
 ## Publication Status
 

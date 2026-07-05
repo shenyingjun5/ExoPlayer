@@ -78,6 +78,7 @@ import java.util.regex.Pattern;
   public static SessionDescription parse(String sdpString) throws ParserException {
     SessionDescription.Builder sessionDescriptionBuilder = new SessionDescription.Builder();
     @Nullable MediaDescription.Builder mediaDescriptionBuilder = null;
+    boolean skippingInvalidMediaDescription = false;
 
     // Lines are separated by an CRLF.
     for (String line : RtspMessageUtil.splitRtspMessageBody(sdpString)) {
@@ -94,6 +95,9 @@ import java.util.regex.Pattern;
 
       String sdpType = checkNotNull(matcher.group(1));
       String sdpValue = checkNotNull(matcher.group(2));
+      if (skippingInvalidMediaDescription && !MEDIA_TYPE.equals(sdpType)) {
+        continue;
+      }
 
       switch (sdpType) {
         case VERSION_TYPE:
@@ -186,7 +190,13 @@ import java.util.regex.Pattern;
           if (mediaDescriptionBuilder != null) {
             addMediaDescriptionToSession(sessionDescriptionBuilder, mediaDescriptionBuilder);
           }
-          mediaDescriptionBuilder = parseMediaDescriptionLine(sdpValue);
+          try {
+            mediaDescriptionBuilder = parseMediaDescriptionLine(sdpValue);
+            skippingInvalidMediaDescription = false;
+          } catch (ParserException e) {
+            mediaDescriptionBuilder = null;
+            skippingInvalidMediaDescription = true;
+          }
           break;
         case REPEAT_TYPE:
         case ZONE_TYPE:
@@ -208,12 +218,11 @@ import java.util.regex.Pattern;
 
   private static void addMediaDescriptionToSession(
       SessionDescription.Builder sessionDescriptionBuilder,
-      MediaDescription.Builder mediaDescriptionBuilder)
-      throws ParserException {
+      MediaDescription.Builder mediaDescriptionBuilder) {
     try {
       sessionDescriptionBuilder.addMediaDescription(mediaDescriptionBuilder.build());
     } catch (IllegalArgumentException | IllegalStateException e) {
-      throw ParserException.createForMalformedManifest(/* message= */ null, e);
+      // Skip invalid media descriptions.
     }
   }
 

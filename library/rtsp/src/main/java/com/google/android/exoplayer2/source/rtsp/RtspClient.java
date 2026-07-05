@@ -102,7 +102,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   public static final int RTSP_STATE_PLAYING = 2;
 
   private static final String TAG = "RtspClient";
-  private static final long DEFAULT_RTSP_KEEP_ALIVE_INTERVAL_MS = 30_000;
+  private static final int DEFAULT_RTSP_KEEP_ALIVE_INTERVAL_DIVISOR = 2;
 
   /** A listener for session information update. */
   public interface SessionInfoListener {
@@ -151,6 +151,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private RtspMessageChannel messageChannel;
   @Nullable private RtspAuthUserInfo rtspAuthUserInfo;
   @Nullable private String sessionId;
+  private long sessionTimeoutMs;
   @Nullable private KeepAliveMonitor keepAliveMonitor;
   @Nullable private RtspAuthenticationInfo rtspAuthenticationInfo;
   private @RtspState int rtspState;
@@ -219,6 +220,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.uri = RtspMessageUtil.removeUserInfo(uri);
     this.messageChannel = new RtspMessageChannel(new MessageListener());
     this.rtspAuthUserInfo = RtspMessageUtil.parseUserInfo(uri);
+    this.sessionTimeoutMs = RtspMessageUtil.DEFAULT_RTSP_TIMEOUT_MS;
     this.pendingSeekPositionUs = C.TIME_UNSET;
     this.rtspState = RTSP_STATE_UNINITIALIZED;
   }
@@ -646,9 +648,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               sessionInfoListener.onSessionTimelineRequestFailed(
                   "Redirection without new location.", /* cause= */ null);
             } else {
-              Uri redirectionUri = Uri.parse(redirectionUriString);
-              RtspClient.this.uri = RtspMessageUtil.removeUserInfo(redirectionUri);
-              RtspClient.this.rtspAuthUserInfo = RtspMessageUtil.parseUserInfo(redirectionUri);
+              RtspClient.this.uri = Uri.parse(redirectionUriString);
+              @Nullable
+              RtspAuthUserInfo redirectionRtspAuthUserInfo =
+                  RtspMessageUtil.parseUserInfo(RtspClient.this.uri);
+              if (redirectionRtspAuthUserInfo != null) {
+                RtspClient.this.rtspAuthUserInfo = redirectionRtspAuthUserInfo;
+              }
               messageSender.sendDescribeRequest(RtspClient.this.uri, RtspClient.this.sessionId);
             }
             return;
@@ -819,6 +825,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
       rtspState = RTSP_STATE_READY;
       sessionId = response.sessionHeader.sessionId;
+      sessionTimeoutMs = response.sessionHeader.timeoutMs;
       @Nullable Integer serverRtcpPort = parseServerRtcpPort(response.transport);
       if (currentSetupRtpLoadInfo != null && serverRtcpPort != null) {
         currentSetupRtpLoadInfo.setRemoteRtcpEndpoint(checkNotNull(uri.getHost()), serverRtcpPort);
@@ -831,7 +838,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
       rtspState = RTSP_STATE_PLAYING;
       if (keepAliveMonitor == null) {
-        keepAliveMonitor = new KeepAliveMonitor(DEFAULT_RTSP_KEEP_ALIVE_INTERVAL_MS);
+        keepAliveMonitor =
+            new KeepAliveMonitor(sessionTimeoutMs / DEFAULT_RTSP_KEEP_ALIVE_INTERVAL_DIVISOR);
         keepAliveMonitor.start();
       }
 

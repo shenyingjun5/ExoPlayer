@@ -19,13 +19,14 @@
 - `RtspMediaPeriod.requestKeyFrame(reason)` 内部请求链路。
 - RTP sequence gap 和 queue reset 自动触发 key-frame request。
 - Media3 P0 RTSP payload reader backport 与低风险 P1 parser/factory hardening。
+- RTSP 302、OPTIONS Public、keepalive timeout、invalid SDP media、encoded `@` user-info 互操作修复。
 - `:library-rtsp:testDebugUnitTest`、目标 RTCP 单测和 `:library-rtsp:assembleRelease` 已通过。
 
 仍未完成：
 
 - 首帧超时自动请求 key frame。
 - decoder recover 或明显落后时自动请求 key frame。
-- RTSP setup/keepalive/TCP fallback/302 等剩余 P1 互操作回迁。
+- TCP fallback race/hang 等剩余 P1 互操作回迁；302、OPTIONS Public、keepalive timeout、invalid SDP media、encoded `@` user-info 已完成。
 - patched Maven artifact 本地和 GitHub Pages 远端发布已完成；Cast-SDK 接入验证未完成。
 
 ## 背景
@@ -256,8 +257,8 @@ boolean requestKeyFrame(RtcpFeedbackReason reason);
 2. RTP timestamp wraparound。
 3. fragmented NAL 缺 RTP packet 的处理。
 4. TCP fallback / setup race / hang。
-5. RTSP keepalive 使用 server timeout。
-6. SDP / 302 / header extension 容错。
+5. RTSP keepalive 使用 server timeout：已完成。
+6. SDP / 302 / header extension 容错：已完成主要项。
 
 每个 backport 必须记录来源：
 

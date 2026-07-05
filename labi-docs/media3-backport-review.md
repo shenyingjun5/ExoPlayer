@@ -17,7 +17,7 @@
 
 ## Sources Reviewed
 
-- AndroidX Media3 release notes through `1.10.1` on 2026-05-12.
+- AndroidX Media3 release notes through stable `1.10.1` and `1.11.0-alpha01` preview on 2026-07-03.
 - Local ExoPlayer 2.19.1 RTSP source under `library/rtsp`.
 - Media3 1.10.0 RTSP source for `RtpH264Reader`, `RtpH265Reader`, `RtpExtractor`, `RtpPacket`, `RtspMediaSource`, `SessionDescriptionParser`, and `RtpPacketReorderingQueue`.
 - GitHub issues and commits linked from Media3 release notes for P0 candidates.
@@ -166,6 +166,33 @@ Risk:
 
 ## P1 and P2 Notes
 
+## Additional ExoPlayer PR Scan
+
+This scan compares Media3 release-note PRs/issues against the current fork after commits
+`dd3af995c7` and `93e0c32c7a`.
+
+| Priority | Media3 PR / issue | Area | Local status | Recommendation |
+| --- | --- | --- | --- | --- |
+| P1 | `androidx/media#2398` | RTSP 302 `Location` URI handling | 已回迁：redirect URI now uses `Location` as provided and only updates auth user-info if the redirect URI includes it. | Done. Covered by `RtspClientTest`. |
+| P1 | `androidx/media#577` | RTSP setup loading-state check | 已存在：local `onSetupResponseReceived` already checks state is not `RTSP_STATE_UNINITIALIZED`. | No code change needed. Covered by RTSP setup flow tests indirectly. |
+| P1 | `androidx/media#613` | RTSP `OPTIONS` public header tolerance | 已回迁：unknown/custom methods in `Public` are ignored. | Done. Covered by `RtspMessageUtilTest`. |
+| P1 | `androidx/media#662` | Use server RTSP setup timeout for keepalive interval | 已回迁：`RtspClient` stores `Session` timeout and uses timeout / 2 for keepalive. | Done. Covered by full RTSP unit compile/run; timing-specific assertion intentionally avoided. |
+| P1 | Media3 1.2.x release note | TCP fallback race/hang | Local code has UDP-to-TCP fallback, but no focused comparison against Media3 1.2.x race fix. | Keep as a single fallback-stability patch. Higher risk than parser fixes; do after release config or before wider field test. |
+| P1 | `androidx/media#1087` | Skip invalid SDP media descriptions | 已回迁：invalid media descriptions are skipped and their media-level lines are ignored until the next `m=` section. | Done. Covered by `SessionDescriptionTest`. |
+| P1 | `androidx/media#1138` | URL encoded `@` in RTSP user-info | 已回迁：`removeUserInfo` splits on the last `@`; encoded `@` in user-info is preserved during parsing. | Done. Covered by `RtspMessageUtilTest`. |
+| P1 | Media3 1.11.0-alpha01 release note | UDP port binding transient stalls/failures | Not merged. Current Cast-SDK primary path is TCP interleaved; UDP feedback exists but UDP RTP acceptance is secondary. | Watch until stable or until UDP acceptance becomes required. Backport only if diff is small and Android 4.4-safe. |
+| P2 | `androidx/media#2941` | Discard video codecs below API 30 when frame rate changes | Not merged; touches video renderer / codec selection. | Defer. Potentially useful for camera streams with frame-rate changes, but core/renderer blast radius is larger than RTSP module. Need real black-screen/stutter evidence. |
+| P2 | Media3 1.11.0-alpha01 release note | Surface/frame rendering decisions and frame-rate estimation | Not merged; touches `MediaCodecVideoRenderer` / UI surfaces. | Watch only. Do not backport from alpha without reproduction. |
+| P2 | `androidx/media#1893` and Media3 1.9.0 stuck-player changes | Stuck player detection and wake lock defaults | Not merged; Media3 1.9.0 also raises `minSdk` to 23. | Do not wholesale backport. Prefer Cast-SDK-side timeout/retry policy and this fork's RTCP diagnostics. |
+| 不回迁 | `androidx/media#3016`, `#2873`, `#2993`, `#2979`, preload/ads/CMCD changes | Core playlist/preload/ads/general ExoPlayer | Not RTSP-specific. | Do not merge for this fork unless Cast-SDK reports a matching failure outside RTSP. |
+| 不回迁 | Media3 UI, Session, Transformer, IMA, Cast, downloads, inspector PRs | Non-RTSP modules | Outside fork scope. | Do not merge. |
+
+Recommended next batch:
+
+1. Next remaining RTSP client-interoperability item: compare and backport the 1.2.x TCP fallback race/hang fix if the diff is still relevant after the feedback changes.
+2. Hold 1.11.0-alpha01 UDP binding until stable or until UDP RTP acceptance requires it.
+3. Keep renderer/Surface/LoadControl PRs as evidence-driven follow-ups only.
+
 ### RTSP Protocol Interop
 
 The first parser/client interop batch has been applied:
@@ -174,11 +201,17 @@ The first parser/client interop batch has been applied:
 - SDP empty `i=` line tolerance.
 - RTP header extension parsing hardening.
 - `rtspt://` scheme as TCP transport alias (`androidx/media#1484`).
+- 302 `Location` URI preservation (`androidx/media#2398`).
+- RTSP setup state check (`androidx/media#577`) already present locally.
+- OPTIONS `Public` header custom method tolerance (`androidx/media#613`).
+- Server timeout based keepalive interval (`androidx/media#662`).
+- Invalid SDP media description skipping (`androidx/media#1087`).
+- Encoded `@` user-info handling (`androidx/media#1138`).
 
 The following should remain separate follow-up work:
 
-- 302 Location URI preservation (`androidx/media#2398`); local `RtspClient` already has redirect coverage, so patch only if a concrete gap is found.
-- RTSP setup state, keepalive server timeout, OPTIONS public header tolerance, and TCP fallback race/hang fixes from the 1.2.x line.
+- TCP fallback race/hang fixes from the 1.2.x line.
+- UDP port binding transient stalls/failures from 1.11.0-alpha01, once stable or required by UDP acceptance.
 
 These are useful for third-party RTSP servers, but should not be mixed with the packet-reader correctness patch.
 
@@ -196,8 +229,9 @@ Renderer and load-control changes should not be mixed into the RTSP module patch
 2. Done: Backport H.264/H.265 fragmented NAL loss handling and AU boundary state as one combined reader patch.
 3. Done: Add H.265 Aggregation Packet support with positive and malformed packet tests.
 4. Done: Apply low-risk P1 parser/factory hardening for SDP, RTP header extension, and `rtspt://`.
-5. Next: Review RTSP redirect/setup/keepalive/TCP fallback fixes as a separate client-interoperability batch.
-6. Later: Only after RTSP module stabilizes, decide whether renderer/load-control changes need separate evidence-driven patches.
+5. Done: Backport RTSP redirect, setup-state, keepalive timeout, OPTIONS Public, invalid SDP media, and encoded user-info interop fixes.
+6. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
+7. Later: Only after RTSP module stabilizes, decide whether renderer/load-control changes need separate evidence-driven patches.
 
 ## Android 4.4 Compatibility
 
@@ -225,8 +259,19 @@ Do not import Media3 Gradle configuration, modules, annotations, UI/session code
 - Implemented `rtspt://` TCP alias in `RtspMediaSource.Factory`, with internal URI normalized to `rtsp://`.
 - Added focused tests in `SessionDescriptionTest`, `RtpPacketTest`, and `RtspFeedbackApiTest`.
 
+2026-07-03 third P1 interop backport batch:
+
+- Implemented RTSP 302 `Location` URI preservation in `RtspClient`.
+- Implemented OPTIONS `Public` header custom method tolerance in `RtspMessageUtil`.
+- Implemented encoded `@` user-info handling in `RtspMessageUtil`.
+- Implemented invalid SDP media description skipping in `SessionDescriptionParser`.
+- Implemented server timeout based RTSP keepalive interval in `RtspClient`.
+- Confirmed RTSP setup state check was already present locally.
+- Added focused tests in `RtspClientTest`, `RtspMessageUtilTest`, and `SessionDescriptionTest`.
+
 Verification status:
 
 - `git diff --check` passed.
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:test` passed.
+- `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest` passed after the third P1 interop batch.
 - The earlier `:exoplayer-rtsp:test` command was invalid for this checkout; the correct Gradle target is `:library-rtsp:test`.

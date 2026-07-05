@@ -73,6 +73,19 @@ public final class RtspMessageUtilTest {
   }
 
   @Test
+  public void parsePublicHeader_withCustomMethods_ignoresCustomMethods() {
+    assertThat(
+            RtspMessageUtil.parsePublicHeader(
+                "OPTIONS, DESCRIBE, com.example.CUSTOM, SETUP, PLAY_NOTIFY"))
+        .containsExactly(
+            RtspRequest.METHOD_OPTIONS,
+            RtspRequest.METHOD_DESCRIBE,
+            RtspRequest.METHOD_SETUP,
+            RtspRequest.METHOD_PLAY_NOTIFY)
+        .inOrder();
+  }
+
+  @Test
   public void parseRequest_withDescribeRequest_succeeds() {
     List<String> requestLines =
         Arrays.asList(
@@ -430,6 +443,14 @@ public final class RtspMessageUtilTest {
   }
 
   @Test
+  public void removeUserInfo_withEncodedAtCharacterInUserInfo_succeeds() {
+    Uri uri = Uri.parse("rtsp://user:pa%40ss@foo.bar:5050/foo.mkv");
+
+    assertThat(RtspMessageUtil.removeUserInfo(uri))
+        .isEqualTo(Uri.parse("rtsp://foo.bar:5050/foo.mkv"));
+  }
+
+  @Test
   public void removeUserInfo_withEmptyUserInfoAndPortNumber() {
     Uri uri = Uri.parse("rtsp://@foo.bar:5050/foo.mkv");
     assertThat(RtspMessageUtil.removeUserInfo(uri))
@@ -494,6 +515,17 @@ public final class RtspMessageUtilTest {
     assertThat(authUserInfo).isNotNull();
     assertThat(authUserInfo.username).isEqualTo("username");
     assertThat(authUserInfo.password).isEqualTo("pass:word");
+  }
+
+  @Test
+  public void extractUserInfo_withEncodedAtCharacter_succeeds() {
+    @Nullable
+    RtspAuthUserInfo authUserInfo =
+        RtspMessageUtil.parseUserInfo(Uri.parse("rtsp://username:pa%40ss@mediaserver.com/stream1"));
+
+    assertThat(authUserInfo).isNotNull();
+    assertThat(authUserInfo.username).isEqualTo("username");
+    assertThat(authUserInfo.password).isEqualTo("pa@ss");
   }
 
   @Test

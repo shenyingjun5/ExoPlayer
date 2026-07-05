@@ -252,6 +252,69 @@ public final class RtspClientTest {
   }
 
   @Test
+  public void connectServerAndClient_describeRedirectWithUserInfo_usesLocationUriAsProvided()
+      throws Exception {
+    AtomicReference<Uri> redirectedDescribeUri = new AtomicReference<>();
+    class ResponseProvider implements RtspServer.ResponseProvider {
+      @Override
+      public RtspResponse getOptionsResponse() {
+        return new RtspResponse(/* status= */ 200, RtspHeaders.EMPTY);
+      }
+
+      @Override
+      public RtspResponse getDescribeResponse(Uri requestedUri, RtspHeaders headers) {
+        if (!requestedUri.getPath().contains("redirect")) {
+          String authorityWithUserInfo = "username:pa%40ss@" + requestedUri.getAuthority();
+          return new RtspResponse(
+              302,
+              new RtspHeaders.Builder()
+                  .add(
+                      RtspHeaders.LOCATION,
+                      requestedUri
+                          .buildUpon()
+                          .encodedAuthority(authorityWithUserInfo)
+                          .appendEncodedPath("redirect")
+                          .build()
+                          .toString())
+                  .build());
+        }
+
+        redirectedDescribeUri.set(requestedUri);
+        return RtspTestUtils.newDescribeResponseWithSdpMessage(
+            SESSION_DESCRIPTION, rtpPacketStreamDumps, requestedUri);
+      }
+    }
+    rtspServer = new RtspServer(new ResponseProvider());
+
+    AtomicReference<ImmutableList<RtspMediaTrack>> tracksInSession = new AtomicReference<>();
+    rtspClient =
+        new RtspClient(
+            new SessionInfoListener() {
+              @Override
+              public void onSessionTimelineUpdated(
+                  RtspSessionTiming timing, ImmutableList<RtspMediaTrack> tracks) {
+                tracksInSession.set(tracks);
+              }
+
+              @Override
+              public void onSessionTimelineRequestFailed(
+                  String message, @Nullable Throwable cause) {}
+            },
+            EMPTY_PLAYBACK_LISTENER,
+            /* userAgent= */ "ExoPlayer:RtspClientTest",
+            RtspTestUtils.getTestUri(rtspServer.startAndGetPortNumber()),
+            SocketFactory.getDefault(),
+            /* debugLoggingEnabled= */ false);
+    rtspClient.start();
+    RobolectricUtil.runMainLooperUntil(() -> tracksInSession.get() != null);
+
+    assertThat(redirectedDescribeUri.get()).isNotNull();
+    assertThat(redirectedDescribeUri.get().getUserInfo()).isEqualTo("username:pa@ss");
+    assertThat(redirectedDescribeUri.get().getPath()).contains("redirect");
+    assertThat(tracksInSession.get()).hasSize(2);
+  }
+
+  @Test
   public void
       connectServerAndClient_serverSupportsDescribeNoHeaderInOptions_updatesSessionTimeline()
           throws Exception {

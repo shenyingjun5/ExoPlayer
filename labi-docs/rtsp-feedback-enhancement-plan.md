@@ -151,6 +151,11 @@ Media3 是修复来源，不是直接替代品。
 - P1：SDP 行尾空白和空 `i=` 容错。
 - P1：RTP header extension skip 和截断校验。
 - P1：`rtspt://` scheme 强制 TCP，并在内部转换为 `rtsp://`。
+- P1：RTSP 302 `Location` URI 原样重定向。
+- P1：OPTIONS `Public` header 自定义方法容忍。
+- P1：RTSP `Session` timeout 驱动 keepalive 间隔。
+- P1：SDP invalid media description 跳过。
+- P1：URL encoded `@` user-info 解析/移除容错。
 
 ## 发布方案
 
@@ -186,6 +191,7 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | X8 | Backport P0 RTSP 修复 | 已完成 | `:library-rtsp:test` |
 | X9 | 发布 `2.19.1-labi.1` artifact | 已发布 | `https://shenyingjun5.github.io/ExoPlayer/` 已可访问 POM/AAR；tag `exoplayer-rtsp-2.19.1-labi.1` 已推送 |
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
+| X11 | Backport P1 RTSP 互操作修复 | 部分完成 | 302/Public/keepalive/invalid SDP/user-info 已完成；TCP fallback race/hang 待评估 |
 
 ## 验收标准
 

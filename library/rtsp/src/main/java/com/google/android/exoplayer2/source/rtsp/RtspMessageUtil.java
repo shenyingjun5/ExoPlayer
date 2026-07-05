@@ -200,7 +200,7 @@ import java.util.regex.Pattern;
     // The Uri must include a "@" if the user info is non-null.
     String authorityWithUserInfo = checkNotNull(uri.getAuthority());
     checkArgument(authorityWithUserInfo.contains("@"));
-    String authority = Util.split(authorityWithUserInfo, "@")[1];
+    String authority = authorityWithUserInfo.substring(authorityWithUserInfo.lastIndexOf('@') + 1);
     return uri.buildUpon().encodedAuthority(authority).build();
   }
 
@@ -392,7 +392,11 @@ import java.util.regex.Pattern;
 
     ImmutableList.Builder<Integer> methodListBuilder = new ImmutableList.Builder<>();
     for (String method : Util.split(publicHeader, ",\\s?")) {
-      methodListBuilder.add(parseMethodString(method));
+      try {
+        methodListBuilder.add(parseMethodString(method));
+      } catch (IllegalArgumentException e) {
+        // Ignore custom RTSP methods in the Public header.
+      }
     }
     return methodListBuilder.build();
   }

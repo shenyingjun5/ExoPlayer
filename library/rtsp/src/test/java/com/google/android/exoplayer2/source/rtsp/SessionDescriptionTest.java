@@ -213,6 +213,30 @@ public class SessionDescriptionTest {
   }
 
   @Test
+  public void parse_sdpStringWithInvalidMediaDescription_skipsInvalidMediaDescription()
+      throws Exception {
+    String testMediaSdpInfo =
+        "v=0\r\n"
+            + "o=MNobody 2890844526 2890842807 IN IP4 192.0.2.46\r\n"
+            + "s=SDP Seminar\r\n"
+            + "t=0 0\r\n"
+            + "m=video not-a-port RTP/AVP 96\r\n"
+            + "a=control:bad-video\r\n"
+            + "a=rtpmap:96 H264/90000\r\n"
+            + "m=audio 3456 RTP/AVP 0\r\n"
+            + "a=control:audio\r\n"
+            + "a=rtpmap:0 PCMU/8000\r\n";
+
+    SessionDescription sessionDescription = SessionDescriptionParser.parse(testMediaSdpInfo);
+
+    assertThat(sessionDescription.attributes).doesNotContainEntry(ATTR_CONTROL, "bad-video");
+    assertThat(sessionDescription.mediaDescriptionList).hasSize(1);
+    assertThat(sessionDescription.mediaDescriptionList.get(0).mediaType).isEqualTo(MEDIA_TYPE_AUDIO);
+    assertThat(sessionDescription.mediaDescriptionList.get(0).attributes)
+        .containsEntry(ATTR_CONTROL, "audio");
+  }
+
+  @Test
   public void parse_sdpStringWithSpecialAttributeField_succeeds() throws Exception {
     String testMediaSdpInfo =
         "v=0\r\n"

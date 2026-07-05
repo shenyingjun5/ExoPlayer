@@ -3,11 +3,12 @@
   <groupId>com.zknowai.exoplayer</groupId>
   <artifactId>exoplayer-common</artifactId>
   <versioning>
-    <latest>2.19.1-labi.1</latest>
-    <release>2.19.1-labi.1</release>
+    <latest>2.19.1-labi.2</latest>
+    <release>2.19.1-labi.2</release>
     <versions>
       <version>2.19.1-labi.1</version>
+      <version>2.19.1-labi.2</version>
     </versions>
-    <lastUpdated>20260703092815</lastUpdated>
+    <lastUpdated>20260705002146</lastUpdated>
   </versioning>
 </metadata>

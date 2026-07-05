@@ -333,9 +333,9 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID
 
 第五阶段：发布准备。状态：已完成发布。
 
-- 更新版本号策略：已完成，默认发布 `com.zknowai.exoplayer:*:2.19.1-labi.1`。
+- 更新版本号策略：已完成，当前默认发布 `com.zknowai.exoplayer:*:2.19.1-labi.2`。
 - 准备 GitHub Actions 构建 AAR：未完成。
-- 发布 `2.19.1-labi.1` artifact：本地静态 Maven repo 已生成于 `buildout/labi-maven-repo`，远端已发布到 `https://shenyingjun5.github.io/ExoPlayer/`。
+- 发布 `2.19.1-labi.2` artifact：本地静态 Maven repo 已生成于 `buildout/labi-maven-repo`，远端已发布到 `https://shenyingjun5.github.io/ExoPlayer/`。
 
 ## 验收标准
 

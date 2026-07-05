@@ -226,7 +226,7 @@ com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
 | X10 | Cast-SDK 接入 patched artifact | 未开始 | Cast-SDK 仓库内完成 |
 | X11 | Backport P1 RTSP 互操作修复 | 部分完成 | 302/Public/keepalive/invalid SDP/user-info 已完成；TCP fallback race/hang 待评估 |
 | X12 | 暴露首个可解码 H.264 IDR access unit 诊断事件 | 已完成 | `RtpH264ReaderTest` + `RtspFeedbackApiTest` |
-| X13 | 发布 `2.19.1-labi.2` artifact | 待执行 | 包含 X12 API 后发布 |
+| X13 | 发布 `2.19.1-labi.2` artifact | 已发布 | `https://shenyingjun5.github.io/ExoPlayer/` 已可访问 POM/AAR；tag `exoplayer-rtsp-2.19.1-labi.2` 已推送 |
 
 ## 验收标准
 

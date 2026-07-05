@@ -45,7 +45,7 @@
 | H3 | Pass RTSP diagnostics listener into `RtpH264Reader` | Done | Targeted RTSP tests passed |
 | H4 | Report only first complete IDR access unit with SPS/PPS available | Done | `RtpH264ReaderTest` single packet/FU-A/missing SPS-PPS/non-IDR cases |
 | H5 | Document Cast-SDK loading fallback semantics | Done | `labi-docs/rtsp-feedback-enhancement-plan.md` |
-| H6 | Publish `2.19.1-labi.2` artifact | In progress | Full RTSP verification passed |
+| H6 | Publish `2.19.1-labi.2` artifact | Done | GitHub Pages POM/AAR returned HTTP 200 |
 
 API:
 
@@ -143,7 +143,7 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R3 | RTSP setup/keepalive/TCP fallback/302 P1 interop backports | Partially done | 302/Public/keepalive/invalid SDP/user-info completed; TCP fallback race/hang remains |
 | R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
-| R6 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.2` with H.264 access-unit diagnostic | In progress | Full RTSP unit test and release AAR build passed; Maven publication pending |
+| R6 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.2` with H.264 access-unit diagnostic | Done | Published to GitHub Pages |
 
 ## RTSP P1 Interop Completion
 
@@ -178,7 +178,7 @@ Local Gradle changes configure:
 Generated local Maven repo:
 
 - path: `buildout/labi-maven-repo`
-- version: `2.19.1-labi.1`
+- current version: `2.19.1-labi.2`
 - group: `com.zknowai.exoplayer`
 - artifact closure:
   `exoplayer-common`, `exoplayer-container`, `exoplayer-database`, `exoplayer-datasource`,
@@ -208,3 +208,11 @@ Remote publication:
 - RTSP POM: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.1/exoplayer-rtsp-2.19.1-labi.1.pom`
 - RTSP AAR: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.1/exoplayer-rtsp-2.19.1-labi.1.aar`
 - Verification: GitHub Pages status `built`; POM and AAR URLs returned HTTP 200.
+
+Latest publication:
+
+- release tag: `exoplayer-rtsp-2.19.1-labi.2`
+- Pages repo root: `https://shenyingjun5.github.io/ExoPlayer/`
+- RTSP POM: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.2/exoplayer-rtsp-2.19.1-labi.2.pom`
+- RTSP AAR: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.2/exoplayer-rtsp-2.19.1-labi.2.aar`
+- Verification: POM and AAR URLs returned HTTP 200.

@@ -46,6 +46,8 @@
 | H4 | Report only first complete IDR access unit with SPS/PPS available | Done | `RtpH264ReaderTest` single packet/FU-A/missing SPS-PPS/non-IDR cases |
 | H5 | Document Cast-SDK loading fallback semantics | Done | `labi-docs/rtsp-feedback-enhancement-plan.md` |
 | H6 | Publish `2.19.1-labi.2` artifact | Done | GitHub Pages POM/AAR returned HTTP 200 |
+| H7 | Tighten default no-listener performance path | Done | No access-unit diagnostics state is maintained without listener |
+| H8 | Publish `2.19.1-labi.3` artifact | In progress | Full RTSP test and release AAR build passed |
 
 API:
 
@@ -57,6 +59,7 @@ Semantics:
 - It fires after the RTP/H.264 reader has assembled a complete IDR access unit and SPS/PPS are available.
 - It fires once per H.264 track.
 - Cast-SDK loading priority should stay `renderedFirstFrame` first, then this event, then `videoSize` / `PLAYING` poll fallback.
+- Default no-listener playback should not maintain H.264 access-unit diagnostics state.
 
 Targeted test command:
 
@@ -144,6 +147,7 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R4 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.1` | Done | Static Maven repo generated locally and pushed to GitHub Pages |
 | R5 | Cast-SDK artifact integration and device validation | Not done | Must be performed in Cast-SDK repo after artifact publication |
 | R6 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.2` with H.264 access-unit diagnostic | Done | Published to GitHub Pages |
+| R7 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.3` with no-listener performance tightening | In progress | Maven publication pending |
 
 ## RTSP P1 Interop Completion
 
@@ -171,14 +175,14 @@ Verification:
 Local Gradle changes configure:
 
 - Default group override from `com.google.android.exoplayer` to `com.zknowai.exoplayer`.
-- Default release version override to `2.19.1-labi.2`.
+- Default release version override to `2.19.1-labi.3`.
 - Fork SCM metadata in generated POM.
 - AAR type workaround recognition for `com.zknowai.exoplayer`.
 
 Generated local Maven repo:
 
 - path: `buildout/labi-maven-repo`
-- current version: `2.19.1-labi.2`
+- current version: `2.19.1-labi.3`
 - group: `com.zknowai.exoplayer`
 - artifact closure:
   `exoplayer-common`, `exoplayer-container`, `exoplayer-database`, `exoplayer-datasource`,

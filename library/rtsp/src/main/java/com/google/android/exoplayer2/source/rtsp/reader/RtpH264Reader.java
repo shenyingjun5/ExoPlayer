@@ -95,7 +95,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private boolean isProcessingFragmentationUnit;
   private boolean hasOutputSps;
   private boolean hasOutputPps;
-  private boolean hasReportedFirstDecodableAccessUnit;
+  private boolean firstDecodableAccessUnitDiagnosticsEnabled;
   private boolean currentAccessUnitHasIdr;
   private boolean currentAccessUnitHasSps;
   private boolean currentAccessUnitHasPps;
@@ -119,8 +119,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     previousTimestamp = C.TIME_UNSET;
     isCurrentAccessUnitCorrupted = false;
     isProcessingFragmentationUnit = false;
-    hasOutputSps = payloadFormat.format.initializationData.size() >= 1;
-    hasOutputPps = payloadFormat.format.initializationData.size() >= 2;
+    firstDecodableAccessUnitDiagnosticsEnabled = rtspDiagnosticsListener != null;
+    hasOutputSps =
+        firstDecodableAccessUnitDiagnosticsEnabled
+            && payloadFormat.format.initializationData.size() >= 1;
+    hasOutputPps =
+        firstDecodableAccessUnitDiagnosticsEnabled
+            && payloadFormat.format.initializationData.size() >= 2;
     currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
     currentAccessUnitRtpTimestamp = C.TIME_UNSET;
   }
@@ -152,7 +157,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
     checkStateNotNull(trackOutput);
     if (!isCurrentAccessUnitCorrupted) {
-      if (currentAccessUnitFirstSequenceNumber == C.INDEX_UNSET) {
+      if (isFirstDecodableAccessUnitDiagnosticsEnabled()
+          && currentAccessUnitFirstSequenceNumber == C.INDEX_UNSET) {
         currentAccessUnitFirstSequenceNumber = sequenceNumber;
         currentAccessUnitRtpTimestamp = timestamp;
       }
@@ -243,7 +249,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     fragmentedSampleSizeBytes += numBytesInData;
 
     int nalHeaderType = data.getData()[0] & 0x1F;
-    recordNalUnitType(nalHeaderType);
+    if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+      recordNalUnitType(nalHeaderType);
+    }
     bufferFlags = getBufferFlagsFromNalType(nalHeaderType);
   }
 
@@ -283,7 +291,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     while (data.bytesLeft() > 4) {
       nalUnitLength = data.readUnsignedShort();
       fragmentedSampleSizeBytes += writeStartCode();
-      recordNalUnitType(data.getData()[data.getPosition()] & 0x1F);
+      if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+        recordNalUnitType(data.getData()[data.getPosition()] & 0x1F);
+      }
       trackOutput.sampleData(data, nalUnitLength);
       fragmentedSampleSizeBytes += nalUnitLength;
     }
@@ -336,7 +346,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         fragmentedSampleSizeBytes = 0;
       }
       isProcessingFragmentationUnit = true;
-      recordNalUnitType(nalHeader & 0x1F);
+      if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+        recordNalUnitType(nalHeader & 0x1F);
+      }
       // Prepends starter code.
       fragmentedSampleSizeBytes += writeStartCode();
 
@@ -390,6 +402,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   private void recordNalUnitType(int nalUnitType) {
+    if (!isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+      return;
+    }
     if (nalUnitType == NAL_UNIT_TYPE_IDR) {
       currentAccessUnitHasIdr = true;
     } else if (nalUnitType == NAL_UNIT_TYPE_SPS) {
@@ -402,14 +417,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   private void maybeNotifyFirstDecodableAccessUnitReady() {
-    if (hasReportedFirstDecodableAccessUnit
-        || rtspDiagnosticsListener == null
+    if (!isFirstDecodableAccessUnitDiagnosticsEnabled()
         || !currentAccessUnitHasIdr
         || !hasOutputSps
         || !hasOutputPps) {
       return;
     }
-    hasReportedFirstDecodableAccessUnit = true;
+    firstDecodableAccessUnitDiagnosticsEnabled = false;
     long elapsedFromFirstRtpMs =
         firstRtpPacketArrivalElapsedRealtimeMs == C.TIME_UNSET
             ? C.TIME_UNSET
@@ -424,6 +438,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             NAL_UNIT_TYPE_IDR,
             RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR,
             elapsedFromFirstRtpMs));
+  }
+
+  private boolean isFirstDecodableAccessUnitDiagnosticsEnabled() {
+    return firstDecodableAccessUnitDiagnosticsEnabled;
   }
 
   private int writeStartCode() {

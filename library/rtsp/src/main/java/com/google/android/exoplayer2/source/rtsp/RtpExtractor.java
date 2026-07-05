@@ -215,8 +215,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (firstSequenceNumber == C.INDEX_UNSET) {
         firstSequenceNumber = packet.sequenceNumber;
       }
-      payloadReader.onReceivingFirstPacket(
-          firstTimestamp, firstSequenceNumber, packetArrivalTimeMs);
+      if (rtspDiagnosticsListener == null) {
+        payloadReader.onReceivingFirstPacket(firstTimestamp, firstSequenceNumber);
+      } else {
+        payloadReader.onReceivingFirstPacket(
+            firstTimestamp, firstSequenceNumber, packetArrivalTimeMs);
+      }
       firstPacketRead = true;
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onFirstRtpPacketReceived(

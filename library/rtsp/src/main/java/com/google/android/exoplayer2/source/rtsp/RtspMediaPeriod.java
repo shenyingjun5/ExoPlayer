@@ -85,6 +85,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /** The maximum times to retry if the underlying data channel failed to bind. */
   private static final int PORT_BINDING_MAX_RETRY_COUNT = 3;
+  private static final int MAX_SAMPLE_RTP_TIMESTAMP_MAPPINGS = 256;
 
   private final Allocator allocator;
   private final Handler handler;
@@ -95,9 +96,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final Listener listener;
   private final RtpDataChannel.Factory rtpDataChannelFactory;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtspDiagnosticsListener forwardingRtspDiagnosticsListener;
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
+  private final Object sampleRtpTimestampMappingsLock;
+  private final ArrayList<SampleRtpTimestampMapping> sampleRtpTimestampMappings;
 
   private @MonotonicNonNull Callback callback;
   private @MonotonicNonNull ImmutableList<TrackGroup> trackGroups;
@@ -164,9 +168,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.listener = listener;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.forwardingRtspDiagnosticsListener =
+        rtspDiagnosticsListener == null ? null : new ForwardingRtspDiagnosticsListener();
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
+    sampleRtpTimestampMappingsLock = new Object();
+    sampleRtpTimestampMappings = new ArrayList<>();
 
     handler = Util.createHandlerForCurrentLooper();
     internalListener = new InternalListener();
@@ -178,7 +186,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             /* uri= */ uri,
             socketFactory,
             debugLoggingEnabled,
-            rtspDiagnosticsListener,
+            forwardingRtspDiagnosticsListener,
             rtspFeedbackListener,
             rtcpFeedbackPolicy);
     rtspLoaderWrappers = new ArrayList<>();
@@ -492,14 +500,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         && (readFlags & SampleStream.FLAG_OMIT_SAMPLE_DATA) == 0
         && rtspDiagnosticsListener != null
         && rtspPacketDiagnosticsEnabled) {
+      long readElapsedRealtimeMs = SystemClock.elapsedRealtime();
+      long rtpTimestamp =
+          removeSampleRtpTimestampForDiagnostics(loaderWrapper.loadInfo.trackId, buffer.timeUs);
+      long sampleQueueBufferedAheadMs =
+          getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs);
+      long mediaPeriodBufferedAheadMs = getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs);
       rtspDiagnosticsListener.onRtspSampleRead(
           new RtspSampleReadStats(
               loaderWrapper.loadInfo.trackId,
               sampleQueueIndex,
               buffer.timeUs,
-              SystemClock.elapsedRealtime(),
-              getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs),
-              getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs)));
+              rtpTimestamp,
+              readElapsedRealtimeMs,
+              sampleQueueBufferedAheadMs,
+              mediaPeriodBufferedAheadMs));
+      rtspDiagnosticsListener.onRtspDecoderInputQueued(
+          new RtspDecoderInputQueuedStats(
+              loaderWrapper.loadInfo.trackId,
+              sampleQueueIndex,
+              buffer.timeUs,
+              rtpTimestamp,
+              readElapsedRealtimeMs));
     }
     return result;
   }
@@ -516,6 +538,47 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return C.TIME_UNSET;
     }
     return usToMs(Math.max(0, bufferedPositionUs - sampleTimeUs));
+  }
+
+  /* package */ void onH264AccessUnitReadyForDiagnostics(
+      RtspH264AccessUnitReadyStats accessUnitStats) {
+    if (rtspPacketDiagnosticsEnabled) {
+      recordSampleRtpTimestampForDiagnostics(
+          accessUnitStats.trackId, accessUnitStats.sampleTimeUs, accessUnitStats.rtpTimestamp);
+    }
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onH264AccessUnitReady(accessUnitStats);
+    }
+  }
+
+  /* package */ void recordSampleRtpTimestampForDiagnostics(
+      int trackId, long sampleTimeUs, long rtpTimestamp) {
+    if (!rtspPacketDiagnosticsEnabled || sampleTimeUs == C.TIME_UNSET) {
+      return;
+    }
+    synchronized (sampleRtpTimestampMappingsLock) {
+      sampleRtpTimestampMappings.add(
+          new SampleRtpTimestampMapping(trackId, sampleTimeUs, rtpTimestamp));
+      while (sampleRtpTimestampMappings.size() > MAX_SAMPLE_RTP_TIMESTAMP_MAPPINGS) {
+        sampleRtpTimestampMappings.remove(0);
+      }
+    }
+  }
+
+  /* package */ long removeSampleRtpTimestampForDiagnostics(int trackId, long sampleTimeUs) {
+    if (!rtspPacketDiagnosticsEnabled || sampleTimeUs == C.TIME_UNSET) {
+      return C.TIME_UNSET;
+    }
+    synchronized (sampleRtpTimestampMappingsLock) {
+      for (int i = sampleRtpTimestampMappings.size() - 1; i >= 0; i--) {
+        SampleRtpTimestampMapping mapping = sampleRtpTimestampMappings.get(i);
+        if (mapping.trackId == trackId && mapping.sampleTimeUs == sampleTimeUs) {
+          sampleRtpTimestampMappings.remove(i);
+          return mapping.rtpTimestamp;
+        }
+      }
+    }
+    return C.TIME_UNSET;
   }
 
   private boolean suppressRead() {
@@ -603,6 +666,116 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               /* id= */ Integer.toString(i), checkNotNull(sampleQueue.getUpstreamFormat())));
     }
     return listBuilder.build();
+  }
+
+  private final class ForwardingRtspDiagnosticsListener implements RtspDiagnosticsListener {
+
+    @Override
+    public void onTransportReady(
+        int trackId, @RtspTransportMode.Mode int transportMode, String transport) {
+      checkNotNull(rtspDiagnosticsListener).onTransportReady(trackId, transportMode, transport);
+    }
+
+    @Override
+    public void onFirstRtpPacketReceived(RtpPacketStats packetStats) {
+      checkNotNull(rtspDiagnosticsListener).onFirstRtpPacketReceived(packetStats);
+    }
+
+    @Override
+    public void onFirstDecodableVideoAccessUnitReady(
+        RtspH264AccessUnitStats accessUnitStats) {
+      checkNotNull(rtspDiagnosticsListener).onFirstDecodableVideoAccessUnitReady(accessUnitStats);
+    }
+
+    @Override
+    public void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {
+      onH264AccessUnitReadyForDiagnostics(accessUnitStats);
+    }
+
+    @Override
+    public void onRtspSampleRead(RtspSampleReadStats sampleReadStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtspSampleRead(sampleReadStats);
+    }
+
+    @Override
+    public void onRtspDecoderInputQueued(
+        RtspDecoderInputQueuedStats decoderInputQueuedStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtspDecoderInputQueued(decoderInputQueuedStats);
+    }
+
+    @Override
+    public void onH264AccessUnitCorrupted(RtspH264RecoveryStats recoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onH264AccessUnitCorrupted(recoveryStats);
+    }
+
+    @Override
+    public void onH264WaitForIdrStarted(RtspH264RecoveryStats recoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrStarted(recoveryStats);
+    }
+
+    @Override
+    public void onH264AccessUnitDroppedUntilIdr(RtspH264RecoveryStats recoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onH264AccessUnitDroppedUntilIdr(recoveryStats);
+    }
+
+    @Override
+    public void onH264WaitForIdrEnded(RtspH264RecoveryStats recoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrEnded(recoveryStats);
+    }
+
+    @Override
+    public void onRtpPacketReceived(RtpPacketStats packetStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtpPacketReceived(packetStats);
+    }
+
+    @Override
+    public void onRtpPacketDequeued(
+        RtpPacketStats packetStats, RtpReorderingStats reorderingStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtpPacketDequeued(packetStats, reorderingStats);
+    }
+
+    @Override
+    public void onRtpPacketDropped(
+        RtpPacketStats packetStats, RtpReorderingStats reorderingStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtpPacketDropped(packetStats, reorderingStats);
+    }
+
+    @Override
+    public void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtpReorderingQueueReset(reorderingStats);
+    }
+
+    @Override
+    public void onRtcpFeedbackThrottled(RtcpFeedbackRequest request) {
+      checkNotNull(rtspDiagnosticsListener).onRtcpFeedbackThrottled(request);
+    }
+
+    @Override
+    public void onRtcpPliSent(RtcpFeedbackRequest request) {
+      checkNotNull(rtspDiagnosticsListener).onRtcpPliSent(request);
+    }
+
+    @Override
+    public void onRtcpFirSent(RtcpFeedbackRequest request) {
+      checkNotNull(rtspDiagnosticsListener).onRtcpFirSent(request);
+    }
+
+    @Override
+    public void onRtcpFeedbackSendFailed(RtcpFeedbackRequest request, Exception error) {
+      checkNotNull(rtspDiagnosticsListener).onRtcpFeedbackSendFailed(request, error);
+    }
+  }
+
+  private static final class SampleRtpTimestampMapping {
+    public final int trackId;
+    public final long sampleTimeUs;
+    public final long rtpTimestamp;
+
+    public SampleRtpTimestampMapping(int trackId, long sampleTimeUs, long rtpTimestamp) {
+      this.trackId = trackId;
+      this.sampleTimeUs = sampleTimeUs;
+      this.rtpTimestamp = rtpTimestamp;
+    }
   }
 
   private final class InternalListener
@@ -1022,7 +1195,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               /* eventListener= */ transportEventListener,
               /* output= */ internalListener,
               rtpDataChannelFactory,
-              rtspDiagnosticsListener,
+              forwardingRtspDiagnosticsListener,
               this::requestKeyFrame,
               rtcpFeedbackPolicy,
               rtspPacketDiagnosticsEnabled);

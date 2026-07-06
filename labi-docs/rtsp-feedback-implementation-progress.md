@@ -196,6 +196,42 @@ Implementation notes:
 - Render mapping does not touch `library/core` in P0. Cast-SDK should use ExoPlayer's existing `VideoFrameMetadataListener.onVideoFrameAboutToBeRendered(presentationTimeUs, releaseTimeNs, ...)` and join `presentationTimeUs` to `RtspH264AccessUnitReadyStats.sampleTimeUs`.
 - `RtpReorderingStats.oldestPacketAgeMs` and `RtpReorderingStats.queueSpanMs` are computed only when stats are requested.
 
+## Low-Latency LoadControl Floor Follow-up
+
+Scope:
+
+- This is a small `library/core` follow-up for Cast-SDK LOW_LATENCY mode only.
+- Default ExoPlayer 2.19.1 behavior remains unchanged: `DefaultLoadControl` still applies a 500ms minimum loading floor unless callers explicitly opt in.
+- Cast-SDK can reflectively call `DefaultLoadControl.Builder#setMinBufferFloorMs(int)` after `setBufferDurationsMs(...)`.
+
+API:
+
+- `DefaultLoadControl.DEFAULT_MIN_BUFFER_FLOOR_MS = 500`
+- `DefaultLoadControl.Builder#setMinBufferFloorMs(int minBufferFloorMs)`
+
+Semantics:
+
+- `setBufferDurationsMs(minBufferMs, maxBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)` keeps its original meaning.
+- `bufferForPlaybackMs` and `bufferForPlaybackAfterRebufferMs` are not clamped by this floor.
+- The new floor only changes the lower bound used by `shouldContinueLoading(...)`.
+- For Cast-SDK LOW_LATENCY, `setBufferDurationsMs(150, 800, 50, 100)` plus `setMinBufferFloorMs(150)` makes the continue-loading low-water floor 150ms instead of the default 500ms.
+- If Cast-SDK does not call `setMinBufferFloorMs(...)`, the old 500ms protection remains active.
+
+Risk boundary:
+
+- Lowering the floor can reduce steady-state source buffering, but increases sensitivity to encoder burst, transport jitter, decoder scheduling, and weak-network gaps.
+- This should only be enabled for the explicit low-latency RTSP profile and verified with `/debug/live/latency` metrics.
+- SMOOTH and default playback should not call the new API.
+
+Verification:
+
+- Targeted core command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:testDebugUnitTest --tests com.google.android.exoplayer2.DefaultLoadControlTest`
+- Targeted core result: passed. `BUILD SUCCESSFUL in 3s`.
+- Full RTSP command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
+- Full RTSP result: passed. `BUILD SUCCESSFUL in 12s`.
+
 Verification:
 
 - Targeted command:

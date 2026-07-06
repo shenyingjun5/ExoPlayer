@@ -48,6 +48,15 @@ public interface RtspDiagnosticsListener {
    */
   default void onRtspSampleRead(RtspSampleReadStats sampleReadStats) {}
 
+  /**
+   * Called when an RTSP sample is handed to the downstream decoder input path.
+   *
+   * <p>This callback is emitted from the RTSP {@code SampleStream} read path. It is the closest RTSP
+   * source-side handoff point before renderer/decoder consumption, but it is not emitted by
+   * {@code MediaCodec}.
+   */
+  default void onRtspDecoderInputQueued(RtspDecoderInputQueuedStats decoderInputQueuedStats) {}
+
   /** Called when an H.264 access unit is detected as corrupted and is not submitted. */
   default void onH264AccessUnitCorrupted(RtspH264RecoveryStats recoveryStats) {}
 

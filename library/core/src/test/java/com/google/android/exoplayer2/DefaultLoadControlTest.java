@@ -130,6 +130,49 @@ public class DefaultLoadControlTest {
   }
 
   @Test
+  public void shouldContinueLoading_withLowMinBuffer_usesDefaultMinBufferFloor() {
+    builder.setPrioritizeTimeOverSizeThresholds(true);
+    builder.setBufferDurationsMs(
+        /* minBufferMs= */ 150,
+        /* maxBufferMs= */ 800,
+        /* bufferForPlaybackMs= */ 50,
+        /* bufferForPlaybackAfterRebufferMs= */ 100);
+    build();
+    makeSureTargetBufferBytesReached();
+
+    assertThat(
+            loadControl.shouldContinueLoading(
+                /* playbackPositionUs= */ 0, /* bufferedDurationUs= */ 499_999, SPEED))
+        .isTrue();
+    assertThat(
+            loadControl.shouldContinueLoading(
+                /* playbackPositionUs= */ 0, /* bufferedDurationUs= */ 500_000, SPEED))
+        .isFalse();
+  }
+
+  @Test
+  public void shouldContinueLoading_withLowMinBufferFloor_usesConfiguredFloor() {
+    builder.setPrioritizeTimeOverSizeThresholds(true);
+    builder.setMinBufferFloorMs(150);
+    builder.setBufferDurationsMs(
+        /* minBufferMs= */ 150,
+        /* maxBufferMs= */ 800,
+        /* bufferForPlaybackMs= */ 50,
+        /* bufferForPlaybackAfterRebufferMs= */ 100);
+    build();
+    makeSureTargetBufferBytesReached();
+
+    assertThat(
+            loadControl.shouldContinueLoading(
+                /* playbackPositionUs= */ 0, /* bufferedDurationUs= */ 149_999, SPEED))
+        .isTrue();
+    assertThat(
+            loadControl.shouldContinueLoading(
+                /* playbackPositionUs= */ 0, /* bufferedDurationUs= */ 150_000, SPEED))
+        .isFalse();
+  }
+
+  @Test
   public void
       shouldContinueLoading_withTargetBufferBytesReachedAndNotPrioritizeTimeOverSize_returnsTrueAsSoonAsTargetBufferReached() {
     builder.setPrioritizeTimeOverSizeThresholds(false);

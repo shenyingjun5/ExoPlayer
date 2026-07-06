@@ -198,9 +198,17 @@ public final class RtspFeedbackApiTest {
             /* trackId= */ 1,
             /* sampleQueueIndex= */ 0,
             /* sampleTimeUs= */ 4567,
+            /* rtpTimestamp= */ 1234,
             /* readElapsedRealtimeMs= */ 888,
             /* sampleQueueBufferedAheadMs= */ 120,
             /* mediaPeriodBufferedAheadMs= */ 180);
+    RtspDecoderInputQueuedStats decoderInputQueuedStats =
+        new RtspDecoderInputQueuedStats(
+            /* trackId= */ 1,
+            /* sampleQueueIndex= */ 0,
+            /* sampleTimeUs= */ 4567,
+            /* rtpTimestamp= */ 1234,
+            /* queuedElapsedRealtimeMs= */ 889);
     RtspH264RecoveryStats recoveryStats =
         new RtspH264RecoveryStats(
             /* trackId= */ 1,
@@ -227,7 +235,12 @@ public final class RtspFeedbackApiTest {
                 1, 12, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
     assertThat(accessUnitReadyStats)
         .isEqualTo(new RtspH264AccessUnitReadyStats(1, 12, 1234, 4567, true, 777));
-    assertThat(sampleReadStats).isEqualTo(new RtspSampleReadStats(1, 0, 4567, 888, 120, 180));
+    assertThat(sampleReadStats)
+        .isEqualTo(new RtspSampleReadStats(1, 0, 4567, 1234, 888, 120, 180));
+    assertThat(new RtspSampleReadStats(1, 0, 4567, 888, 120, 180).rtpTimestamp)
+        .isEqualTo(C.TIME_UNSET);
+    assertThat(decoderInputQueuedStats)
+        .isEqualTo(new RtspDecoderInputQueuedStats(1, 0, 4567, 1234, 889));
     assertThat(recoveryStats)
         .isEqualTo(
             new RtspH264RecoveryStats(
@@ -237,8 +250,67 @@ public final class RtspFeedbackApiTest {
     assertThat(feedbackRequest.toString()).contains("detail=gap");
     assertThat(accessUnitStats.toString()).contains("accessUnitType=IDR");
     assertThat(accessUnitReadyStats.toString()).contains("isIdr=true");
+    assertThat(sampleReadStats.toString()).contains("rtpTimestamp=1234");
     assertThat(sampleReadStats.toString()).contains("sampleQueueBufferedAheadMs=120");
+    assertThat(decoderInputQueuedStats.toString()).contains("queuedElapsedRealtimeMs=889");
     assertThat(recoveryStats.toString()).contains("waitingForIdr=true");
+  }
+
+  @Test
+  public void h264AccessUnitReadyDiagnostics_recordsRtpTimestampForSampleJoin() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspPacketDiagnosticsEnabled(true)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.onH264AccessUnitReadyForDiagnostics(
+        new RtspH264AccessUnitReadyStats(
+            /* trackId= */ 1,
+            /* rtpSequenceNumber= */ 10,
+            /* rtpTimestamp= */ 1234,
+            /* sampleTimeUs= */ 4567,
+            /* isIdr= */ true,
+            /* assembledElapsedRealtimeMs= */ 777));
+
+    assertThat(diagnosticsListener.accessUnitReadyStats).hasSize(1);
+    assertThat(mediaPeriod.removeSampleRtpTimestampForDiagnostics(1, 4567)).isEqualTo(1234);
+    assertThat(mediaPeriod.removeSampleRtpTimestampForDiagnostics(1, 4567))
+        .isEqualTo(C.TIME_UNSET);
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void h264AccessUnitReadyDiagnostics_packetDiagnosticsDisabledDoesNotRecordJoinState() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspPacketDiagnosticsEnabled(false)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.onH264AccessUnitReadyForDiagnostics(
+        new RtspH264AccessUnitReadyStats(1, 10, 1234, 4567, /* isIdr= */ true, 777));
+
+    assertThat(diagnosticsListener.accessUnitReadyStats).hasSize(1);
+    assertThat(mediaPeriod.removeSampleRtpTimestampForDiagnostics(1, 4567))
+        .isEqualTo(C.TIME_UNSET);
+
+    mediaSource.releasePeriod(mediaPeriod);
   }
 
   @Test
@@ -264,6 +336,8 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onH264AccessUnitReady(
         new RtspH264AccessUnitReadyStats(1, 10, 1234, true, 777));
     diagnosticsListener.onRtspSampleRead(new RtspSampleReadStats(1, 0, 1234, 777, 10, 20));
+    diagnosticsListener.onRtspDecoderInputQueued(
+        new RtspDecoderInputQueuedStats(1, 0, 1234, 5678, 777));
     RtspH264RecoveryStats recoveryStats =
         new RtspH264RecoveryStats(
             1, 10, 1234, true, 1, 1, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
@@ -279,5 +353,15 @@ public final class RtspFeedbackApiTest {
     feedbackListener.onRtcpFeedbackThrottled(feedbackRequest);
     feedbackListener.onRtcpFeedbackSent(feedbackRequest);
     feedbackListener.onRtcpFeedbackSendFailed(feedbackRequest, new Exception("test"));
+  }
+
+  private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {
+    public final java.util.ArrayList<RtspH264AccessUnitReadyStats> accessUnitReadyStats =
+        new java.util.ArrayList<>();
+
+    @Override
+    public void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {
+      accessUnitReadyStats.add(accessUnitStats);
+    }
   }
 }

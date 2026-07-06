@@ -148,12 +148,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     previousTimestamp = C.TIME_UNSET;
     isCurrentAccessUnitCorrupted = false;
     isProcessingFragmentationUnit = false;
-    hasOutputSps =
-        firstDecodableAccessUnitDiagnosticsEnabled
-            && payloadFormat.format.initializationData.size() >= 1;
-    hasOutputPps =
-        firstDecodableAccessUnitDiagnosticsEnabled
-            && payloadFormat.format.initializationData.size() >= 2;
+    boolean shouldTrackParameterSets =
+        firstDecodableAccessUnitDiagnosticsEnabled || lowLatencyRecoveryEnabled;
+    hasOutputSps = shouldTrackParameterSets && payloadFormat.format.initializationData.size() >= 1;
+    hasOutputPps = shouldTrackParameterSets && payloadFormat.format.initializationData.size() >= 2;
     currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
     currentAccessUnitRtpTimestamp = C.TIME_UNSET;
     waitingForIdr = false;
@@ -202,19 +200,17 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         currentAccessUnitFirstSequenceNumber = sequenceNumber;
         currentAccessUnitRtpTimestamp = timestamp;
       }
-      int rtpH264PacketMode;
       try {
+        int rtpH264PacketMode;
         // RFC6184 Section 5.6, 5.7 and 5.8.
         rtpH264PacketMode = data.getData()[0] & 0x1F;
-      } catch (IndexOutOfBoundsException e) {
-        throw ParserException.createForMalformedManifest(/* message= */ null, e);
-      }
 
-      if (isProcessingFragmentationUnit && rtpH264PacketMode != RTP_PACKET_TYPE_FU_A) {
-        markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
-      }
-      if (!isCurrentAccessUnitCorrupted) {
-        if (rtpH264PacketMode > 0 && rtpH264PacketMode < 24) {
+        if (isProcessingFragmentationUnit && rtpH264PacketMode != RTP_PACKET_TYPE_FU_A) {
+          markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+        }
+        if (isCurrentAccessUnitCorrupted) {
+          // Fall through to marker handling below so the corrupted access unit can be reset.
+        } else if (rtpH264PacketMode > 0 && rtpH264PacketMode < 24) {
           processSingleNalUnitPacket(data);
         } else if (rtpH264PacketMode == RTP_PACKET_TYPE_STAP_A) {
           processSingleTimeAggregationPacket(data);
@@ -226,6 +222,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
                   "RTP H264 packetization mode [%d] not supported.", rtpH264PacketMode),
               /* cause= */ null);
         }
+      } catch (IndexOutOfBoundsException e) {
+        handleDepacketizationFailure(e);
+      } catch (ParserException e) {
+        handleDepacketizationFailure(e);
       }
     }
 
@@ -246,9 +246,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             /* cryptoData= */ null);
         maybeNotifyAccessUnitReady(timeUs);
         maybeNotifyFirstDecodableAccessUnitReady(timeUs);
-        if (waitingForIdr && currentAccessUnitHasIdr) {
+        if (waitingForIdr && isCurrentAccessUnitDecodableIdr()) {
           exitWaitForIdr(RtcpFeedbackReason.WAITING_FOR_IDR);
         }
+        maybeRecordOutputParameterSets();
       } else if (!isCurrentAccessUnitCorrupted && waitingForIdr) {
         notifyAccessUnitDroppedUntilIdr();
       }
@@ -456,11 +457,36 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
   }
 
+  private void handleDepacketizationFailure(Exception error) throws ParserException {
+    if (!lowLatencyRecoveryEnabled) {
+      if (error instanceof ParserException) {
+        throw (ParserException) error;
+      }
+      throw ParserException.createForMalformedManifest(/* message= */ null, error);
+    }
+    Log.w(TAG, "Malformed H264 RTP packet. Dropping access unit and waiting for IDR.", error);
+    markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+  }
+
   private boolean shouldSubmitAccessUnit() {
     if (isCurrentAccessUnitCorrupted) {
       return false;
     }
-    return !waitingForIdr || currentAccessUnitHasIdr;
+    return !waitingForIdr || isCurrentAccessUnitDecodableIdr();
+  }
+
+  private boolean isCurrentAccessUnitDecodableIdr() {
+    return currentAccessUnitHasIdr
+        && (hasOutputSps || currentAccessUnitHasSps)
+        && (hasOutputPps || currentAccessUnitHasPps);
+  }
+
+  private void maybeRecordOutputParameterSets() {
+    if (!shouldTrackAccessUnitType()) {
+      return;
+    }
+    hasOutputSps |= currentAccessUnitHasSps;
+    hasOutputPps |= currentAccessUnitHasPps;
   }
 
   private boolean isCurrentAccessUnitOpen() {
@@ -542,8 +568,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
     boolean hasSpsForAccessUnit = hasOutputSps || currentAccessUnitHasSps;
     boolean hasPpsForAccessUnit = hasOutputPps || currentAccessUnitHasPps;
-    hasOutputSps |= currentAccessUnitHasSps;
-    hasOutputPps |= currentAccessUnitHasPps;
     if (!currentAccessUnitHasIdr || !hasSpsForAccessUnit || !hasPpsForAccessUnit) {
       return;
     }

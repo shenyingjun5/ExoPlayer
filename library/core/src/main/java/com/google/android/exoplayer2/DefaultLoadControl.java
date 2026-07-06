@@ -79,6 +79,12 @@ public class DefaultLoadControl implements LoadControl {
   /** The default for whether the back buffer is retained from the previous keyframe. */
   public static final boolean DEFAULT_RETAIN_BACK_BUFFER_FROM_KEYFRAME = false;
 
+  /**
+   * The default minimum loading floor applied to {@code minBufferMs} in {@link
+   * #shouldContinueLoading(long, long, float)}, in milliseconds.
+   */
+  public static final int DEFAULT_MIN_BUFFER_FLOOR_MS = 500;
+
   /** A default size in bytes for a video buffer. */
   public static final int DEFAULT_VIDEO_BUFFER_SIZE = 2000 * C.DEFAULT_BUFFER_SEGMENT_SIZE;
 
@@ -119,6 +125,7 @@ public class DefaultLoadControl implements LoadControl {
     private boolean prioritizeTimeOverSizeThresholds;
     private int backBufferDurationMs;
     private boolean retainBackBufferFromKeyframe;
+    private int minBufferFloorMs;
     private boolean buildCalled;
 
     /** Constructs a new instance. */
@@ -131,6 +138,7 @@ public class DefaultLoadControl implements LoadControl {
       prioritizeTimeOverSizeThresholds = DEFAULT_PRIORITIZE_TIME_OVER_SIZE_THRESHOLDS;
       backBufferDurationMs = DEFAULT_BACK_BUFFER_DURATION_MS;
       retainBackBufferFromKeyframe = DEFAULT_RETAIN_BACK_BUFFER_FROM_KEYFRAME;
+      minBufferFloorMs = DEFAULT_MIN_BUFFER_FLOOR_MS;
     }
 
     /**
@@ -218,6 +226,27 @@ public class DefaultLoadControl implements LoadControl {
     }
 
     /**
+     * Sets the minimum loading floor applied to {@code minBufferMs} in {@link
+     * DefaultLoadControl#shouldContinueLoading(long, long, float)}.
+     *
+     * <p>The default value is {@link #DEFAULT_MIN_BUFFER_FLOOR_MS}, which preserves ExoPlayer's
+     * standard protection against playback getting stuck when {@code minBufferMs} is configured very
+     * low. Lower values should only be used by callers that explicitly opt in to low-latency
+     * behavior.
+     *
+     * @param minBufferFloorMs The minimum loading floor, in milliseconds.
+     * @return This builder, for convenience.
+     * @throws IllegalStateException If {@link #build()} has already been called.
+     */
+    @CanIgnoreReturnValue
+    public Builder setMinBufferFloorMs(int minBufferFloorMs) {
+      checkState(!buildCalled);
+      assertGreaterOrEqual(minBufferFloorMs, 0, "minBufferFloorMs", "0");
+      this.minBufferFloorMs = minBufferFloorMs;
+      return this;
+    }
+
+    /**
      * Sets the back buffer duration, and whether the back buffer is retained from the previous
      * keyframe.
      *
@@ -252,7 +281,8 @@ public class DefaultLoadControl implements LoadControl {
           targetBufferBytes,
           prioritizeTimeOverSizeThresholds,
           backBufferDurationMs,
-          retainBackBufferFromKeyframe);
+          retainBackBufferFromKeyframe,
+          minBufferFloorMs);
     }
   }
 
@@ -266,6 +296,7 @@ public class DefaultLoadControl implements LoadControl {
   private final boolean prioritizeTimeOverSizeThresholds;
   private final long backBufferDurationUs;
   private final boolean retainBackBufferFromKeyframe;
+  private final long minBufferFloorUs;
 
   private int targetBufferBytes;
   private boolean isLoading;
@@ -294,6 +325,30 @@ public class DefaultLoadControl implements LoadControl {
       boolean prioritizeTimeOverSizeThresholds,
       int backBufferDurationMs,
       boolean retainBackBufferFromKeyframe) {
+    this(
+        allocator,
+        minBufferMs,
+        maxBufferMs,
+        bufferForPlaybackMs,
+        bufferForPlaybackAfterRebufferMs,
+        targetBufferBytes,
+        prioritizeTimeOverSizeThresholds,
+        backBufferDurationMs,
+        retainBackBufferFromKeyframe,
+        DEFAULT_MIN_BUFFER_FLOOR_MS);
+  }
+
+  protected DefaultLoadControl(
+      DefaultAllocator allocator,
+      int minBufferMs,
+      int maxBufferMs,
+      int bufferForPlaybackMs,
+      int bufferForPlaybackAfterRebufferMs,
+      int targetBufferBytes,
+      boolean prioritizeTimeOverSizeThresholds,
+      int backBufferDurationMs,
+      boolean retainBackBufferFromKeyframe,
+      int minBufferFloorMs) {
     assertGreaterOrEqual(bufferForPlaybackMs, 0, "bufferForPlaybackMs", "0");
     assertGreaterOrEqual(
         bufferForPlaybackAfterRebufferMs, 0, "bufferForPlaybackAfterRebufferMs", "0");
@@ -305,6 +360,7 @@ public class DefaultLoadControl implements LoadControl {
         "bufferForPlaybackAfterRebufferMs");
     assertGreaterOrEqual(maxBufferMs, minBufferMs, "maxBufferMs", "minBufferMs");
     assertGreaterOrEqual(backBufferDurationMs, 0, "backBufferDurationMs", "0");
+    assertGreaterOrEqual(minBufferFloorMs, 0, "minBufferFloorMs", "0");
 
     this.allocator = allocator;
     this.minBufferUs = Util.msToUs(minBufferMs);
@@ -319,6 +375,7 @@ public class DefaultLoadControl implements LoadControl {
     this.prioritizeTimeOverSizeThresholds = prioritizeTimeOverSizeThresholds;
     this.backBufferDurationUs = Util.msToUs(backBufferDurationMs);
     this.retainBackBufferFromKeyframe = retainBackBufferFromKeyframe;
+    this.minBufferFloorUs = Util.msToUs(minBufferFloorMs);
   }
 
   @Override
@@ -378,13 +435,15 @@ public class DefaultLoadControl implements LoadControl {
       minBufferUs = min(mediaDurationMinBufferUs, maxBufferUs);
     }
     // Prevent playback from getting stuck if minBufferUs is too small.
-    minBufferUs = max(minBufferUs, 500_000);
+    minBufferUs = max(minBufferUs, minBufferFloorUs);
     if (bufferedDurationUs < minBufferUs) {
       isLoading = prioritizeTimeOverSizeThresholds || !targetBufferSizeReached;
-      if (!isLoading && bufferedDurationUs < 500_000) {
+      if (!isLoading && bufferedDurationUs < minBufferFloorUs) {
         Log.w(
             "DefaultLoadControl",
-            "Target buffer size reached with less than 500ms of buffered media data.");
+            "Target buffer size reached with less than "
+                + Util.usToMs(minBufferFloorUs)
+                + "ms of buffered media data.");
       }
     } else if (bufferedDurationUs >= maxBufferUs || targetBufferSizeReached) {
       isLoading = false;

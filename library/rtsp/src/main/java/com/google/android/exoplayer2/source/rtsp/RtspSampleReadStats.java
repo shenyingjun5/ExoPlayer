@@ -16,6 +16,7 @@
 package com.google.android.exoplayer2.source.rtsp;
 
 import androidx.annotation.Nullable;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 
 /** Diagnostics snapshot for one sample read from an RTSP {@code SampleQueue}. */
@@ -24,6 +25,7 @@ public final class RtspSampleReadStats {
   public final int trackId;
   public final int sampleQueueIndex;
   public final long sampleTimeUs;
+  public final long rtpTimestamp;
   public final long readElapsedRealtimeMs;
   public final long sampleQueueBufferedAheadMs;
   public final long mediaPeriodBufferedAheadMs;
@@ -35,9 +37,28 @@ public final class RtspSampleReadStats {
       long readElapsedRealtimeMs,
       long sampleQueueBufferedAheadMs,
       long mediaPeriodBufferedAheadMs) {
+    this(
+        trackId,
+        sampleQueueIndex,
+        sampleTimeUs,
+        /* rtpTimestamp= */ C.TIME_UNSET,
+        readElapsedRealtimeMs,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs);
+  }
+
+  public RtspSampleReadStats(
+      int trackId,
+      int sampleQueueIndex,
+      long sampleTimeUs,
+      long rtpTimestamp,
+      long readElapsedRealtimeMs,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs) {
     this.trackId = trackId;
     this.sampleQueueIndex = sampleQueueIndex;
     this.sampleTimeUs = sampleTimeUs;
+    this.rtpTimestamp = rtpTimestamp;
     this.readElapsedRealtimeMs = readElapsedRealtimeMs;
     this.sampleQueueBufferedAheadMs = sampleQueueBufferedAheadMs;
     this.mediaPeriodBufferedAheadMs = mediaPeriodBufferedAheadMs;
@@ -55,6 +76,7 @@ public final class RtspSampleReadStats {
     return trackId == other.trackId
         && sampleQueueIndex == other.sampleQueueIndex
         && sampleTimeUs == other.sampleTimeUs
+        && rtpTimestamp == other.rtpTimestamp
         && readElapsedRealtimeMs == other.readElapsedRealtimeMs
         && sampleQueueBufferedAheadMs == other.sampleQueueBufferedAheadMs
         && mediaPeriodBufferedAheadMs == other.mediaPeriodBufferedAheadMs;
@@ -65,6 +87,7 @@ public final class RtspSampleReadStats {
     int result = trackId;
     result = 31 * result + sampleQueueIndex;
     result = 31 * result + (int) (sampleTimeUs ^ (sampleTimeUs >>> 32));
+    result = 31 * result + (int) (rtpTimestamp ^ (rtpTimestamp >>> 32));
     result = 31 * result + (int) (readElapsedRealtimeMs ^ (readElapsedRealtimeMs >>> 32));
     result = 31 * result + (int) (sampleQueueBufferedAheadMs ^ (sampleQueueBufferedAheadMs >>> 32));
     result = 31 * result + (int) (mediaPeriodBufferedAheadMs ^ (mediaPeriodBufferedAheadMs >>> 32));
@@ -75,11 +98,12 @@ public final class RtspSampleReadStats {
   public String toString() {
     return Util.formatInvariant(
         "RtspSampleReadStats(trackId=%d, sampleQueueIndex=%d, sampleTimeUs=%d, "
-            + "readElapsedRealtimeMs=%d, sampleQueueBufferedAheadMs=%d, "
+            + "rtpTimestamp=%d, readElapsedRealtimeMs=%d, sampleQueueBufferedAheadMs=%d, "
             + "mediaPeriodBufferedAheadMs=%d)",
         trackId,
         sampleQueueIndex,
         sampleTimeUs,
+        rtpTimestamp,
         readElapsedRealtimeMs,
         sampleQueueBufferedAheadMs,
         mediaPeriodBufferedAheadMs);

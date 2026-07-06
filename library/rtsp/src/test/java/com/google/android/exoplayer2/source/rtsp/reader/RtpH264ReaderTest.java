@@ -508,6 +508,7 @@ public final class RtpH264ReaderTest {
     assertThat(diagnosticsListener.corruptedStats).hasSize(1);
     assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
     assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+    assertThat(feedbackRequester.reasons).containsExactly(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
   }
 
   @Test
@@ -561,6 +562,50 @@ public final class RtpH264ReaderTest {
   }
 
   @Test
+  public void consume_malformedFu_dropsNonIdrUntilCompleteIdr() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            feedbackRequester,
+            /* lowLatencyRecoveryEnabled= */ true);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("7C")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("410506")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2 + 90_000,
+            /* sequenceNumber= */ 3,
+            /* marker= */ true,
+            getBytesFromHexString("650708")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(1);
+    assertThat(trackOutput.getSampleFlags(0)).isEqualTo(C.BUFFER_FLAG_KEY_FRAME);
+    assertThat(diagnosticsListener.corruptedStats).hasSize(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+    assertThat(feedbackRequester.reasons).containsExactly(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+  }
+
+  @Test
   public void onRtpStreamDiscontinuity_entersWaitIdr() throws ParserException {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
     CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
@@ -595,6 +640,42 @@ public final class RtpH264ReaderTest {
     assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
     assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
     assertThat(feedbackRequester.reasons).isEmpty();
+  }
+
+  @Test
+  public void waitIdr_idrWithoutSpsPps_keepsDroppingUntilDecodableIdr() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ false,
+            diagnosticsListener,
+            feedbackRequester,
+            /* lowLatencyRecoveryEnabled= */ true);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    h264Reader.onRtpStreamDiscontinuity(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("1800046742001E000468CE06E20003650708")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+    assertThat(feedbackRequester.reasons).containsExactly(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
   }
 
   private static RtpH264Reader createH264Reader() {

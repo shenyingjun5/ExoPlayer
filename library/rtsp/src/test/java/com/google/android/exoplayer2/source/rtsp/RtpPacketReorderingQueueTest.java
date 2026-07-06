@@ -230,6 +230,19 @@ public class RtpPacketReorderingQueueTest {
   }
 
   @Test
+  public void createStats_withQueuedPackets_reportsQueueAgeAndSpan() {
+    RtpPacketReorderingQueue queue = new RtpPacketReorderingQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 10);
+    queue.offer(makePacket(/* sequenceNumber= */ 2), /* receivedTimestampMs= */ 25);
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+
+    assertThat(stats.queueDepth).isEqualTo(2);
+    assertThat(stats.oldestPacketAgeMs).isAtLeast(0);
+    assertThat(stats.queueSpanMs).isEqualTo(15);
+  }
+
+  @Test
   public void reorder_withLargerThanAllowedJumpInSequenceNumberAndWrapAround_resetsQueue() {
     RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
     RtpPacket packetWithSequenceNumberJump =

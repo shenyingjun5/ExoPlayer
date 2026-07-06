@@ -27,8 +27,12 @@ import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.extractor.TrackOutput;
 import com.google.android.exoplayer2.source.rtsp.RtpPacket;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
+import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackReason;
+import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackRequester;
+import com.google.android.exoplayer2.source.rtsp.RtspH264AccessUnitReadyStats;
 import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
 import com.google.android.exoplayer2.source.rtsp.RtspH264AccessUnitStats;
+import com.google.android.exoplayer2.source.rtsp.RtspH264RecoveryStats;
 import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.NalUnitUtil;
 import com.google.android.exoplayer2.util.ParsableByteArray;
@@ -74,6 +78,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   private final RtpPayloadFormat payloadFormat;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
+  private final boolean lowLatencyRecoveryEnabled;
+  private final boolean accessUnitDiagnosticsEnabled;
 
   private @MonotonicNonNull TrackOutput trackOutput;
   private @C.BufferFlags int bufferFlags;
@@ -101,6 +108,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private boolean currentAccessUnitHasPps;
   private int currentAccessUnitFirstSequenceNumber;
   private long currentAccessUnitRtpTimestamp;
+  private boolean waitingForIdr;
+  private int corruptedAccessUnitCount;
+  private int droppedUntilIdrCount;
 
   /** Creates an instance. */
   public RtpH264Reader(RtpPayloadFormat payloadFormat) {
@@ -110,8 +120,27 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   /** Creates an instance. */
   public RtpH264Reader(
       RtpPayloadFormat payloadFormat, @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+    this(
+        payloadFormat,
+        rtspDiagnosticsListener,
+        /* rtcpFeedbackRequester= */ null,
+        /* lowLatencyRecoveryEnabled= */ false,
+        /* accessUnitDiagnosticsEnabled= */ false);
+  }
+
+  /** Creates an instance. */
+  public RtpH264Reader(
+      RtpPayloadFormat payloadFormat,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      boolean lowLatencyRecoveryEnabled,
+      boolean accessUnitDiagnosticsEnabled) {
     this.payloadFormat = payloadFormat;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.lowLatencyRecoveryEnabled = lowLatencyRecoveryEnabled;
+    this.accessUnitDiagnosticsEnabled = accessUnitDiagnosticsEnabled;
+    firstDecodableAccessUnitDiagnosticsEnabled = rtspDiagnosticsListener != null;
     fuScratchBuffer = new ParsableByteArray();
     firstReceivedTimestamp = C.TIME_UNSET;
     firstRtpPacketArrivalElapsedRealtimeMs = C.TIME_UNSET;
@@ -119,7 +148,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     previousTimestamp = C.TIME_UNSET;
     isCurrentAccessUnitCorrupted = false;
     isProcessingFragmentationUnit = false;
-    firstDecodableAccessUnitDiagnosticsEnabled = rtspDiagnosticsListener != null;
     hasOutputSps =
         firstDecodableAccessUnitDiagnosticsEnabled
             && payloadFormat.format.initializationData.size() >= 1;
@@ -128,6 +156,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             && payloadFormat.format.initializationData.size() >= 2;
     currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
     currentAccessUnitRtpTimestamp = C.TIME_UNSET;
+    waitingForIdr = false;
   }
 
   @Override
@@ -148,17 +177,28 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   @Override
+  public void onRtpStreamDiscontinuity(@RtcpFeedbackReason.Reason int reason) {
+    if (isCurrentAccessUnitOpen()) {
+      markCurrentAccessUnitCorrupted(reason);
+    } else {
+      enterWaitForIdr(reason);
+    }
+  }
+
+  @Override
   public void consume(ParsableByteArray data, long timestamp, int sequenceNumber, boolean rtpMarker)
       throws ParserException {
 
     if (previousTimestamp != C.TIME_UNSET && timestamp != previousTimestamp) {
+      if (isCurrentAccessUnitOpen()) {
+        markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+      }
       resetReaderStateForNewAccessUnit();
     }
 
     checkStateNotNull(trackOutput);
     if (!isCurrentAccessUnitCorrupted) {
-      if (isFirstDecodableAccessUnitDiagnosticsEnabled()
-          && currentAccessUnitFirstSequenceNumber == C.INDEX_UNSET) {
+      if (currentAccessUnitFirstSequenceNumber == C.INDEX_UNSET) {
         currentAccessUnitFirstSequenceNumber = sequenceNumber;
         currentAccessUnitRtpTimestamp = timestamp;
       }
@@ -171,7 +211,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       }
 
       if (isProcessingFragmentationUnit && rtpH264PacketMode != RTP_PACKET_TYPE_FU_A) {
-        isCurrentAccessUnitCorrupted = true;
+        markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
       }
       if (!isCurrentAccessUnitCorrupted) {
         if (rtpH264PacketMode > 0 && rtpH264PacketMode < 24) {
@@ -193,7 +233,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       firstReceivedTimestamp = timestamp;
     }
     if (rtpMarker) {
-      if (!isCurrentAccessUnitCorrupted) {
+      boolean shouldSubmitAccessUnit = shouldSubmitAccessUnit();
+      if (shouldSubmitAccessUnit) {
         long timeUs =
             toSampleTimeUs(
                 startTimeOffsetUs, timestamp, firstReceivedTimestamp, MEDIA_CLOCK_FREQUENCY);
@@ -203,7 +244,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             fragmentedSampleSizeBytes,
             /* offset= */ 0,
             /* cryptoData= */ null);
-        maybeNotifyFirstDecodableAccessUnitReady();
+        maybeNotifyAccessUnitReady(timeUs);
+        maybeNotifyFirstDecodableAccessUnitReady(timeUs);
+        if (waitingForIdr && currentAccessUnitHasIdr) {
+          exitWaitForIdr(RtcpFeedbackReason.WAITING_FOR_IDR);
+        }
+      } else if (!isCurrentAccessUnitCorrupted && waitingForIdr) {
+        notifyAccessUnitDroppedUntilIdr();
       }
       resetReaderStateForNewAccessUnit();
     }
@@ -217,6 +264,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     firstReceivedTimestamp = nextRtpTimestamp;
     previousTimestamp = C.TIME_UNSET;
     resetReaderStateForNewAccessUnit();
+    waitingForIdr = false;
     startTimeOffsetUs = timeUs;
   }
 
@@ -249,9 +297,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     fragmentedSampleSizeBytes += numBytesInData;
 
     int nalHeaderType = data.getData()[0] & 0x1F;
-    if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
-      recordNalUnitType(nalHeaderType);
-    }
+    maybeRecordNalUnitType(nalHeaderType);
     bufferFlags = getBufferFlagsFromNalType(nalHeaderType);
   }
 
@@ -291,9 +337,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     while (data.bytesLeft() > 4) {
       nalUnitLength = data.readUnsignedShort();
       fragmentedSampleSizeBytes += writeStartCode();
-      if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
-        recordNalUnitType(data.getData()[data.getPosition()] & 0x1F);
-      }
+      maybeRecordNalUnitType(data.getData()[data.getPosition()] & 0x1F);
       trackOutput.sampleData(data, nalUnitLength);
       fragmentedSampleSizeBytes += nalUnitLength;
     }
@@ -342,13 +386,11 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     if (isFirstFuPacket) {
       if (isProcessingFragmentationUnit) {
         // Interruption: A new FU started before the previous one finished.
-        isCurrentAccessUnitCorrupted = true;
+        markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
         fragmentedSampleSizeBytes = 0;
       }
       isProcessingFragmentationUnit = true;
-      if (isFirstDecodableAccessUnitDiagnosticsEnabled()) {
-        recordNalUnitType(nalHeader & 0x1F);
-      }
+      maybeRecordNalUnitType(nalHeader & 0x1F);
       // Prepends starter code.
       fragmentedSampleSizeBytes += writeStartCode();
 
@@ -364,7 +406,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       // Check that this packet is in the sequence of the previous packet.
       int expectedSequenceNumber = RtpPacket.getNextSequenceNumber(previousSequenceNumber);
       if (packetSequenceNumber != expectedSequenceNumber) {
-        isCurrentAccessUnitCorrupted = true;
+        markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
         Log.w(
             TAG,
             Util.formatInvariant(
@@ -401,8 +443,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     currentAccessUnitRtpTimestamp = C.TIME_UNSET;
   }
 
-  private void recordNalUnitType(int nalUnitType) {
-    if (!isFirstDecodableAccessUnitDiagnosticsEnabled()) {
+  private void maybeRecordNalUnitType(int nalUnitType) {
+    if (!shouldTrackAccessUnitType()) {
       return;
     }
     if (nalUnitType == NAL_UNIT_TYPE_IDR) {
@@ -414,7 +456,87 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     }
   }
 
-  private void maybeNotifyFirstDecodableAccessUnitReady() {
+  private boolean shouldSubmitAccessUnit() {
+    if (isCurrentAccessUnitCorrupted) {
+      return false;
+    }
+    return !waitingForIdr || currentAccessUnitHasIdr;
+  }
+
+  private boolean isCurrentAccessUnitOpen() {
+    return fragmentedSampleSizeBytes > 0
+        || isProcessingFragmentationUnit
+        || currentAccessUnitFirstSequenceNumber != C.INDEX_UNSET;
+  }
+
+  private void markCurrentAccessUnitCorrupted(@RtcpFeedbackReason.Reason int reason) {
+    if (isCurrentAccessUnitCorrupted) {
+      return;
+    }
+    isCurrentAccessUnitCorrupted = true;
+    corruptedAccessUnitCount++;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onH264AccessUnitCorrupted(createRecoveryStats(reason));
+    }
+    enterWaitForIdr(reason);
+  }
+
+  private void enterWaitForIdr(@RtcpFeedbackReason.Reason int reason) {
+    if (!lowLatencyRecoveryEnabled || waitingForIdr) {
+      return;
+    }
+    waitingForIdr = true;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onH264WaitForIdrStarted(createRecoveryStats(reason));
+    }
+    if (rtcpFeedbackRequester != null
+        && reason != RtcpFeedbackReason.SEQUENCE_GAP
+        && reason != RtcpFeedbackReason.QUEUE_RESET) {
+      rtcpFeedbackRequester.requestKeyFrame(reason);
+    }
+  }
+
+  private void exitWaitForIdr(@RtcpFeedbackReason.Reason int reason) {
+    waitingForIdr = false;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onH264WaitForIdrEnded(createRecoveryStats(reason));
+    }
+  }
+
+  private void notifyAccessUnitDroppedUntilIdr() {
+    droppedUntilIdrCount++;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onH264AccessUnitDroppedUntilIdr(
+          createRecoveryStats(RtcpFeedbackReason.WAITING_FOR_IDR));
+    }
+  }
+
+  private void maybeNotifyAccessUnitReady(long sampleTimeUs) {
+    if (rtspDiagnosticsListener == null || !accessUnitDiagnosticsEnabled) {
+      return;
+    }
+    rtspDiagnosticsListener.onH264AccessUnitReady(
+        new RtspH264AccessUnitReadyStats(
+            trackId,
+            currentAccessUnitFirstSequenceNumber,
+            currentAccessUnitRtpTimestamp,
+            sampleTimeUs,
+            currentAccessUnitHasIdr,
+            SystemClock.elapsedRealtime()));
+  }
+
+  private RtspH264RecoveryStats createRecoveryStats(@RtcpFeedbackReason.Reason int reason) {
+    return new RtspH264RecoveryStats(
+        trackId,
+        currentAccessUnitFirstSequenceNumber,
+        currentAccessUnitRtpTimestamp,
+        waitingForIdr,
+        corruptedAccessUnitCount,
+        droppedUntilIdrCount,
+        reason);
+  }
+
+  private void maybeNotifyFirstDecodableAccessUnitReady(long sampleTimeUs) {
     if (!isFirstDecodableAccessUnitDiagnosticsEnabled()) {
       return;
     }
@@ -435,6 +557,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             trackId,
             currentAccessUnitFirstSequenceNumber,
             currentAccessUnitRtpTimestamp,
+            sampleTimeUs,
             hasSpsForAccessUnit,
             hasPpsForAccessUnit,
             NAL_UNIT_TYPE_IDR,
@@ -444,6 +567,12 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   private boolean isFirstDecodableAccessUnitDiagnosticsEnabled() {
     return firstDecodableAccessUnitDiagnosticsEnabled;
+  }
+
+  private boolean shouldTrackAccessUnitType() {
+    return firstDecodableAccessUnitDiagnosticsEnabled
+        || lowLatencyRecoveryEnabled
+        || accessUnitDiagnosticsEnabled;
   }
 
   private int writeStartCode() {

@@ -19,6 +19,7 @@ package com.google.android.exoplayer2.source.rtsp.reader;
 import com.google.android.exoplayer2.ParserException;
 import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
+import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackReason;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -74,6 +75,14 @@ import org.checkerframework.checker.nullness.qual.Nullable;
       long timestamp, int sequenceNumber, long arrivalElapsedRealtimeMs) {
     onReceivingFirstPacket(timestamp, sequenceNumber);
   }
+
+  /**
+   * Notifies the reader that RTP stream continuity was broken before payload parsing.
+   *
+   * <p>Readers that can recover at access-unit boundaries may use this signal to request or wait
+   * for a key frame. The default implementation preserves existing behavior.
+   */
+  default void onRtpStreamDiscontinuity(@RtcpFeedbackReason.Reason int reason) {}
 
   /**
    * Consumes the payload from the an RTP packet.

@@ -20,6 +20,7 @@ import static java.lang.Math.abs;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
+import android.os.SystemClock;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
@@ -71,6 +72,11 @@ import java.util.TreeSet;
   @GuardedBy("this")
   private int resetCount;
 
+  private volatile @RtcpFeedbackReason.Reason int lastOfferDiscontinuityReason;
+
+  @GuardedBy("this")
+  private long lastReceivedTimestampMs;
+
   /** Creates an instance. */
   public RtpPacketReorderingQueue() {
     this(
@@ -112,6 +118,8 @@ import java.util.TreeSet;
 
   private synchronized void reset(boolean notifyDiagnostics) {
     packetQueue.clear();
+    lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
+    lastReceivedTimestampMs = C.TIME_UNSET;
     started = false;
     lastDequeuedSequenceNumber = C.INDEX_UNSET;
     lastReceivedSequenceNumber = C.INDEX_UNSET;
@@ -140,6 +148,7 @@ import java.util.TreeSet;
    *     returns {@code true}).
    */
   public synchronized boolean offer(RtpPacket packet, long receivedTimestampMs) {
+    lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
     if (packetQueue.size() >= QUEUE_SIZE_THRESHOLD_FOR_RESET) {
       throw new IllegalStateException(
           "Queue size limit of " + QUEUE_SIZE_THRESHOLD_FOR_RESET + " reached.");
@@ -162,6 +171,7 @@ import java.util.TreeSet;
       if (sequenceNumberShift >= sequenceGapRequestThreshold
           && sequenceGapRequestThreshold > 0
           && rtcpFeedbackRequester != null) {
+        lastOfferDiscontinuityReason = RtcpFeedbackReason.SEQUENCE_GAP;
         rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.SEQUENCE_GAP);
       }
       if (calculateSequenceNumberShift(packetSequenceNumber, lastDequeuedSequenceNumber) > 0) {
@@ -179,12 +189,17 @@ import java.util.TreeSet;
         rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(sequenceNumberShift));
       }
       if (requestKeyFrameOnQueueReset && rtcpFeedbackRequester != null) {
+        lastOfferDiscontinuityReason = RtcpFeedbackReason.QUEUE_RESET;
         rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
       }
       return true;
     }
     droppedBeforeEnqueueCount++;
     return false;
+  }
+
+  public @RtcpFeedbackReason.Reason int getLastOfferDiscontinuityReason() {
+    return lastOfferDiscontinuityReason;
   }
 
   /**
@@ -227,14 +242,29 @@ import java.util.TreeSet;
         sequenceGap,
         droppedBeforeEnqueueCount,
         duplicatePacketCount,
-        resetCount);
+        resetCount,
+        getOldestPacketAgeMs(),
+        getQueueSpanMs());
   }
 
   private synchronized void addToQueue(RtpPacketContainer packet) {
     lastReceivedSequenceNumber = packet.packet.sequenceNumber;
+    lastReceivedTimestampMs = packet.receivedTimestampMs;
     if (!packetQueue.add(packet)) {
       duplicatePacketCount++;
     }
+  }
+
+  private long getOldestPacketAgeMs() {
+    return packetQueue.isEmpty()
+        ? 0
+        : Math.max(0, SystemClock.elapsedRealtime() - packetQueue.first().receivedTimestampMs);
+  }
+
+  private long getQueueSpanMs() {
+    return packetQueue.isEmpty() || lastReceivedTimestampMs == C.TIME_UNSET
+        ? 0
+        : Math.max(0, lastReceivedTimestampMs - packetQueue.first().receivedTimestampMs);
   }
 
   private static final class RtpPacketContainer {

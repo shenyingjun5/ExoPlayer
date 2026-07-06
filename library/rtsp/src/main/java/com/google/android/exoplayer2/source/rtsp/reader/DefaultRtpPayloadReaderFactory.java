@@ -20,6 +20,8 @@ import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
+import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackPolicy;
+import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackRequester;
 import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
 import com.google.android.exoplayer2.util.MimeTypes;
 
@@ -35,6 +37,9 @@ import com.google.android.exoplayer2.util.MimeTypes;
     implements RtpPayloadReader.Factory {
 
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
+  private final boolean h264LowLatencyRecoveryEnabled;
+  private final boolean h264AccessUnitDiagnosticsEnabled;
 
   public DefaultRtpPayloadReaderFactory() {
     this(/* rtspDiagnosticsListener= */ null);
@@ -42,7 +47,26 @@ import com.google.android.exoplayer2.util.MimeTypes;
 
   public DefaultRtpPayloadReaderFactory(
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+    this(
+        rtspDiagnosticsListener,
+        /* rtcpFeedbackRequester= */ null,
+        RtcpFeedbackPolicy.DEFAULT,
+        /* h264AccessUnitDiagnosticsEnabled= */ false);
+  }
+
+  public DefaultRtpPayloadReaderFactory(
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean h264AccessUnitDiagnosticsEnabled) {
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.h264AccessUnitDiagnosticsEnabled = h264AccessUnitDiagnosticsEnabled;
+    h264LowLatencyRecoveryEnabled =
+        rtcpFeedbackPolicy.pliEnabled
+            || rtcpFeedbackPolicy.firEnabled
+            || rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
+            || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset;
   }
 
   @Override
@@ -69,7 +93,12 @@ import com.google.android.exoplayer2.util.MimeTypes;
       case MimeTypes.VIDEO_H263:
         return new RtpH263Reader(payloadFormat);
       case MimeTypes.VIDEO_H264:
-        return new RtpH264Reader(payloadFormat, rtspDiagnosticsListener);
+        return new RtpH264Reader(
+            payloadFormat,
+            rtspDiagnosticsListener,
+            rtcpFeedbackRequester,
+            h264LowLatencyRecoveryEnabled,
+            h264AccessUnitDiagnosticsEnabled);
       case MimeTypes.VIDEO_H265:
         return new RtpH265Reader(payloadFormat);
       case MimeTypes.VIDEO_MP4V:

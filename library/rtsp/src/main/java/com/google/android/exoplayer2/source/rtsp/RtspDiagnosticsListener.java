@@ -38,6 +38,28 @@ public interface RtspDiagnosticsListener {
    */
   default void onFirstDecodableVideoAccessUnitReady(RtspH264AccessUnitStats accessUnitStats) {}
 
+  /** Called when an H.264 access unit is submitted by the RTP payload reader. */
+  default void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {}
+
+  /**
+   * Called when a sample is read from the RTSP {@code SampleQueue}.
+   *
+   * <p>This is a source queue read event, not a guaranteed MediaCodec input-buffer queued event.
+   */
+  default void onRtspSampleRead(RtspSampleReadStats sampleReadStats) {}
+
+  /** Called when an H.264 access unit is detected as corrupted and is not submitted. */
+  default void onH264AccessUnitCorrupted(RtspH264RecoveryStats recoveryStats) {}
+
+  /** Called when H.264 low-latency recovery starts dropping frames until the next IDR. */
+  default void onH264WaitForIdrStarted(RtspH264RecoveryStats recoveryStats) {}
+
+  /** Called when a non-IDR H.264 access unit is dropped while waiting for an IDR. */
+  default void onH264AccessUnitDroppedUntilIdr(RtspH264RecoveryStats recoveryStats) {}
+
+  /** Called when H.264 low-latency recovery exits after a complete IDR access unit. */
+  default void onH264WaitForIdrEnded(RtspH264RecoveryStats recoveryStats) {}
+
   /** Called when an RTP packet is parsed. */
   default void onRtpPacketReceived(RtpPacketStats packetStats) {}
 

@@ -151,6 +151,63 @@ from the already bound RTCP socket/channel instead of an unrelated ephemeral soc
 | R7 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.3` with no-listener performance tightening | Done | Published to GitHub Pages |
 | R8 | Publish `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.4` with passive defaults and packet diagnostics gating | Done | Published to GitHub Pages; gh-pages commit `c6acf50ca6` |
 
+## `2.19.1-labi.5` Low-Latency Receiver Task Package
+
+Plan document:
+
+- `labi-docs/rtsp-live-low-latency-labi5-task-plan.md`
+
+Scope:
+
+- Keep work inside `library/rtsp` unless renderer/core evidence requires a separate follow-up.
+- Preserve `2.19.1-labi.4` default behavior. With no diagnostics listener and default passive policy, playback behavior must remain unchanged.
+- Focus on RTSP over TCP interleaved first. Because RTP payload readers are shared, AU integrity fixes also apply to UDP.
+
+| ID | Task | Status | Notes |
+| --- | --- | --- | --- |
+| L5-P0.1 | H.264 AU integrity guard for FU-A gaps and timestamp change without marker | Done | Corrupted AU does not submit `sampleMetadata` |
+| L5-P0.2 | WAIT_IDR state machine | Done | Drops non-IDR until complete IDR after corruption/gap/reset |
+| L5-P0.3 | AU corrupted / WAIT_IDR RTCP feedback reasons | Done | AU corrupted requests key frame; gap/reset still reuse queue request |
+| L5-P0.4 | Corrupted AU / WAIT_IDR diagnostics | Done | Listener-only recovery stats |
+| L5-P0.5 | Access-unit latency event | Done | RTSP-layer H.264 assembled time only; decoder/render is P1/P2 |
+| L5-P0.6 | Queue age / `rtpQueueMs` | Done | Reorder stats now include oldest packet age and queue span |
+| L5-P0.7 | RTP timestamp to AU/sample/render mapping P0 | Done | AU events now include `sampleTimeUs`; render joins through existing `VideoFrameMetadataListener.presentationTimeUs` |
+| L5-P0.8 | RTSP SampleQueue read/buffer diagnostics | Done | `onRtspSampleRead(...)` reports source queue read time and buffered-ahead metrics under packet diagnostics gate |
+| L5-P1.1 | First-decodable timeout hook | Planned | Timer integration after P0 guard/state machine |
+| L5-P1.2 | TCP delay accumulation evidence | Planned | Provide metrics; Cast-SDK controls rebuild |
+| L5-P1.3 | Media3 1.2.x TCP fallback race/hang diff pass | Planned | Focused backport review only |
+| L5-P2.1 | UDP loss/reorder 5s window and AUTO fallback notes | Planned | Documentation first; Cast-SDK default remains FORCE_TCP |
+
+Initial repository check:
+
+- branch: `labi-rtsp-feedback-exoplayer-2.19.1`
+- HEAD: `1fed1fcffb feat(rtsp): split low latency feedback controls`
+- latest published tag: `exoplayer-rtsp-2.19.1-labi.4`
+- dirty files before `labi.5` work: `.codegraph/.gitignore`
+
+Implementation notes:
+
+- `RtpH264Reader` keeps old constructors and default recovery disabled.
+- `DefaultRtpPayloadReaderFactory` enables H.264 low-latency recovery only when a non-passive `RtcpFeedbackPolicy` is supplied.
+- `RtpPayloadReader.onRtpStreamDiscontinuity(...)` is a default no-op for non-H.264 readers.
+- `RtpPacketReorderingQueue` still owns sequence gap / queue reset key-frame requests; H.264 reader uses those discontinuity signals to enter WAIT_IDR without sending duplicate gap/reset requests.
+- `RtspH264AccessUnitReadyStats` reports RTP-layer assembled time and `sampleTimeUs`. It is gated by `setRtspPacketDiagnosticsEnabled(true)` and is not a decoder input or rendered-frame callback.
+- `RtspSampleReadStats` reports when RTSP `SampleQueue` returns a sample to downstream, plus `sampleQueueBufferedAheadMs` and `mediaPeriodBufferedAheadMs`. This is a source queue read event, not a guaranteed MediaCodec input-buffer queued event.
+- Render mapping does not touch `library/core` in P0. Cast-SDK should use ExoPlayer's existing `VideoFrameMetadataListener.onVideoFrameAboutToBeRendered(presentationTimeUs, releaseTimeNs, ...)` and join `presentationTimeUs` to `RtspH264AccessUnitReadyStats.sampleTimeUs`.
+- `RtpReorderingStats.oldestPacketAgeMs` and `RtpReorderingStats.queueSpanMs` are computed only when stats are requested.
+
+Verification:
+
+- Targeted command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.reader.RtpH264ReaderTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest --tests com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtilsTest`
+- Targeted result: passed. `BUILD SUCCESSFUL in 2s`.
+- Full RTSP command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
+- Full RTSP result: passed. Final combined run with release AAR build returned `BUILD SUCCESSFUL in 12s`.
+- Release AAR command:
+  `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease`
+- Release AAR result: passed in the same final combined verification run.
+
 ## RTSP P1 Interop Completion
 
 | ID | Task | Status | Verification |

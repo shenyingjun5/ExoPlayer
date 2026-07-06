@@ -16,7 +16,7 @@
 package com.google.android.exoplayer2.source.rtsp;
 
 /** Requests RTCP feedback from RTP processing code. */
-/* package */ interface RtcpFeedbackRequester {
+public interface RtcpFeedbackRequester {
 
   /** Requests a key frame. */
   boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason);

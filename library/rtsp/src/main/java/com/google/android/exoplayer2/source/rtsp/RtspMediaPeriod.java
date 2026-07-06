@@ -484,7 +484,24 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (suppressRead()) {
       return C.RESULT_NOTHING_READ;
     }
-    return rtspLoaderWrappers.get(sampleQueueIndex).read(formatHolder, buffer, readFlags);
+    RtspLoaderWrapper loaderWrapper = rtspLoaderWrappers.get(sampleQueueIndex);
+    @ReadDataResult int result = loaderWrapper.read(formatHolder, buffer, readFlags);
+    if (result == C.RESULT_BUFFER_READ
+        && !buffer.isEndOfStream()
+        && (readFlags & SampleStream.FLAG_PEEK) == 0
+        && (readFlags & SampleStream.FLAG_OMIT_SAMPLE_DATA) == 0
+        && rtspDiagnosticsListener != null
+        && rtspPacketDiagnosticsEnabled) {
+      rtspDiagnosticsListener.onRtspSampleRead(
+          new RtspSampleReadStats(
+              loaderWrapper.loadInfo.trackId,
+              sampleQueueIndex,
+              buffer.timeUs,
+              SystemClock.elapsedRealtime(),
+              getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs),
+              getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs)));
+    }
+    return result;
   }
 
   /* package */ int skipData(int sampleQueueIndex, long positionUs) {
@@ -492,6 +509,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return C.RESULT_NOTHING_READ;
     }
     return rtspLoaderWrappers.get(sampleQueueIndex).skipData(positionUs);
+  }
+
+  private static long getBufferedAheadMs(long bufferedPositionUs, long sampleTimeUs) {
+    if (bufferedPositionUs == C.TIME_END_OF_SOURCE || bufferedPositionUs == Long.MIN_VALUE) {
+      return C.TIME_UNSET;
+    }
+    return usToMs(Math.max(0, bufferedPositionUs - sampleTimeUs));
   }
 
   private boolean suppressRead() {

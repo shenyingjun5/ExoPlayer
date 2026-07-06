@@ -185,6 +185,31 @@ public final class RtspFeedbackApiTest {
             /* nalUnitType= */ 5,
             RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR,
             /* firstRtpPacketElapsedRealtimeMs= */ 88);
+    RtspH264AccessUnitReadyStats accessUnitReadyStats =
+        new RtspH264AccessUnitReadyStats(
+            /* trackId= */ 1,
+            /* rtpSequenceNumber= */ 12,
+            /* rtpTimestamp= */ 1234,
+            /* sampleTimeUs= */ 4567,
+            /* isIdr= */ true,
+            /* assembledElapsedRealtimeMs= */ 777);
+    RtspSampleReadStats sampleReadStats =
+        new RtspSampleReadStats(
+            /* trackId= */ 1,
+            /* sampleQueueIndex= */ 0,
+            /* sampleTimeUs= */ 4567,
+            /* readElapsedRealtimeMs= */ 888,
+            /* sampleQueueBufferedAheadMs= */ 120,
+            /* mediaPeriodBufferedAheadMs= */ 180);
+    RtspH264RecoveryStats recoveryStats =
+        new RtspH264RecoveryStats(
+            /* trackId= */ 1,
+            /* rtpSequenceNumber= */ 13,
+            /* rtpTimestamp= */ 2234,
+            /* waitingForIdr= */ true,
+            /* corruptedAccessUnitCount= */ 2,
+            /* droppedUntilIdrCount= */ 3,
+            RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
 
     assertThat(packetStats)
         .isEqualTo(
@@ -200,10 +225,20 @@ public final class RtspFeedbackApiTest {
         .isEqualTo(
             new RtspH264AccessUnitStats(
                 1, 12, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
+    assertThat(accessUnitReadyStats)
+        .isEqualTo(new RtspH264AccessUnitReadyStats(1, 12, 1234, 4567, true, 777));
+    assertThat(sampleReadStats).isEqualTo(new RtspSampleReadStats(1, 0, 4567, 888, 120, 180));
+    assertThat(recoveryStats)
+        .isEqualTo(
+            new RtspH264RecoveryStats(
+                1, 13, 2234, true, 2, 3, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED));
     assertThat(packetStats.toString()).contains("sequenceNumber=10");
     assertThat(reorderingStats.toString()).contains("queueDepth=2");
     assertThat(feedbackRequest.toString()).contains("detail=gap");
     assertThat(accessUnitStats.toString()).contains("accessUnitType=IDR");
+    assertThat(accessUnitReadyStats.toString()).contains("isIdr=true");
+    assertThat(sampleReadStats.toString()).contains("sampleQueueBufferedAheadMs=120");
+    assertThat(recoveryStats.toString()).contains("waitingForIdr=true");
   }
 
   @Test
@@ -226,6 +261,16 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onFirstDecodableVideoAccessUnitReady(
         new RtspH264AccessUnitStats(
             1, 10, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
+    diagnosticsListener.onH264AccessUnitReady(
+        new RtspH264AccessUnitReadyStats(1, 10, 1234, true, 777));
+    diagnosticsListener.onRtspSampleRead(new RtspSampleReadStats(1, 0, 1234, 777, 10, 20));
+    RtspH264RecoveryStats recoveryStats =
+        new RtspH264RecoveryStats(
+            1, 10, 1234, true, 1, 1, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+    diagnosticsListener.onH264AccessUnitCorrupted(recoveryStats);
+    diagnosticsListener.onH264WaitForIdrStarted(recoveryStats);
+    diagnosticsListener.onH264AccessUnitDroppedUntilIdr(recoveryStats);
+    diagnosticsListener.onH264WaitForIdrEnded(recoveryStats);
     diagnosticsListener.onRtpPacketReceived(packetStats);
     diagnosticsListener.onRtpPacketDequeued(packetStats, reorderingStats);
     diagnosticsListener.onRtpPacketDropped(packetStats, reorderingStats);

@@ -36,12 +36,24 @@ public final class RtcpFeedbackReason {
   public static final int SEQUENCE_GAP = 3;
   /** RTP reordering queue reset suggests stream discontinuity. */
   public static final int QUEUE_RESET = 4;
+  /** An H.264 access unit was corrupted before it could be submitted. */
+  public static final int ACCESS_UNIT_CORRUPTED = 5;
+  /** The video reader is waiting for a complete IDR access unit to recover. */
+  public static final int WAITING_FOR_IDR = 6;
 
   /** One of this class's reason constants. */
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @Target(TYPE_USE)
-  @IntDef({UNKNOWN, APPLICATION, FIRST_PACKET_TIMEOUT, SEQUENCE_GAP, QUEUE_RESET})
+  @IntDef({
+    UNKNOWN,
+    APPLICATION,
+    FIRST_PACKET_TIMEOUT,
+    SEQUENCE_GAP,
+    QUEUE_RESET,
+    ACCESS_UNIT_CORRUPTED,
+    WAITING_FOR_IDR
+  })
   public @interface Reason {}
 
   private RtcpFeedbackReason() {}

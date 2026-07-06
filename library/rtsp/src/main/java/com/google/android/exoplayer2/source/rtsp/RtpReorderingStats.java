@@ -29,6 +29,8 @@ public final class RtpReorderingStats {
   public final int droppedBeforeEnqueueCount;
   public final int duplicatePacketCount;
   public final int resetCount;
+  public final long oldestPacketAgeMs;
+  public final long queueSpanMs;
 
   public RtpReorderingStats(
       int trackId,
@@ -40,6 +42,32 @@ public final class RtpReorderingStats {
       int droppedBeforeEnqueueCount,
       int duplicatePacketCount,
       int resetCount) {
+    this(
+        trackId,
+        transportMode,
+        queueDepth,
+        lastReceivedSequenceNumber,
+        lastDequeuedSequenceNumber,
+        sequenceGap,
+        droppedBeforeEnqueueCount,
+        duplicatePacketCount,
+        resetCount,
+        /* oldestPacketAgeMs= */ 0,
+        /* queueSpanMs= */ 0);
+  }
+
+  public RtpReorderingStats(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      int queueDepth,
+      int lastReceivedSequenceNumber,
+      int lastDequeuedSequenceNumber,
+      int sequenceGap,
+      int droppedBeforeEnqueueCount,
+      int duplicatePacketCount,
+      int resetCount,
+      long oldestPacketAgeMs,
+      long queueSpanMs) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.queueDepth = queueDepth;
@@ -49,6 +77,8 @@ public final class RtpReorderingStats {
     this.droppedBeforeEnqueueCount = droppedBeforeEnqueueCount;
     this.duplicatePacketCount = duplicatePacketCount;
     this.resetCount = resetCount;
+    this.oldestPacketAgeMs = oldestPacketAgeMs;
+    this.queueSpanMs = queueSpanMs;
   }
 
   @Override
@@ -68,7 +98,9 @@ public final class RtpReorderingStats {
         && sequenceGap == other.sequenceGap
         && droppedBeforeEnqueueCount == other.droppedBeforeEnqueueCount
         && duplicatePacketCount == other.duplicatePacketCount
-        && resetCount == other.resetCount;
+        && resetCount == other.resetCount
+        && oldestPacketAgeMs == other.oldestPacketAgeMs
+        && queueSpanMs == other.queueSpanMs;
   }
 
   @Override
@@ -82,6 +114,8 @@ public final class RtpReorderingStats {
     result = 31 * result + droppedBeforeEnqueueCount;
     result = 31 * result + duplicatePacketCount;
     result = 31 * result + resetCount;
+    result = 31 * result + (int) (oldestPacketAgeMs ^ (oldestPacketAgeMs >>> 32));
+    result = 31 * result + (int) (queueSpanMs ^ (queueSpanMs >>> 32));
     return result;
   }
 
@@ -90,7 +124,8 @@ public final class RtpReorderingStats {
     return Util.formatInvariant(
         "RtpReorderingStats(trackId=%d, transportMode=%d, queueDepth=%d, "
             + "lastReceivedSequenceNumber=%d, lastDequeuedSequenceNumber=%d, sequenceGap=%d, "
-            + "droppedBeforeEnqueueCount=%d, duplicatePacketCount=%d, resetCount=%d)",
+            + "droppedBeforeEnqueueCount=%d, duplicatePacketCount=%d, resetCount=%d, "
+            + "oldestPacketAgeMs=%d, queueSpanMs=%d)",
         trackId,
         transportMode,
         queueDepth,
@@ -99,6 +134,8 @@ public final class RtpReorderingStats {
         sequenceGap,
         droppedBeforeEnqueueCount,
         duplicatePacketCount,
-        resetCount);
+        resetCount,
+        oldestPacketAgeMs,
+        queueSpanMs);
   }
 }

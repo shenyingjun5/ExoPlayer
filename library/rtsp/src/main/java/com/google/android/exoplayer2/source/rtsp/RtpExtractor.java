@@ -53,6 +53,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
+  private final boolean payloadReaderDiscontinuityNotificationsEnabled;
   private final Object lock;
   private final RtpPacketReorderingQueue reorderingQueue;
 
@@ -96,10 +97,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
+    payloadReaderDiscontinuityNotificationsEnabled =
+        rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
+            || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset;
 
     payloadReader =
         checkNotNull(
-            new DefaultRtpPayloadReaderFactory(rtspDiagnosticsListener)
+            new DefaultRtpPayloadReaderFactory(
+                    rtspDiagnosticsListener,
+                    rtcpFeedbackRequester,
+                    rtcpFeedbackPolicy,
+                    rtspPacketDiagnosticsEnabled)
                 .createPayloadReader(payloadFormat));
     rtpPacketScratchBuffer = new ParsableByteArray(RtpPacket.MAX_SIZE);
     rtpPacketDataBuffer = new ParsableByteArray();
@@ -206,6 +214,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             checkNotNull(parsedPacketStats), reorderingQueue.createStats(/* sequenceGap= */ 0));
       }
       return RESULT_CONTINUE;
+    }
+    if (payloadReaderDiscontinuityNotificationsEnabled) {
+      int discontinuityReason = reorderingQueue.getLastOfferDiscontinuityReason();
+      if (discontinuityReason != RtcpFeedbackReason.UNKNOWN) {
+        payloadReader.onRtpStreamDiscontinuity(discontinuityReason);
+      }
     }
     @Nullable RtpPacket dequeuedPacket = reorderingQueue.poll(packetCutoffTimeMs);
     if (dequeuedPacket == null) {

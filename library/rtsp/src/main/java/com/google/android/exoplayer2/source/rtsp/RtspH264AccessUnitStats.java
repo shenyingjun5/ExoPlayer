@@ -16,6 +16,7 @@
 package com.google.android.exoplayer2.source.rtsp;
 
 import androidx.annotation.Nullable;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 
 /** Diagnostics snapshot for an H.264 access unit assembled from RTP packets. */
@@ -27,6 +28,7 @@ public final class RtspH264AccessUnitStats {
   public final int trackId;
   public final int rtpSequenceNumber;
   public final long rtpTimestamp;
+  public final long sampleTimeUs;
   public final boolean hasSps;
   public final boolean hasPps;
   public final int nalUnitType;
@@ -42,9 +44,32 @@ public final class RtspH264AccessUnitStats {
       int nalUnitType,
       String accessUnitType,
       long firstRtpPacketElapsedRealtimeMs) {
+    this(
+        trackId,
+        rtpSequenceNumber,
+        rtpTimestamp,
+        /* sampleTimeUs= */ C.TIME_UNSET,
+        hasSps,
+        hasPps,
+        nalUnitType,
+        accessUnitType,
+        firstRtpPacketElapsedRealtimeMs);
+  }
+
+  public RtspH264AccessUnitStats(
+      int trackId,
+      int rtpSequenceNumber,
+      long rtpTimestamp,
+      long sampleTimeUs,
+      boolean hasSps,
+      boolean hasPps,
+      int nalUnitType,
+      String accessUnitType,
+      long firstRtpPacketElapsedRealtimeMs) {
     this.trackId = trackId;
     this.rtpSequenceNumber = rtpSequenceNumber;
     this.rtpTimestamp = rtpTimestamp;
+    this.sampleTimeUs = sampleTimeUs;
     this.hasSps = hasSps;
     this.hasPps = hasPps;
     this.nalUnitType = nalUnitType;
@@ -64,6 +89,7 @@ public final class RtspH264AccessUnitStats {
     return trackId == other.trackId
         && rtpSequenceNumber == other.rtpSequenceNumber
         && rtpTimestamp == other.rtpTimestamp
+        && sampleTimeUs == other.sampleTimeUs
         && hasSps == other.hasSps
         && hasPps == other.hasPps
         && nalUnitType == other.nalUnitType
@@ -76,6 +102,7 @@ public final class RtspH264AccessUnitStats {
     int result = trackId;
     result = 31 * result + rtpSequenceNumber;
     result = 31 * result + (int) (rtpTimestamp ^ (rtpTimestamp >>> 32));
+    result = 31 * result + (int) (sampleTimeUs ^ (sampleTimeUs >>> 32));
     result = 31 * result + (hasSps ? 1 : 0);
     result = 31 * result + (hasPps ? 1 : 0);
     result = 31 * result + nalUnitType;
@@ -91,11 +118,12 @@ public final class RtspH264AccessUnitStats {
   public String toString() {
     return Util.formatInvariant(
         "RtspH264AccessUnitStats(trackId=%d, rtpSequenceNumber=%d, rtpTimestamp=%d, "
-            + "hasSps=%b, hasPps=%b, nalUnitType=%d, accessUnitType=%s, "
+            + "sampleTimeUs=%d, hasSps=%b, hasPps=%b, nalUnitType=%d, accessUnitType=%s, "
             + "firstRtpPacketElapsedRealtimeMs=%d)",
         trackId,
         rtpSequenceNumber,
         rtpTimestamp,
+        sampleTimeUs,
         hasSps,
         hasPps,
         nalUnitType,

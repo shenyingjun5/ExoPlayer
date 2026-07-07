@@ -195,8 +195,14 @@ Media3 是修复来源，不是直接替代品。
 推荐 artifact：
 
 ```text
-com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
+com.zknowai.exoplayer:*:2.19.1-labi.N
 ```
+
+发布范围决策：
+
+- 早期目标是优先发布 patched `exoplayer-rtsp`，避免扩大 Cast-SDK 运行时依赖面。
+- 由于低延迟加载优化已在 `library/core` 增加 `DefaultLoadControl.Builder#setMinBufferFloorMs(int)`，后续版本按正常全量发布执行，覆盖 core、HLS、RTSP 以及必要传递依赖模块。
+- 是否在 Cast-SDK 中接入 fork core/HLS/RTSP，由 Cast-SDK 仓库根据业务 profile 和验证结果决定；ExoPlayer fork 发布侧不再用“只发布 RTSP”作为默认策略。
 
 发布流程：
 

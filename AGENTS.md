@@ -54,12 +54,12 @@ Cast-SDK 侧关联文档：
 
 ## 发布原则
 
-推荐发布 patched RTSP artifact：
+推荐发布 patched ExoPlayer artifact：
 
 ```text
-com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.N
+com.zknowai.exoplayer:*:2.19.1-labi.N
 ```
 
-`N` 每次发布递增。优先只发布 patched `exoplayer-rtsp`；只有当 patch 触达 core/renderer 且无法避免时，再扩大 artifact 范围。
+`N` 每次发布递增。自 `DefaultLoadControl.Builder#setMinBufferFloorMs(int)` 触达 `library/core` 后，后续发布按正常全量发布执行，覆盖 core、HLS、RTSP 以及必要的传递依赖模块。Cast-SDK 是否实际接入某个 fork artifact，由 Cast-SDK 仓库按业务需要决定。
 
 推荐发布渠道：GitHub Pages 静态 Maven repo。GitHub Packages 可作为备用，JitPack 不作为主链路。

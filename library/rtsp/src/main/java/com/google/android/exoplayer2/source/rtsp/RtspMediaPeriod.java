@@ -719,6 +719,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     @Override
+    public void onH264WaitForIdrTimedOut(RtspH264RecoveryStats recoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrTimedOut(recoveryStats);
+    }
+
+    @Override
     public void onH264WaitForIdrEnded(RtspH264RecoveryStats recoveryStats) {
       checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrEnded(recoveryStats);
     }
@@ -1313,6 +1318,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     private @RtcpFeedbackType.Type int getFeedbackType() {
+      if (!rtcpFeedbackPolicy.canSendRtcpFeedback()) {
+        return RtcpFeedbackType.UNKNOWN;
+      }
       if (rtcpFeedbackPolicy.pliEnabled) {
         return RtcpFeedbackType.PLI;
       }

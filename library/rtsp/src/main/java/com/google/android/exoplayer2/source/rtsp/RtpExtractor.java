@@ -94,7 +94,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
-    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     payloadReaderDiscontinuityNotificationsEnabled =
@@ -105,7 +105,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         checkNotNull(
             new DefaultRtpPayloadReaderFactory(
                     rtspDiagnosticsListener,
-                    rtcpFeedbackRequester,
+                    this.rtcpFeedbackRequester,
                     rtcpFeedbackPolicy,
                     rtspPacketDiagnosticsEnabled)
                 .createPayloadReader(payloadFormat));
@@ -117,7 +117,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             trackId,
             transportMode,
             rtspDiagnosticsListener,
-            rtcpFeedbackRequester,
+            this.rtcpFeedbackRequester,
             rtcpFeedbackPolicy.sequenceGapRequestThreshold,
             rtcpFeedbackPolicy.requestKeyFrameOnQueueReset);
     firstTimestamp = C.TIME_UNSET;

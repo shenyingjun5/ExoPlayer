@@ -38,11 +38,13 @@ import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Bytes;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.shadows.ShadowSystemClock;
 
 /** Unit tests for {@link RtpH264Reader}. */
 @RunWith(AndroidJUnit4.class)
@@ -643,6 +645,109 @@ public final class RtpH264ReaderTest {
   }
 
   @Test
+  public void externalOnlyWaitIdr_reportsEventsButDoesNotRequestRtcp() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            feedbackRequester,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    h264Reader.onRtpStreamDiscontinuity(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+
+    assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats.get(0).idrRecoveredCount).isEqualTo(1);
+    assertThat(feedbackRequester.reasons).isEmpty();
+  }
+
+  @Test
+  public void bothWaitIdr_reportsEventsAndRequestsRtcp() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            feedbackRequester,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ true,
+            /* waitingForIdrTimeoutMs= */ 0);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    h264Reader.onRtpStreamDiscontinuity(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+
+    assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+    assertThat(feedbackRequester.reasons)
+        .containsExactly(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+  }
+
+  @Test
+  public void waitIdrTimeout_reportsOnceWithMonotonicDuration() throws Exception {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 1);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    h264Reader.onRtpStreamDiscontinuity(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+    ShadowSystemClock.advanceBy(Duration.ofMillis(5));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+    long firstDropDuration = diagnosticsListener.droppedUntilIdrStats.get(0).waitingForIdrDurationMs;
+    ShadowSystemClock.advanceBy(Duration.ofMillis(5));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("410304")));
+
+    assertThat(diagnosticsListener.timeoutStats).hasSize(1);
+    assertThat(diagnosticsListener.timeoutStats.get(0).waitingForIdrDurationMs).isAtLeast(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(2);
+    assertThat(diagnosticsListener.droppedUntilIdrStats.get(1).waitingForIdrDurationMs)
+        .isAtLeast(firstDropDuration);
+  }
+
+  @Test
   public void waitIdr_idrWithoutSpsPps_keepsDroppingUntilDecodableIdr() throws ParserException {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
     CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
@@ -711,6 +816,24 @@ public final class RtpH264ReaderTest {
       RtcpFeedbackRequester rtcpFeedbackRequester,
       boolean lowLatencyRecoveryEnabled,
       boolean accessUnitDiagnosticsEnabled) {
+    return createH264Reader(
+        hasInitializationData,
+        diagnosticsListener,
+        rtcpFeedbackRequester,
+        lowLatencyRecoveryEnabled,
+        accessUnitDiagnosticsEnabled,
+        /* rtcpFeedbackRequestsEnabled= */ rtcpFeedbackRequester != null,
+        /* waitingForIdrTimeoutMs= */ 0);
+  }
+
+  private static RtpH264Reader createH264Reader(
+      boolean hasInitializationData,
+      RtspDiagnosticsListener diagnosticsListener,
+      RtcpFeedbackRequester rtcpFeedbackRequester,
+      boolean lowLatencyRecoveryEnabled,
+      boolean accessUnitDiagnosticsEnabled,
+      boolean rtcpFeedbackRequestsEnabled,
+      long waitingForIdrTimeoutMs) {
     return new RtpH264Reader(
         new RtpPayloadFormat(
             new Format.Builder()
@@ -728,7 +851,9 @@ public final class RtpH264ReaderTest {
         diagnosticsListener,
         rtcpFeedbackRequester,
         lowLatencyRecoveryEnabled,
-        accessUnitDiagnosticsEnabled);
+        accessUnitDiagnosticsEnabled,
+        rtcpFeedbackRequestsEnabled,
+        waitingForIdrTimeoutMs);
   }
 
   private static RtpPacket createPacket(
@@ -757,6 +882,7 @@ public final class RtpH264ReaderTest {
     public final List<RtspH264RecoveryStats> corruptedStats = new ArrayList<>();
     public final List<RtspH264RecoveryStats> waitStartedStats = new ArrayList<>();
     public final List<RtspH264RecoveryStats> droppedUntilIdrStats = new ArrayList<>();
+    public final List<RtspH264RecoveryStats> timeoutStats = new ArrayList<>();
     public final List<RtspH264RecoveryStats> waitEndedStats = new ArrayList<>();
 
     @Override
@@ -783,6 +909,11 @@ public final class RtpH264ReaderTest {
     @Override
     public void onH264AccessUnitDroppedUntilIdr(RtspH264RecoveryStats recoveryStats) {
       droppedUntilIdrStats.add(recoveryStats);
+    }
+
+    @Override
+    public void onH264WaitForIdrTimedOut(RtspH264RecoveryStats recoveryStats) {
+      timeoutStats.add(recoveryStats);
     }
 
     @Override

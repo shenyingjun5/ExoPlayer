@@ -43,6 +43,11 @@ public final class RtspFeedbackApiTest {
     assertThat(RtcpFeedbackPolicy.DEFAULT.firEnabled).isFalse();
     assertThat(RtcpFeedbackPolicy.DEFAULT.sequenceGapRequestThreshold).isEqualTo(0);
     assertThat(RtcpFeedbackPolicy.DEFAULT.requestKeyFrameOnQueueReset).isFalse();
+    assertThat(RtcpFeedbackPolicy.DEFAULT.feedbackStrategy)
+        .isEqualTo(RtcpFeedbackPolicy.RTCP_ONLY);
+    assertThat(RtcpFeedbackPolicy.DEFAULT.waitingForIdrTimeoutMs).isEqualTo(0);
+    assertThat(RtcpFeedbackPolicy.DEFAULT.isLowLatencyRecoveryEnabled()).isFalse();
+    assertThat(RtcpFeedbackPolicy.DEFAULT.canSendRtcpFeedback()).isFalse();
     assertThat(new RtcpFeedbackPolicy.Builder().build()).isEqualTo(RtcpFeedbackPolicy.DEFAULT);
 
     RtspMediaPeriod mediaPeriod =
@@ -117,19 +122,28 @@ public final class RtspFeedbackApiTest {
             .setMinRequestIntervalMs(123)
             .setPliEnabled(false)
             .setFirEnabled(true)
+            .setFeedbackStrategy(RtcpFeedbackPolicy.EXTERNAL_ONLY)
+            .setWaitingForIdrTimeoutMs(321)
             .build();
 
     assertThat(policy.minRequestIntervalMs).isEqualTo(123);
     assertThat(policy.pliEnabled).isFalse();
     assertThat(policy.firEnabled).isTrue();
+    assertThat(policy.feedbackStrategy).isEqualTo(RtcpFeedbackPolicy.EXTERNAL_ONLY);
+    assertThat(policy.waitingForIdrTimeoutMs).isEqualTo(321);
+    assertThat(policy.isLowLatencyRecoveryEnabled()).isTrue();
+    assertThat(policy.canSendRtcpFeedback()).isFalse();
     assertThat(policy)
         .isEqualTo(
             new RtcpFeedbackPolicy.Builder()
                 .setMinRequestIntervalMs(123)
                 .setPliEnabled(false)
                 .setFirEnabled(true)
+                .setFeedbackStrategy(RtcpFeedbackPolicy.EXTERNAL_ONLY)
+                .setWaitingForIdrTimeoutMs(321)
                 .build());
     assertThat(policy.toString()).contains("minRequestIntervalMs=123");
+    assertThat(policy.toString()).contains("feedbackStrategy=1");
   }
 
   @Test
@@ -143,6 +157,11 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.sequenceGapRequestThreshold)
         .isEqualTo(RtcpFeedbackPolicy.DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD);
     assertThat(policy.requestKeyFrameOnQueueReset).isTrue();
+    assertThat(policy.feedbackStrategy).isEqualTo(RtcpFeedbackPolicy.BOTH);
+    assertThat(policy.waitingForIdrTimeoutMs)
+        .isEqualTo(RtcpFeedbackPolicy.DEFAULT_WAITING_FOR_IDR_TIMEOUT_MS);
+    assertThat(policy.isLowLatencyRecoveryEnabled()).isTrue();
+    assertThat(policy.canSendRtcpFeedback()).isTrue();
     assertThat(new RtcpFeedbackPolicy.Builder().setLowLatencyDefaults().build()).isEqualTo(policy);
   }
 
@@ -217,7 +236,11 @@ public final class RtspFeedbackApiTest {
             /* waitingForIdr= */ true,
             /* corruptedAccessUnitCount= */ 2,
             /* droppedUntilIdrCount= */ 3,
-            RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
+            RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED,
+            /* waitingForIdrDurationMs= */ 44,
+            /* lastRtpSequence= */ 14,
+            /* lastRtpTimestamp= */ 3234,
+            /* idrRecoveredCount= */ 1);
 
     assertThat(packetStats)
         .isEqualTo(
@@ -244,7 +267,8 @@ public final class RtspFeedbackApiTest {
     assertThat(recoveryStats)
         .isEqualTo(
             new RtspH264RecoveryStats(
-                1, 13, 2234, true, 2, 3, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED));
+                1, 13, 2234, true, 2, 3, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED, 44, 14,
+                3234, 1));
     assertThat(packetStats.toString()).contains("sequenceNumber=10");
     assertThat(reorderingStats.toString()).contains("queueDepth=2");
     assertThat(feedbackRequest.toString()).contains("detail=gap");
@@ -254,6 +278,7 @@ public final class RtspFeedbackApiTest {
     assertThat(sampleReadStats.toString()).contains("sampleQueueBufferedAheadMs=120");
     assertThat(decoderInputQueuedStats.toString()).contains("queuedElapsedRealtimeMs=889");
     assertThat(recoveryStats.toString()).contains("waitingForIdr=true");
+    assertThat(recoveryStats.toString()).contains("waitingForIdrDurationMs=44");
   }
 
   @Test
@@ -344,6 +369,7 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onH264AccessUnitCorrupted(recoveryStats);
     diagnosticsListener.onH264WaitForIdrStarted(recoveryStats);
     diagnosticsListener.onH264AccessUnitDroppedUntilIdr(recoveryStats);
+    diagnosticsListener.onH264WaitForIdrTimedOut(recoveryStats);
     diagnosticsListener.onH264WaitForIdrEnded(recoveryStats);
     diagnosticsListener.onRtpPacketReceived(packetStats);
     diagnosticsListener.onRtpPacketDequeued(packetStats, reorderingStats);

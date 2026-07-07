@@ -40,6 +40,8 @@ import com.google.android.exoplayer2.util.MimeTypes;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final boolean h264LowLatencyRecoveryEnabled;
   private final boolean h264AccessUnitDiagnosticsEnabled;
+  private final boolean rtcpFeedbackRequestsEnabled;
+  private final long h264WaitingForIdrTimeoutMs;
 
   public DefaultRtpPayloadReaderFactory() {
     this(/* rtspDiagnosticsListener= */ null);
@@ -60,13 +62,11 @@ import com.google.android.exoplayer2.util.MimeTypes;
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
       boolean h264AccessUnitDiagnosticsEnabled) {
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
-    this.rtcpFeedbackRequester = rtcpFeedbackRequester;
+    this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
     this.h264AccessUnitDiagnosticsEnabled = h264AccessUnitDiagnosticsEnabled;
-    h264LowLatencyRecoveryEnabled =
-        rtcpFeedbackPolicy.pliEnabled
-            || rtcpFeedbackPolicy.firEnabled
-            || rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
-            || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset;
+    h264LowLatencyRecoveryEnabled = rtcpFeedbackPolicy.isLowLatencyRecoveryEnabled();
+    rtcpFeedbackRequestsEnabled = rtcpFeedbackPolicy.canSendRtcpFeedback();
+    h264WaitingForIdrTimeoutMs = rtcpFeedbackPolicy.waitingForIdrTimeoutMs;
   }
 
   @Override
@@ -98,7 +98,9 @@ import com.google.android.exoplayer2.util.MimeTypes;
             rtspDiagnosticsListener,
             rtcpFeedbackRequester,
             h264LowLatencyRecoveryEnabled,
-            h264AccessUnitDiagnosticsEnabled);
+            h264AccessUnitDiagnosticsEnabled,
+            rtcpFeedbackRequestsEnabled,
+            h264WaitingForIdrTimeoutMs);
       case MimeTypes.VIDEO_H265:
         return new RtpH265Reader(payloadFormat);
       case MimeTypes.VIDEO_MP4V:

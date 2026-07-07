@@ -66,6 +66,9 @@ public interface RtspDiagnosticsListener {
   /** Called when a non-IDR H.264 access unit is dropped while waiting for an IDR. */
   default void onH264AccessUnitDroppedUntilIdr(RtspH264RecoveryStats recoveryStats) {}
 
+  /** Called when waiting for an H.264 IDR exceeds the configured timeout. */
+  default void onH264WaitForIdrTimedOut(RtspH264RecoveryStats recoveryStats) {}
+
   /** Called when H.264 low-latency recovery exits after a complete IDR access unit. */
   default void onH264WaitForIdrEnded(RtspH264RecoveryStats recoveryStats) {}
 

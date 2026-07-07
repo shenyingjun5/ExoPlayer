@@ -81,6 +81,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final boolean lowLatencyRecoveryEnabled;
   private final boolean accessUnitDiagnosticsEnabled;
+  private final boolean rtcpFeedbackRequestsEnabled;
+  private final long waitingForIdrTimeoutMs;
 
   private @MonotonicNonNull TrackOutput trackOutput;
   private @C.BufferFlags int bufferFlags;
@@ -109,8 +111,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private int currentAccessUnitFirstSequenceNumber;
   private long currentAccessUnitRtpTimestamp;
   private boolean waitingForIdr;
+  private long waitingForIdrStartElapsedRealtimeMs;
+  private boolean waitingForIdrTimeoutNotified;
   private int corruptedAccessUnitCount;
   private int droppedUntilIdrCount;
+  private int idrRecoveredCount;
+  private int lastRtpSequence;
+  private long lastRtpTimestamp;
 
   /** Creates an instance. */
   public RtpH264Reader(RtpPayloadFormat payloadFormat) {
@@ -135,11 +142,32 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
       boolean lowLatencyRecoveryEnabled,
       boolean accessUnitDiagnosticsEnabled) {
+    this(
+        payloadFormat,
+        rtspDiagnosticsListener,
+        rtcpFeedbackRequester,
+        lowLatencyRecoveryEnabled,
+        accessUnitDiagnosticsEnabled,
+        /* rtcpFeedbackRequestsEnabled= */ rtcpFeedbackRequester != null,
+        /* waitingForIdrTimeoutMs= */ 0);
+  }
+
+  /** Creates an instance. */
+  public RtpH264Reader(
+      RtpPayloadFormat payloadFormat,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      boolean lowLatencyRecoveryEnabled,
+      boolean accessUnitDiagnosticsEnabled,
+      boolean rtcpFeedbackRequestsEnabled,
+      long waitingForIdrTimeoutMs) {
     this.payloadFormat = payloadFormat;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.lowLatencyRecoveryEnabled = lowLatencyRecoveryEnabled;
     this.accessUnitDiagnosticsEnabled = accessUnitDiagnosticsEnabled;
+    this.rtcpFeedbackRequestsEnabled = rtcpFeedbackRequestsEnabled;
+    this.waitingForIdrTimeoutMs = waitingForIdrTimeoutMs;
     firstDecodableAccessUnitDiagnosticsEnabled = rtspDiagnosticsListener != null;
     fuScratchBuffer = new ParsableByteArray();
     firstReceivedTimestamp = C.TIME_UNSET;
@@ -155,6 +183,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     currentAccessUnitFirstSequenceNumber = C.INDEX_UNSET;
     currentAccessUnitRtpTimestamp = C.TIME_UNSET;
     waitingForIdr = false;
+    waitingForIdrStartElapsedRealtimeMs = C.TIME_UNSET;
+    waitingForIdrTimeoutNotified = false;
+    lastRtpSequence = C.INDEX_UNSET;
+    lastRtpTimestamp = C.TIME_UNSET;
   }
 
   @Override
@@ -176,6 +208,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   @Override
   public void onRtpStreamDiscontinuity(@RtcpFeedbackReason.Reason int reason) {
+    lastRtpSequence = previousSequenceNumber;
+    lastRtpTimestamp = previousTimestamp;
     if (isCurrentAccessUnitOpen()) {
       markCurrentAccessUnitCorrupted(reason);
     } else {
@@ -186,6 +220,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   @Override
   public void consume(ParsableByteArray data, long timestamp, int sequenceNumber, boolean rtpMarker)
       throws ParserException {
+    lastRtpSequence = sequenceNumber;
+    lastRtpTimestamp = timestamp;
 
     if (previousTimestamp != C.TIME_UNSET && timestamp != previousTimestamp) {
       if (isCurrentAccessUnitOpen()) {
@@ -266,6 +302,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     previousTimestamp = C.TIME_UNSET;
     resetReaderStateForNewAccessUnit();
     waitingForIdr = false;
+    waitingForIdrStartElapsedRealtimeMs = C.TIME_UNSET;
+    waitingForIdrTimeoutNotified = false;
     startTimeOffsetUs = timeUs;
   }
 
@@ -512,10 +550,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       return;
     }
     waitingForIdr = true;
+    waitingForIdrStartElapsedRealtimeMs = SystemClock.elapsedRealtime();
+    waitingForIdrTimeoutNotified = false;
     if (rtspDiagnosticsListener != null) {
       rtspDiagnosticsListener.onH264WaitForIdrStarted(createRecoveryStats(reason));
     }
-    if (rtcpFeedbackRequester != null
+    if (rtcpFeedbackRequestsEnabled
+        && rtcpFeedbackRequester != null
         && reason != RtcpFeedbackReason.SEQUENCE_GAP
         && reason != RtcpFeedbackReason.QUEUE_RESET) {
       rtcpFeedbackRequester.requestKeyFrame(reason);
@@ -523,10 +564,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   private void exitWaitForIdr(@RtcpFeedbackReason.Reason int reason) {
+    idrRecoveredCount++;
     waitingForIdr = false;
     if (rtspDiagnosticsListener != null) {
       rtspDiagnosticsListener.onH264WaitForIdrEnded(createRecoveryStats(reason));
     }
+    waitingForIdrStartElapsedRealtimeMs = C.TIME_UNSET;
+    waitingForIdrTimeoutNotified = false;
   }
 
   private void notifyAccessUnitDroppedUntilIdr() {
@@ -534,7 +578,19 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     if (rtspDiagnosticsListener != null) {
       rtspDiagnosticsListener.onH264AccessUnitDroppedUntilIdr(
           createRecoveryStats(RtcpFeedbackReason.WAITING_FOR_IDR));
+      maybeNotifyWaitForIdrTimeout();
     }
+  }
+
+  private void maybeNotifyWaitForIdrTimeout() {
+    if (waitingForIdrTimeoutMs == 0
+        || waitingForIdrTimeoutNotified
+        || getWaitingForIdrDurationMs() < waitingForIdrTimeoutMs) {
+      return;
+    }
+    waitingForIdrTimeoutNotified = true;
+    checkNotNull(rtspDiagnosticsListener)
+        .onH264WaitForIdrTimedOut(createRecoveryStats(RtcpFeedbackReason.WAITING_FOR_IDR));
   }
 
   private void maybeNotifyAccessUnitReady(long sampleTimeUs) {
@@ -559,7 +615,18 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         waitingForIdr,
         corruptedAccessUnitCount,
         droppedUntilIdrCount,
-        reason);
+        reason,
+        getWaitingForIdrDurationMs(),
+        lastRtpSequence,
+        lastRtpTimestamp,
+        idrRecoveredCount);
+  }
+
+  private long getWaitingForIdrDurationMs() {
+    if (waitingForIdrStartElapsedRealtimeMs == C.TIME_UNSET) {
+      return 0;
+    }
+    return Math.max(0, SystemClock.elapsedRealtime() - waitingForIdrStartElapsedRealtimeMs);
   }
 
   private void maybeNotifyFirstDecodableAccessUnitReady(long sampleTimeUs) {

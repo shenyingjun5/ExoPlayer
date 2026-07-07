@@ -308,6 +308,26 @@ Remote publication:
 - RTSP AAR: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.1/exoplayer-rtsp-2.19.1-labi.1.aar`
 - Verification: GitHub Pages status `built`; POM and AAR URLs returned HTTP 200.
 
+## Release Scope Decision
+
+Status: Active from next release after `2.19.1-labi.6`.
+
+Decision:
+
+- Use normal full Maven publication for future `2.19.1-labi.N` releases.
+- Publish core, HLS, RTSP, and required transitive ExoPlayer modules under `com.zknowai.exoplayer`.
+- This supersedes the earlier "publish RTSP only by default" guidance.
+
+Reason:
+
+- RTSP low-latency loading now depends on the fork core API `DefaultLoadControl.Builder#setMinBufferFloorMs(int)`.
+- Publishing only RTSP is no longer enough for consumers that need that core low-latency hook.
+
+Cast-SDK integration boundary:
+
+- ExoPlayer fork should publish the full artifact set.
+- Cast-SDK decides which artifacts to consume in its own repository and validation flow.
+
 Latest publication:
 
 - release tag: `exoplayer-rtsp-2.19.1-labi.2`
@@ -315,3 +335,37 @@ Latest publication:
 - RTSP POM: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.2/exoplayer-rtsp-2.19.1-labi.2.pom`
 - RTSP AAR: `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.2/exoplayer-rtsp-2.19.1-labi.2.aar`
 - Verification: POM and AAR URLs returned HTTP 200.
+
+## `2.19.1-labi.7` Independent Feedback Channel Support
+
+Status: Ready for publication.
+
+Scope:
+
+- C11: Expose H.264 WAIT_IDR lifecycle diagnostics:
+  `onH264WaitForIdrStarted`, `onH264AccessUnitDroppedUntilIdr`,
+  `onH264WaitForIdrTimedOut`, and `onH264WaitForIdrEnded`.
+- C12: Add feedback strategy in `RtcpFeedbackPolicy`:
+  `RTCP_ONLY`, `EXTERNAL_ONLY`, and `BOTH`.
+- C13: Extend `RtspH264RecoveryStats` with
+  `waitingForIdrDurationMs`, `lastRtpSequence`, `lastRtpTimestamp`, and
+  `idrRecoveredCount`.
+
+Default behavior:
+
+- `RtcpFeedbackPolicy.DEFAULT` remains passive.
+- No listener/policy means no automatic key-frame request and no H.264 WAIT_IDR recovery behavior.
+- `EXTERNAL_ONLY` enables recovery events for Cast-SDK's independent live control channel but disables automatic RTCP PLI/FIR sending.
+
+Verification:
+
+- Targeted RTSP tests passed:
+  `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.reader.RtpH264ReaderTest`.
+- Full RTSP tests passed:
+  `:library-rtsp:testDebugUnitTest`.
+
+Publication target:
+
+- version: `2.19.1-labi.7`
+- release tag: `exoplayer-rtsp-2.19.1-labi.7`
+- artifact scope: normal full Maven publication under `com.zknowai.exoplayer`.

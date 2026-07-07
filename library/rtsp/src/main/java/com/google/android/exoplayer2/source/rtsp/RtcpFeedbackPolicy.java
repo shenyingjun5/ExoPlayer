@@ -17,8 +17,12 @@ package com.google.android.exoplayer2.source.rtsp;
 
 import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 
+import androidx.annotation.IntDef;
 import com.google.android.exoplayer2.util.Util;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
+import java.lang.annotation.Documented;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
 /** Policy for RTCP key-frame feedback requests. */
 public final class RtcpFeedbackPolicy {
@@ -27,6 +31,21 @@ public final class RtcpFeedbackPolicy {
   public static final long DEFAULT_MIN_REQUEST_INTERVAL_MS = 400;
   /** Default sequence gap threshold for automatic key-frame requests. */
   public static final int DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD = 8;
+  /** Default timeout for reporting a prolonged wait for an IDR access unit. */
+  public static final long DEFAULT_WAITING_FOR_IDR_TIMEOUT_MS = 800;
+
+  /** The fork emits recovery events and may send RTCP feedback. */
+  public static final int RTCP_ONLY = 0;
+  /** The fork emits recovery events but never sends RTCP feedback automatically. */
+  public static final int EXTERNAL_ONLY = 1;
+  /** The fork emits recovery events and may send RTCP feedback as a fallback. */
+  public static final int BOTH = 2;
+
+  /** Feedback strategy for key-frame recovery. */
+  @Documented
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({RTCP_ONLY, EXTERNAL_ONLY, BOTH})
+  public @interface FeedbackStrategy {}
 
   /** Default policy. Does not send RTCP feedback automatically. */
   public static final RtcpFeedbackPolicy DEFAULT = new Builder().build();
@@ -47,6 +66,10 @@ public final class RtcpFeedbackPolicy {
   public final int sequenceGapRequestThreshold;
   /** Whether a large RTP reordering-queue reset requests a key frame. */
   public final boolean requestKeyFrameOnQueueReset;
+  /** Feedback strategy for low-latency recovery. */
+  public final @FeedbackStrategy int feedbackStrategy;
+  /** Timeout for reporting a prolonged wait for an IDR access unit, or {@code 0} to disable. */
+  public final long waitingForIdrTimeoutMs;
 
   private RtcpFeedbackPolicy(Builder builder) {
     this.minRequestIntervalMs = builder.minRequestIntervalMs;
@@ -55,6 +78,8 @@ public final class RtcpFeedbackPolicy {
     this.senderSsrc = builder.senderSsrc;
     this.sequenceGapRequestThreshold = builder.sequenceGapRequestThreshold;
     this.requestKeyFrameOnQueueReset = builder.requestKeyFrameOnQueueReset;
+    this.feedbackStrategy = builder.feedbackStrategy;
+    this.waitingForIdrTimeoutMs = builder.waitingForIdrTimeoutMs;
   }
 
   @Override
@@ -71,7 +96,9 @@ public final class RtcpFeedbackPolicy {
         && firEnabled == other.firEnabled
         && senderSsrc == other.senderSsrc
         && sequenceGapRequestThreshold == other.sequenceGapRequestThreshold
-        && requestKeyFrameOnQueueReset == other.requestKeyFrameOnQueueReset;
+        && requestKeyFrameOnQueueReset == other.requestKeyFrameOnQueueReset
+        && feedbackStrategy == other.feedbackStrategy
+        && waitingForIdrTimeoutMs == other.waitingForIdrTimeoutMs;
   }
 
   @Override
@@ -82,6 +109,8 @@ public final class RtcpFeedbackPolicy {
     result = 31 * result + senderSsrc;
     result = 31 * result + sequenceGapRequestThreshold;
     result = 31 * result + (requestKeyFrameOnQueueReset ? 1 : 0);
+    result = 31 * result + feedbackStrategy;
+    result = 31 * result + (int) (waitingForIdrTimeoutMs ^ (waitingForIdrTimeoutMs >>> 32));
     return result;
   }
 
@@ -90,13 +119,31 @@ public final class RtcpFeedbackPolicy {
     return Util.formatInvariant(
         "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b, "
             + "senderSsrc=%x, sequenceGapRequestThreshold=%d, "
-            + "requestKeyFrameOnQueueReset=%b)",
+            + "requestKeyFrameOnQueueReset=%b, feedbackStrategy=%d, "
+            + "waitingForIdrTimeoutMs=%d)",
         minRequestIntervalMs,
         pliEnabled,
         firEnabled,
         senderSsrc,
         sequenceGapRequestThreshold,
-        requestKeyFrameOnQueueReset);
+        requestKeyFrameOnQueueReset,
+        feedbackStrategy,
+        waitingForIdrTimeoutMs);
+  }
+
+  /** Returns whether recovery events and drop-until-IDR behavior should be enabled. */
+  public boolean isLowLatencyRecoveryEnabled() {
+    return feedbackStrategy == EXTERNAL_ONLY
+        || feedbackStrategy == BOTH
+        || pliEnabled
+        || firEnabled
+        || sequenceGapRequestThreshold > 0
+        || requestKeyFrameOnQueueReset;
+  }
+
+  /** Returns whether the fork may send RTCP feedback packets. */
+  public boolean canSendRtcpFeedback() {
+    return feedbackStrategy != EXTERNAL_ONLY && (pliEnabled || firEnabled);
   }
 
   /** Builder for {@link RtcpFeedbackPolicy}. */
@@ -107,6 +154,8 @@ public final class RtcpFeedbackPolicy {
     private int senderSsrc;
     private int sequenceGapRequestThreshold;
     private boolean requestKeyFrameOnQueueReset;
+    private @FeedbackStrategy int feedbackStrategy;
+    private long waitingForIdrTimeoutMs;
 
     /** Creates a builder with the default passive RTCP feedback policy. */
     public Builder() {
@@ -116,6 +165,8 @@ public final class RtcpFeedbackPolicy {
       senderSsrc = 0;
       sequenceGapRequestThreshold = 0;
       requestKeyFrameOnQueueReset = false;
+      feedbackStrategy = RTCP_ONLY;
+      waitingForIdrTimeoutMs = 0;
     }
 
     /** Sets the builder to the low-latency preset values. */
@@ -126,6 +177,8 @@ public final class RtcpFeedbackPolicy {
       firEnabled = true;
       sequenceGapRequestThreshold = DEFAULT_SEQUENCE_GAP_REQUEST_THRESHOLD;
       requestKeyFrameOnQueueReset = true;
+      feedbackStrategy = BOTH;
+      waitingForIdrTimeoutMs = DEFAULT_WAITING_FOR_IDR_TIMEOUT_MS;
       return this;
     }
 
@@ -174,6 +227,21 @@ public final class RtcpFeedbackPolicy {
     @CanIgnoreReturnValue
     public Builder setRequestKeyFrameOnQueueReset(boolean requestKeyFrameOnQueueReset) {
       this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
+      return this;
+    }
+
+    /** Sets the key-frame feedback strategy. */
+    @CanIgnoreReturnValue
+    public Builder setFeedbackStrategy(@FeedbackStrategy int feedbackStrategy) {
+      this.feedbackStrategy = feedbackStrategy;
+      return this;
+    }
+
+    /** Sets the timeout for reporting a prolonged wait for an IDR access unit. */
+    @CanIgnoreReturnValue
+    public Builder setWaitingForIdrTimeoutMs(long waitingForIdrTimeoutMs) {
+      checkArgument(waitingForIdrTimeoutMs >= 0);
+      this.waitingForIdrTimeoutMs = waitingForIdrTimeoutMs;
       return this;
     }
 

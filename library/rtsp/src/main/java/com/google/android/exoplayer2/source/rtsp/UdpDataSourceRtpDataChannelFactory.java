@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.upstream.DataSourceUtil;
 import java.io.IOException;
 
@@ -31,6 +32,8 @@ import java.io.IOException;
 
   private final long socketTimeoutMs;
   private final boolean tcpFallbackEnabled;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
 
   /**
    * Creates a new instance.
@@ -39,12 +42,30 @@ import java.io.IOException;
    *     packets is treated as the end of input.
    */
   public UdpDataSourceRtpDataChannelFactory(long socketTimeoutMs) {
-    this(socketTimeoutMs, /* tcpFallbackEnabled= */ true);
+    this(
+        socketTimeoutMs,
+        /* tcpFallbackEnabled= */ true,
+        /* rtspDiagnosticsListener= */ null,
+        RtspBacklogRecoveryPolicy.DISABLED);
   }
 
   public UdpDataSourceRtpDataChannelFactory(long socketTimeoutMs, boolean tcpFallbackEnabled) {
+    this(
+        socketTimeoutMs,
+        tcpFallbackEnabled,
+        /* rtspDiagnosticsListener= */ null,
+        RtspBacklogRecoveryPolicy.DISABLED);
+  }
+
+  public UdpDataSourceRtpDataChannelFactory(
+      long socketTimeoutMs,
+      boolean tcpFallbackEnabled,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy) {
     this.socketTimeoutMs = socketTimeoutMs;
     this.tcpFallbackEnabled = tcpFallbackEnabled;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
   }
 
   @Override
@@ -83,7 +104,8 @@ import java.io.IOException;
   @Override
   public RtpDataChannel.Factory createFallbackDataChannelFactory() {
     return tcpFallbackEnabled
-        ? new TransferRtpDataChannelFactory(/* timeoutMs= */ socketTimeoutMs)
+        ? new TransferRtpDataChannelFactory(
+            /* timeoutMs= */ socketTimeoutMs, rtspDiagnosticsListener, rtspBacklogRecoveryPolicy)
         : null;
   }
 }

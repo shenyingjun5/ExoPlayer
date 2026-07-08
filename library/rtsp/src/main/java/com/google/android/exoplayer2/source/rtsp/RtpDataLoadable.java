@@ -82,6 +82,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
 
   @Nullable private RtpDataChannel dataChannel;
@@ -118,6 +119,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
         RtcpFeedbackPolicy.DEFAULT,
+        RtspBacklogRecoveryPolicy.DISABLED,
         /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
@@ -130,6 +132,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled) {
     this.trackId = trackId;
     this.rtspMediaTrack = rtspMediaTrack;
@@ -140,6 +143,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     pendingSeekPositionUs = C.TIME_UNSET;
   }
@@ -212,11 +216,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 rtspDiagnosticsListener,
                 rtcpFeedbackRequester,
                 rtcpFeedbackPolicy,
+                rtspBacklogRecoveryPolicy,
                 rtspPacketDiagnosticsEnabled);
         extractor.init(output);
       }
 
       while (!loadCancelled) {
+        maybeNotifyDataChannelDiscontinuity();
         if (pendingSeekPositionUs != C.TIME_UNSET) {
           checkNotNull(extractor).seek(nextRtpTimestamp, pendingSeekPositionUs);
           pendingSeekPositionUs = C.TIME_UNSET;
@@ -230,6 +236,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           // Loading is finished.
           break;
         }
+        maybeNotifyDataChannelDiscontinuity();
       }
       // Resets the flag if user cancels loading.
       loadCancelled = false;
@@ -260,5 +267,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   public void seekToUs(long positionUs, long nextRtpTimestamp) {
     pendingSeekPositionUs = positionUs;
     this.nextRtpTimestamp = nextRtpTimestamp;
+  }
+
+  private void maybeNotifyDataChannelDiscontinuity() {
+    if (dataChannel == null || extractor == null) {
+      return;
+    }
+    int discontinuityReason = dataChannel.getAndClearPendingDiscontinuityReason();
+    if (discontinuityReason != RtcpFeedbackReason.UNKNOWN) {
+      extractor.onRtpStreamDiscontinuity(discontinuityReason);
+    }
   }
 }

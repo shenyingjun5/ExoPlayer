@@ -61,6 +61,52 @@ public class TransferRtpDataChannelTest {
   }
 
   @Test
+  public void backlogRecoveryDisabled_doesNotFlushQueuedPackets() {
+    byte[] bytes1 = buildTestData(4);
+    byte[] bytes2 = buildTestData(4);
+    byte[] buffer = new byte[8];
+    TransferRtpDataChannel transferRtpDataChannel = new TransferRtpDataChannel(POLL_TIMEOUT_MS);
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(bytes1);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(bytes2);
+
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, buffer.length)).isEqualTo(4);
+    assertThat(Arrays.copyOfRange(buffer, /* from= */ 0, /* to= */ 4)).isEqualTo(bytes1);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, buffer.length)).isEqualTo(4);
+    assertThat(Arrays.copyOfRange(buffer, /* from= */ 0, /* to= */ 4)).isEqualTo(bytes2);
+    assertThat(transferRtpDataChannel.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+  }
+
+  @Test
+  public void backlogRecoveryEnabled_flushesWholeQueueAndSetsQueueReset() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(2)
+                .build());
+    byte[] buffer = new byte[8];
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, buffer.length))
+        .isEqualTo(C.RESULT_END_OF_INPUT);
+    assertThat(transferRtpDataChannel.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastStats.trackId).isEqualTo(3);
+    assertThat(diagnosticsListener.lastStats.transportMode)
+        .isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
+    assertThat(diagnosticsListener.lastStats.droppedPacketCount).isEqualTo(2);
+  }
+
+  @Test
   public void read_withSmallBufferEnoughBuffer_readsThreeTimes() {
     byte[] randomBytes = buildTestData(20);
     byte[] buffer = new byte[8];
@@ -168,5 +214,16 @@ public class TransferRtpDataChannelTest {
         .isEqualTo(
             Bytes.concat(
                 Arrays.copyOfRange(randomBytes1, /* from= */ 20, /* to= */ 40), randomBytes2));
+  }
+
+  private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {
+    public int backlogResetCount;
+    public RtspBacklogRecoveryStats lastStats;
+
+    @Override
+    public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
+      backlogResetCount++;
+      lastStats = backlogRecoveryStats;
+    }
   }
 }

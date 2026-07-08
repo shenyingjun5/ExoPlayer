@@ -88,6 +88,9 @@ public interface RtspDiagnosticsListener {
   /** Called when the RTP reordering queue is reset. */
   default void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {}
 
+  /** Called when a low-latency RTSP backlog queue is flushed or reset. */
+  default void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {}
+
   /** Called when an RTCP feedback request is blocked by policy. */
   default void onRtcpFeedbackThrottled(RtcpFeedbackRequest request) {}
 

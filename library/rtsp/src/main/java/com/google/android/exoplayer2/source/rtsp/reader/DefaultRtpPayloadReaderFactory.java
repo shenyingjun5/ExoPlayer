@@ -22,6 +22,7 @@ import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.source.rtsp.RtpPayloadFormat;
 import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackPolicy;
 import com.google.android.exoplayer2.source.rtsp.RtcpFeedbackRequester;
+import com.google.android.exoplayer2.source.rtsp.RtspBacklogRecoveryPolicy;
 import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
 import com.google.android.exoplayer2.util.MimeTypes;
 
@@ -53,6 +54,7 @@ import com.google.android.exoplayer2.util.MimeTypes;
         rtspDiagnosticsListener,
         /* rtcpFeedbackRequester= */ null,
         RtcpFeedbackPolicy.DEFAULT,
+        RtspBacklogRecoveryPolicy.DISABLED,
         /* h264AccessUnitDiagnosticsEnabled= */ false);
   }
 
@@ -60,13 +62,18 @@ import com.google.android.exoplayer2.util.MimeTypes;
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean h264AccessUnitDiagnosticsEnabled) {
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
     this.h264AccessUnitDiagnosticsEnabled = h264AccessUnitDiagnosticsEnabled;
-    h264LowLatencyRecoveryEnabled = rtcpFeedbackPolicy.isLowLatencyRecoveryEnabled();
+    h264LowLatencyRecoveryEnabled =
+        rtcpFeedbackPolicy.isLowLatencyRecoveryEnabled() || rtspBacklogRecoveryPolicy.isEnabled();
     rtcpFeedbackRequestsEnabled = rtcpFeedbackPolicy.canSendRtcpFeedback();
-    h264WaitingForIdrTimeoutMs = rtcpFeedbackPolicy.waitingForIdrTimeoutMs;
+    h264WaitingForIdrTimeoutMs =
+        rtspBacklogRecoveryPolicy.waitForIdrTimeoutMs > 0
+            ? rtspBacklogRecoveryPolicy.waitForIdrTimeoutMs
+            : rtcpFeedbackPolicy.waitingForIdrTimeoutMs;
   }
 
   @Override

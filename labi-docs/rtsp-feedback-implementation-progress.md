@@ -449,3 +449,67 @@ Cast-SDK integration value:
   - `com.zknowai.exoplayer:exoplayer-core:2.19.1-labi.8`
   - `com.zknowai.exoplayer:exoplayer-hls:2.19.1-labi.8`
   - `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.8`
+
+## Low-Latency Backlog Recovery Policy
+
+Status: Implemented locally; publication pending.
+
+Scope:
+
+- Add a low-latency-only backlog/recovery policy for self-owned RTSP live.
+- Keep ordinary RTSP default behavior unchanged:
+  `EXOPLAYER_DEFAULT + RtcpFeedbackPolicy.DEFAULT + listener null +
+  packet diagnostics false + RtspBacklogRecoveryPolicy.DISABLED`.
+- Do not add RTP hot-path logs, JSON, file IO, network IO, or blocking callbacks.
+- Do not do first-stage `SampleQueue` silent age drop. Source queue cleanup remains
+  a later controlled reset/rebuild task.
+
+Public API:
+
+- `RtspBacklogRecoveryPolicy`
+- `RtspBacklogRecoveryPolicy.DISABLED`
+- `RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT`
+- `RtspBacklogRecoveryPolicy.LOW_LATENCY`
+- `RtspMediaSource.Factory#setRtspBacklogRecoveryPolicy(RtspBacklogRecoveryPolicy)`
+- `RtspDiagnosticsListener#onRtspBacklogQueueReset(RtspBacklogRecoveryStats)`
+
+Cast-SDK reflection bridge shape:
+
+- Builder setters:
+  `setEnabled(boolean)`,
+  `setTcpInterleavedBacklogWarnMs(long)`,
+  `setTcpInterleavedBacklogResetMs(long)`,
+  `setTcpInterleavedBacklogResetPackets(int)`,
+  `setRtpReorderBacklogWarnMs(long)`,
+  `setRtpReorderBacklogResetMs(long)`,
+  `setRtpReorderBacklogResetPackets(int)`,
+  `setWaitForIdrTimeoutMs(long)`.
+- Default low-latency thresholds:
+  TCP interleaved `150ms warn / 300ms reset / 240 packets`,
+  RTP reorder `100ms warn / 200ms reset / 240 packets`,
+  WAIT_IDR timeout `800ms`.
+
+Implementation:
+
+- `TransferRtpDataChannel` tracks packet arrival time only when TCP backlog
+  recovery is explicitly enabled. When threshold is hit it flushes the whole
+  interleaved packet queue, reports one low-frequency diagnostics event, and
+  surfaces `QUEUE_RESET` to `RtpExtractor`.
+- `RtpPacketReorderingQueue` applies depth/age/span resets only when the policy
+  is enabled. Reset keeps the latest packet as the new continuity point, reports
+  a queue reset event, and does not send RTCP unless the existing RTCP policy
+  allows a requester.
+- `RtpExtractor` forwards queue/data-channel discontinuity to payload readers
+  when RTCP recovery policy or backlog recovery policy enables that behavior.
+- `DefaultRtpPayloadReaderFactory` enables H.264 WAIT_IDR/drop-until-idr for
+  backlog recovery without coupling it to RTCP sending.
+- `RtpH264Reader` no longer prints FU-A sequence malformed warnings directly;
+  recovery evidence goes through diagnostics instead of release hot-path logs.
+
+Verification:
+
+- Targeted RTSP tests passed:
+  `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.TransferRtpDataChannelTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`.
+- Full RTSP unit tests passed:
+  `:library-rtsp:testDebugUnitTest`.
+- `git diff --check`: passed.

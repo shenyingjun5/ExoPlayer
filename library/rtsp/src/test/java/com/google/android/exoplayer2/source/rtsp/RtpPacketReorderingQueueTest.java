@@ -18,6 +18,7 @@ package com.google.android.exoplayer2.source.rtsp;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import android.os.SystemClock;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import java.util.ArrayList;
 import java.util.List;
@@ -280,6 +281,92 @@ public class RtpPacketReorderingQueueTest {
   }
 
   @Test
+  public void backlogRecoveryDisabled_doesNotResetAtSmallDepth() {
+    RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
+    RtpPacket packet2 = makePacket(/* sequenceNumber= */ 2);
+
+    reorderingQueue.offer(packet1, /* receivedTimestampMs= */ 1);
+    reorderingQueue.offer(packet2, /* receivedTimestampMs= */ 2);
+
+    assertThat(reorderingQueue.getLastOfferDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet1);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet2);
+  }
+
+  @Test
+  public void backlogRecoveryWithDepthReset_setsQueueResetAndKeepsLatestPacket() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 2,
+            RtspTransportMode.UDP,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ true,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setRtpReorderBacklogResetPackets(2)
+                .build());
+    RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
+    RtpPacket packet2 = makePacket(/* sequenceNumber= */ 2);
+
+    queue.offer(packet1, /* receivedTimestampMs= */ 1);
+    queue.offer(packet2, /* receivedTimestampMs= */ 2);
+
+    assertThat(queue.getLastOfferDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet2);
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastBacklogStats.trackId).isEqualTo(2);
+    assertThat(diagnosticsListener.lastBacklogStats.droppedPacketCount).isEqualTo(1);
+  }
+
+  @Test
+  public void backlogRecoveryWithSpanReset_setsQueueReset() {
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 2,
+            RtspTransportMode.UDP,
+            /* rtspDiagnosticsListener= */ null,
+            /* rtcpFeedbackRequester= */ null,
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ true,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setRtpReorderBacklogResetMs(200)
+                .build());
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    queue.offer(makePacket(/* sequenceNumber= */ 2), /* receivedTimestampMs= */ 250);
+
+    assertThat(queue.getLastOfferDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+  }
+
+  @Test
+  public void backlogRecoveryWithAgeReset_setsQueueReset() {
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 2,
+            RtspTransportMode.UDP,
+            /* rtspDiagnosticsListener= */ null,
+            /* rtcpFeedbackRequester= */ null,
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ true,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setMaxRtpReorderQueueAgeMs(200)
+                .build());
+
+    queue.offer(
+        makePacket(/* sequenceNumber= */ 1), SystemClock.elapsedRealtime() - /* ageMs= */ 250);
+    queue.offer(
+        makePacket(/* sequenceNumber= */ 2), SystemClock.elapsedRealtime() - /* ageMs= */ 249);
+
+    assertThat(queue.getLastOfferDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+  }
+
+  @Test
   public void reorder_withLargerThanAllowedJumpInSequenceNumberAndWrapAround_resetsQueue() {
     RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
     RtpPacket packetWithSequenceNumberJump =
@@ -327,5 +414,16 @@ public class RtpPacketReorderingQueueTest {
 
   private static RtpPacket makePacket(int sequenceNumber) {
     return new RtpPacket.Builder().setSequenceNumber(sequenceNumber).build();
+  }
+
+  private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {
+    public int backlogResetCount;
+    public RtspBacklogRecoveryStats lastBacklogStats;
+
+    @Override
+    public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
+      backlogResetCount++;
+      lastBacklogStats = backlogRecoveryStats;
+    }
   }
 }

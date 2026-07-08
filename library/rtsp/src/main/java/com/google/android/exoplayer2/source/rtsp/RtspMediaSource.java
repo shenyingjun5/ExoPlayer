@@ -83,6 +83,7 @@ public final class RtspMediaSource extends BaseMediaSource {
     @Nullable private RtspDiagnosticsListener rtspDiagnosticsListener;
     @Nullable private RtspFeedbackListener rtspFeedbackListener;
     private RtcpFeedbackPolicy rtcpFeedbackPolicy;
+    private RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
     private boolean rtspPacketDiagnosticsEnabled;
 
     public Factory() {
@@ -90,6 +91,7 @@ public final class RtspMediaSource extends BaseMediaSource {
       userAgent = ExoPlayerLibraryInfo.VERSION_SLASHY;
       socketFactory = SocketFactory.getDefault();
       rtcpFeedbackPolicy = RtcpFeedbackPolicy.DEFAULT;
+      rtspBacklogRecoveryPolicy = RtspBacklogRecoveryPolicy.DISABLED;
       transportStrategy = RtspTransportStrategy.EXOPLAYER_DEFAULT;
     }
 
@@ -228,6 +230,22 @@ public final class RtspMediaSource extends BaseMediaSource {
     }
 
     /**
+     * Sets the low-latency RTSP backlog recovery policy.
+     *
+     * <p>The default value is {@link RtspBacklogRecoveryPolicy#DISABLED}, which preserves
+     * ExoPlayer's default RTSP behavior. This policy is independent from {@link RtcpFeedbackPolicy}
+     * and must only be enabled for trusted low-latency live sessions.
+     *
+     * @param policy The backlog recovery policy.
+     * @return This Factory, for convenience.
+     */
+    @CanIgnoreReturnValue
+    public Factory setRtspBacklogRecoveryPolicy(RtspBacklogRecoveryPolicy policy) {
+      this.rtspBacklogRecoveryPolicy = checkNotNull(policy);
+      return this;
+    }
+
+    /**
      * Sets the timeout in milliseconds, the default value is {@link #DEFAULT_TIMEOUT_MS}.
      *
      * <p>A positive number of milliseconds to wait before lack of received RTP packets is treated
@@ -274,15 +292,20 @@ public final class RtspMediaSource extends BaseMediaSource {
       return new RtspMediaSource(
           mediaItem,
           shouldUseTcp(mediaItem)
-              ? new TransferRtpDataChannelFactory(timeoutMs)
+              ? new TransferRtpDataChannelFactory(
+                  timeoutMs, rtspDiagnosticsListener, rtspBacklogRecoveryPolicy)
               : new UdpDataSourceRtpDataChannelFactory(
-                  timeoutMs, /* tcpFallbackEnabled= */ shouldAllowTcpFallback()),
+                  timeoutMs,
+                  /* tcpFallbackEnabled= */ shouldAllowTcpFallback(),
+                  rtspDiagnosticsListener,
+                  rtspBacklogRecoveryPolicy),
           userAgent,
           socketFactory,
           debugLoggingEnabled,
           rtspDiagnosticsListener,
           rtspFeedbackListener,
           rtcpFeedbackPolicy,
+          rtspBacklogRecoveryPolicy,
           rtspPacketDiagnosticsEnabled,
           transportStrategy);
     }
@@ -331,6 +354,7 @@ public final class RtspMediaSource extends BaseMediaSource {
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
   private final @RtspTransportStrategy.Strategy int transportStrategy;
   private final ArrayList<RtspMediaPeriod> activeMediaPeriods;
@@ -357,6 +381,7 @@ public final class RtspMediaSource extends BaseMediaSource {
         /* rtspDiagnosticsListener= */ null,
         /* rtspFeedbackListener= */ null,
         RtcpFeedbackPolicy.DEFAULT,
+        RtspBacklogRecoveryPolicy.DISABLED,
         /* rtspPacketDiagnosticsEnabled= */ false,
         RtspTransportStrategy.EXOPLAYER_DEFAULT);
   }
@@ -371,6 +396,7 @@ public final class RtspMediaSource extends BaseMediaSource {
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtspFeedbackListener rtspFeedbackListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled,
       @RtspTransportStrategy.Strategy int transportStrategy) {
     this.mediaItem = mediaItem;
@@ -382,6 +408,7 @@ public final class RtspMediaSource extends BaseMediaSource {
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
+    this.rtspBacklogRecoveryPolicy = checkNotNull(rtspBacklogRecoveryPolicy);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     this.transportStrategy = transportStrategy;
     this.activeMediaPeriods = new ArrayList<>();
@@ -414,32 +441,33 @@ public final class RtspMediaSource extends BaseMediaSource {
   public MediaPeriod createPeriod(MediaPeriodId id, Allocator allocator, long startPositionUs) {
     RtspMediaPeriod mediaPeriod =
         new RtspMediaPeriod(
-        allocator,
-        rtpDataChannelFactory,
-        uri,
-        new RtspMediaPeriod.Listener() {
-          @Override
-          public void onSourceInfoRefreshed(RtspSessionTiming timing) {
-            timelineDurationUs = Util.msToUs(timing.getDurationMs());
-            timelineIsSeekable = !timing.isLive();
-            timelineIsLive = timing.isLive();
-            timelineIsPlaceholder = false;
-            notifySourceInfoRefreshed();
-          }
+            allocator,
+            rtpDataChannelFactory,
+            uri,
+            new RtspMediaPeriod.Listener() {
+              @Override
+              public void onSourceInfoRefreshed(RtspSessionTiming timing) {
+                timelineDurationUs = Util.msToUs(timing.getDurationMs());
+                timelineIsSeekable = !timing.isLive();
+                timelineIsLive = timing.isLive();
+                timelineIsPlaceholder = false;
+                notifySourceInfoRefreshed();
+              }
 
-          @Override
-          public void onSeekingUnsupported() {
-            timelineIsSeekable = false;
-            notifySourceInfoRefreshed();
-          }
-        },
-        userAgent,
-        socketFactory,
-        debugLoggingEnabled,
-        rtspDiagnosticsListener,
-        rtspFeedbackListener,
-        rtcpFeedbackPolicy,
-        rtspPacketDiagnosticsEnabled);
+              @Override
+              public void onSeekingUnsupported() {
+                timelineIsSeekable = false;
+                notifySourceInfoRefreshed();
+              }
+            },
+            userAgent,
+            socketFactory,
+            debugLoggingEnabled,
+            rtspDiagnosticsListener,
+            rtspFeedbackListener,
+            rtcpFeedbackPolicy,
+            rtspBacklogRecoveryPolicy,
+            rtspPacketDiagnosticsEnabled);
     synchronized (activeMediaPeriodsLock) {
       activeMediaPeriods.add(mediaPeriod);
     }
@@ -526,6 +554,11 @@ public final class RtspMediaSource extends BaseMediaSource {
   @VisibleForTesting
   /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
     return rtcpFeedbackPolicy;
+  }
+
+  @VisibleForTesting
+  /* package */ RtspBacklogRecoveryPolicy getRtspBacklogRecoveryPolicy() {
+    return rtspBacklogRecoveryPolicy;
   }
 
   @VisibleForTesting

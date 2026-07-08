@@ -53,6 +53,7 @@ import java.util.TreeSet;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final int sequenceGapRequestThreshold;
   private final boolean requestKeyFrameOnQueueReset;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -85,7 +86,8 @@ import java.util.TreeSet;
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
         /* sequenceGapRequestThreshold= */ 0,
-        /* requestKeyFrameOnQueueReset= */ false);
+        /* requestKeyFrameOnQueueReset= */ false,
+        RtspBacklogRecoveryPolicy.DISABLED);
   }
 
   /** Creates an instance. */
@@ -96,12 +98,32 @@ import java.util.TreeSet;
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
       int sequenceGapRequestThreshold,
       boolean requestKeyFrameOnQueueReset) {
+    this(
+        trackId,
+        transportMode,
+        rtspDiagnosticsListener,
+        rtcpFeedbackRequester,
+        sequenceGapRequestThreshold,
+        requestKeyFrameOnQueueReset,
+        RtspBacklogRecoveryPolicy.DISABLED);
+  }
+
+  /** Creates an instance. */
+  public RtpPacketReorderingQueue(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      int sequenceGapRequestThreshold,
+      boolean requestKeyFrameOnQueueReset,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
     this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
     this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
@@ -176,7 +198,9 @@ import java.util.TreeSet;
       }
       if (calculateSequenceNumberShift(packetSequenceNumber, lastDequeuedSequenceNumber) > 0) {
         // Add the packet in the queue only if a succeeding packet has not been dequeued already.
-        addToQueue(new RtpPacketContainer(packet, receivedTimestampMs));
+        RtpPacketContainer packetContainer = new RtpPacketContainer(packet, receivedTimestampMs);
+        addToQueue(packetContainer);
+        maybeResetQueueForBacklog(packetContainer);
         return true;
       }
     } else {
@@ -255,6 +279,53 @@ import java.util.TreeSet;
     if (!packetQueue.add(packet)) {
       duplicatePacketCount++;
     }
+  }
+
+  private void maybeResetQueueForBacklog(RtpPacketContainer latestPacket) {
+    if (!rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled()) {
+      return;
+    }
+    int queueDepth = packetQueue.size();
+    long oldestPacketAgeMs = getOldestPacketAgeMs();
+    long queueSpanMs = getQueueSpanMs();
+    if (!shouldResetQueueForBacklog(queueDepth, oldestPacketAgeMs, queueSpanMs)) {
+      return;
+    }
+    resetCount++;
+    int droppedPacketCount = Math.max(0, queueDepth - 1);
+    packetQueue.clear();
+    lastDequeuedSequenceNumber =
+        RtpPacket.getPreviousSequenceNumber(latestPacket.packet.sequenceNumber);
+    packetQueue.add(latestPacket);
+    lastReceivedSequenceNumber = latestPacket.packet.sequenceNumber;
+    lastReceivedTimestampMs = latestPacket.receivedTimestampMs;
+    lastOfferDiscontinuityReason = RtcpFeedbackReason.QUEUE_RESET;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(/* sequenceGap= */ 0));
+      rtspDiagnosticsListener.onRtspBacklogQueueReset(
+          new RtspBacklogRecoveryStats(
+              trackId,
+              transportMode,
+              RtcpFeedbackReason.QUEUE_RESET,
+              queueDepth,
+              droppedPacketCount,
+              oldestPacketAgeMs,
+              queueSpanMs,
+              SystemClock.elapsedRealtime()));
+    }
+    if (requestKeyFrameOnQueueReset && rtcpFeedbackRequester != null) {
+      rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
+    }
+  }
+
+  private boolean shouldResetQueueForBacklog(
+      int queueDepth, long oldestPacketAgeMs, long queueSpanMs) {
+    return (rtspBacklogRecoveryPolicy.maxRtpReorderQueueDepth > 0
+            && queueDepth >= rtspBacklogRecoveryPolicy.maxRtpReorderQueueDepth)
+        || (rtspBacklogRecoveryPolicy.maxRtpReorderQueueAgeMs > 0
+            && oldestPacketAgeMs >= rtspBacklogRecoveryPolicy.maxRtpReorderQueueAgeMs)
+        || (rtspBacklogRecoveryPolicy.maxRtpReorderQueueSpanMs > 0
+            && queueSpanMs >= rtspBacklogRecoveryPolicy.maxRtpReorderQueueSpanMs);
   }
 
   private long getOldestPacketAgeMs() {

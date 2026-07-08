@@ -33,7 +33,6 @@ import com.google.android.exoplayer2.source.rtsp.RtspH264AccessUnitReadyStats;
 import com.google.android.exoplayer2.source.rtsp.RtspDiagnosticsListener;
 import com.google.android.exoplayer2.source.rtsp.RtspH264AccessUnitStats;
 import com.google.android.exoplayer2.source.rtsp.RtspH264RecoveryStats;
-import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.NalUnitUtil;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.android.exoplayer2.util.Util;
@@ -51,8 +50,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
  */
 @Deprecated
 /* package */ final class RtpH264Reader implements RtpPayloadReader {
-  private static final String TAG = "RtpH264Reader";
-
   private static final int MEDIA_CLOCK_FREQUENCY = 90_000;
 
   /** Offset of payload data within a FU type A payload. */
@@ -446,12 +443,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       int expectedSequenceNumber = RtpPacket.getNextSequenceNumber(previousSequenceNumber);
       if (packetSequenceNumber != expectedSequenceNumber) {
         markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
-        Log.w(
-            TAG,
-            Util.formatInvariant(
-                "Received RTP packet with unexpected sequence number. Expected: %d; received: %d."
-                    + " Dropping packet.",
-                expectedSequenceNumber, packetSequenceNumber));
         return;
       }
 

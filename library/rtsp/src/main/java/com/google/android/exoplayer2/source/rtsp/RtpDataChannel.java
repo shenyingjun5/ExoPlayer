@@ -76,4 +76,9 @@ import java.io.IOException;
   default boolean sendRtcpPacket(byte[] packet) throws IOException {
     return false;
   }
+
+  /** Returns and clears a pending RTP stream discontinuity reason, if the channel generated one. */
+  default @RtcpFeedbackReason.Reason int getAndClearPendingDiscontinuityReason() {
+    return RtcpFeedbackReason.UNKNOWN;
+  }
 }

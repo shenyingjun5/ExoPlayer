@@ -99,6 +99,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener forwardingRtspDiagnosticsListener;
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
   private final Object sampleRtpTimestampMappingsLock;
   private final ArrayList<SampleRtpTimestampMapping> sampleRtpTimestampMappings;
@@ -149,6 +150,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         /* rtspDiagnosticsListener= */ null,
         /* rtspFeedbackListener= */ null,
         RtcpFeedbackPolicy.DEFAULT,
+        RtspBacklogRecoveryPolicy.DISABLED,
         /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
@@ -163,6 +165,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtspFeedbackListener rtspFeedbackListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled) {
     this.allocator = allocator;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
@@ -172,6 +175,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         rtspDiagnosticsListener == null ? null : new ForwardingRtspDiagnosticsListener();
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
+    this.rtspBacklogRecoveryPolicy = checkNotNull(rtspBacklogRecoveryPolicy);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     sampleRtpTimestampMappingsLock = new Object();
     sampleRtpTimestampMappings = new ArrayList<>();
@@ -207,6 +211,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /* package */ RtcpFeedbackPolicy getRtcpFeedbackPolicy() {
     return rtcpFeedbackPolicy;
+  }
+
+  /* package */ RtspBacklogRecoveryPolicy getRtspBacklogRecoveryPolicy() {
+    return rtspBacklogRecoveryPolicy;
   }
 
   /* package */ boolean getRtspPacketDiagnosticsEnabled() {
@@ -751,6 +759,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     @Override
+    public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtspBacklogQueueReset(backlogRecoveryStats);
+    }
+
+    @Override
     public void onRtcpFeedbackThrottled(RtcpFeedbackRequest request) {
       checkNotNull(rtspDiagnosticsListener).onRtcpFeedbackThrottled(request);
     }
@@ -1223,6 +1236,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               forwardingRtspDiagnosticsListener,
               this::requestKeyFrame,
               rtcpFeedbackPolicy,
+              rtspBacklogRecoveryPolicy,
               rtspPacketDiagnosticsEnabled);
     }
 

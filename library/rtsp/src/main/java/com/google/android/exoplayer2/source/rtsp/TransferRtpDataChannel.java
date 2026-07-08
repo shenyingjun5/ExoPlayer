@@ -15,11 +15,13 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkState;
 import static java.lang.Math.min;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import android.net.Uri;
+import android.os.SystemClock;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.source.rtsp.RtspMessageChannel.InterleavedBinaryDataListener;
@@ -45,10 +47,17 @@ import java.util.concurrent.LinkedBlockingQueue;
       "RTP/AVP/TCP;unicast;interleaved=%d-%d";
 
   private final LinkedBlockingQueue<byte[]> packetQueue;
+  @Nullable private final LinkedBlockingQueue<Long> packetArrivalElapsedRealtimeMsQueue;
+  private final int trackId;
   private final long pollTimeoutMs;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
 
   private byte[] unreadData;
   private int channelNumber;
+  private long lastPacketArrivalElapsedRealtimeMs;
+  private volatile boolean clearUnreadDataOnNextRead;
+  private volatile @RtcpFeedbackReason.Reason int pendingDiscontinuityReason;
 
   /**
    * Creates a new instance.
@@ -57,11 +66,34 @@ import java.util.concurrent.LinkedBlockingQueue;
    *     available. After the time has expired, {@link C#RESULT_END_OF_INPUT} is returned.
    */
   public TransferRtpDataChannel(long pollTimeoutMs) {
+    this(
+        /* trackId= */ C.INDEX_UNSET,
+        pollTimeoutMs,
+        /* rtspDiagnosticsListener= */ null,
+        RtspBacklogRecoveryPolicy.DISABLED);
+  }
+
+  /** Creates a new instance. */
+  public TransferRtpDataChannel(
+      int trackId,
+      long pollTimeoutMs,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy) {
     super(/* isNetwork= */ true);
+    this.trackId = trackId;
     this.pollTimeoutMs = pollTimeoutMs;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     packetQueue = new LinkedBlockingQueue<>();
+    packetArrivalElapsedRealtimeMsQueue =
+        rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled()
+            ? new LinkedBlockingQueue<>()
+            : null;
     unreadData = new byte[0];
     channelNumber = C.INDEX_UNSET;
+    lastPacketArrivalElapsedRealtimeMs = C.TIME_UNSET;
+    clearUnreadDataOnNextRead = false;
+    pendingDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
   }
 
   @Override
@@ -107,6 +139,10 @@ import java.util.concurrent.LinkedBlockingQueue;
       return 0;
     }
 
+    if (clearUnreadDataOnNextRead) {
+      unreadData = new byte[0];
+      clearUnreadDataOnNextRead = false;
+    }
     int bytesRead = 0;
     int bytesToRead = min(length, unreadData.length);
     System.arraycopy(unreadData, /* srcPos= */ 0, buffer, offset, bytesToRead);
@@ -123,6 +159,9 @@ import java.util.concurrent.LinkedBlockingQueue;
       if (data == null) {
         return C.RESULT_END_OF_INPUT;
       }
+      if (packetArrivalElapsedRealtimeMsQueue != null) {
+        packetArrivalElapsedRealtimeMsQueue.poll();
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return C.RESULT_END_OF_INPUT;
@@ -138,6 +177,71 @@ import java.util.concurrent.LinkedBlockingQueue;
 
   @Override
   public void onInterleavedBinaryDataReceived(byte[] data) {
+    if (packetArrivalElapsedRealtimeMsQueue == null) {
+      packetQueue.add(data);
+      return;
+    }
+    long arrivalElapsedRealtimeMs = SystemClock.elapsedRealtime();
     packetQueue.add(data);
+    packetArrivalElapsedRealtimeMsQueue.add(arrivalElapsedRealtimeMs);
+    lastPacketArrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
+    maybeFlushBacklog(arrivalElapsedRealtimeMs);
+  }
+
+  @Override
+  public @RtcpFeedbackReason.Reason int getAndClearPendingDiscontinuityReason() {
+    int reason = pendingDiscontinuityReason;
+    pendingDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
+    return reason;
+  }
+
+  private void maybeFlushBacklog(long nowElapsedRealtimeMs) {
+    int queueDepth = packetQueue.size();
+    long oldestPacketAgeMs = getOldestPacketAgeMs(nowElapsedRealtimeMs);
+    long queueSpanMs = getQueueSpanMs();
+    if (!shouldFlushBacklog(queueDepth, oldestPacketAgeMs)) {
+      return;
+    }
+    int droppedPacketCount = queueDepth;
+    packetQueue.clear();
+    checkNotNull(packetArrivalElapsedRealtimeMsQueue).clear();
+    clearUnreadDataOnNextRead = true;
+    pendingDiscontinuityReason = RtcpFeedbackReason.QUEUE_RESET;
+    if (rtspDiagnosticsListener != null) {
+      rtspDiagnosticsListener.onRtspBacklogQueueReset(
+          new RtspBacklogRecoveryStats(
+              trackId,
+              RtspTransportMode.TCP_INTERLEAVED,
+              RtcpFeedbackReason.QUEUE_RESET,
+              queueDepth,
+              droppedPacketCount,
+              oldestPacketAgeMs,
+              queueSpanMs,
+              nowElapsedRealtimeMs));
+    }
+  }
+
+  private boolean shouldFlushBacklog(int queueDepth, long oldestPacketAgeMs) {
+    return (rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth > 0
+            && queueDepth >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth)
+        || (rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs > 0
+            && oldestPacketAgeMs >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs);
+  }
+
+  private long getOldestPacketAgeMs(long nowElapsedRealtimeMs) {
+    @Nullable Long oldestPacketArrivalElapsedRealtimeMs =
+        checkNotNull(packetArrivalElapsedRealtimeMsQueue).peek();
+    return oldestPacketArrivalElapsedRealtimeMs == null
+        ? 0
+        : Math.max(0, nowElapsedRealtimeMs - oldestPacketArrivalElapsedRealtimeMs);
+  }
+
+  private long getQueueSpanMs() {
+    @Nullable Long oldestPacketArrivalElapsedRealtimeMs =
+        checkNotNull(packetArrivalElapsedRealtimeMsQueue).peek();
+    return oldestPacketArrivalElapsedRealtimeMs == null
+            || lastPacketArrivalElapsedRealtimeMs == C.TIME_UNSET
+        ? 0
+        : Math.max(0, lastPacketArrivalElapsedRealtimeMs - oldestPacketArrivalElapsedRealtimeMs);
   }
 }

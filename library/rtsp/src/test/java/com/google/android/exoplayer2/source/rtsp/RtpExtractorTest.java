@@ -104,6 +104,41 @@ public final class RtpExtractorTest {
     assertThat(diagnosticsListener.packetReceivedCount).isEqualTo(0);
   }
 
+  @Test
+  public void dataChannelQueueResetWithBacklogPolicyEnabled_entersWaitForIdr() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(2)
+                .build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.init(createExtractorOutput());
+    extractor.onRtpStreamDiscontinuity(RtcpFeedbackReason.QUEUE_RESET);
+
+    assertThat(diagnosticsListener.waitForIdrStartedCount).isEqualTo(1);
+  }
+
+  @Test
+  public void dataChannelQueueResetWithBacklogPolicyDisabled_doesNotEnterWaitForIdr() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            RtspBacklogRecoveryPolicy.DISABLED,
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.init(createExtractorOutput());
+    extractor.onRtpStreamDiscontinuity(RtcpFeedbackReason.QUEUE_RESET);
+
+    assertThat(diagnosticsListener.waitForIdrStartedCount).isEqualTo(0);
+  }
+
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener, boolean rtspPacketDiagnosticsEnabled) {
     return createExtractor(
@@ -113,6 +148,18 @@ public final class RtpExtractorTest {
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
+    return createExtractor(
+        diagnosticsListener,
+        rtcpFeedbackPolicy,
+        RtspBacklogRecoveryPolicy.DISABLED,
+        rtspPacketDiagnosticsEnabled);
+  }
+
+  private static RtpExtractor createExtractor(
+      RtspDiagnosticsListener diagnosticsListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled) {
     return new RtpExtractor(
         new RtpPayloadFormat(
@@ -126,6 +173,7 @@ public final class RtpExtractorTest {
         diagnosticsListener,
         /* rtcpFeedbackRequester= */ null,
         rtcpFeedbackPolicy,
+        rtspBacklogRecoveryPolicy,
         rtspPacketDiagnosticsEnabled);
   }
 

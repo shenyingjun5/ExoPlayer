@@ -52,6 +52,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
   private final boolean payloadReaderDiscontinuityNotificationsEnabled;
   private final Object lock;
@@ -80,6 +81,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         /* rtspDiagnosticsListener= */ null,
         /* rtcpFeedbackRequester= */ null,
         RtcpFeedbackPolicy.DEFAULT,
+        RtspBacklogRecoveryPolicy.DISABLED,
         /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
@@ -90,16 +92,19 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     payloadReaderDiscontinuityNotificationsEnabled =
         rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
-            || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset;
+            || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset
+            || rtspBacklogRecoveryPolicy.isEnabled();
 
     payloadReader =
         checkNotNull(
@@ -107,6 +112,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                     rtspDiagnosticsListener,
                     this.rtcpFeedbackRequester,
                     rtcpFeedbackPolicy,
+                    rtspBacklogRecoveryPolicy,
                     rtspPacketDiagnosticsEnabled)
                 .createPayloadReader(payloadFormat));
     rtpPacketScratchBuffer = new ParsableByteArray(RtpPacket.MAX_SIZE);
@@ -119,7 +125,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             rtspDiagnosticsListener,
             this.rtcpFeedbackRequester,
             rtcpFeedbackPolicy.sequenceGapRequestThreshold,
-            rtcpFeedbackPolicy.requestKeyFrameOnQueueReset);
+            rtcpFeedbackPolicy.requestKeyFrameOnQueueReset,
+            rtspBacklogRecoveryPolicy);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;
@@ -218,7 +225,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (payloadReaderDiscontinuityNotificationsEnabled) {
       int discontinuityReason = reorderingQueue.getLastOfferDiscontinuityReason();
       if (discontinuityReason != RtcpFeedbackReason.UNKNOWN) {
-        payloadReader.onRtpStreamDiscontinuity(discontinuityReason);
+        onRtpStreamDiscontinuity(discontinuityReason);
       }
     }
     @Nullable RtpPacket dequeuedPacket = reorderingQueue.poll(packetCutoffTimeMs);
@@ -276,6 +283,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       }
     }
     return RESULT_CONTINUE;
+  }
+
+  public void onRtpStreamDiscontinuity(@RtcpFeedbackReason.Reason int reason) {
+    if (payloadReaderDiscontinuityNotificationsEnabled) {
+      payloadReader.onRtpStreamDiscontinuity(reason);
+    }
   }
 
   @Override

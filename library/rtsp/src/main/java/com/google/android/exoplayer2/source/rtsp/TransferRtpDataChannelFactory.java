@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import androidx.annotation.Nullable;
+
 /**
  * Factory for {@link TransferRtpDataChannel}.
  *
@@ -29,6 +31,8 @@ package com.google.android.exoplayer2.source.rtsp;
   private static final int INTERLEAVED_CHANNELS_PER_TRACK = 2;
 
   private final long timeoutMs;
+  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
 
   /**
    * Creates a new instance.
@@ -37,12 +41,26 @@ package com.google.android.exoplayer2.source.rtsp;
    *     is treated as the end of input.
    */
   public TransferRtpDataChannelFactory(long timeoutMs) {
+    this(
+        timeoutMs,
+        /* rtspDiagnosticsListener= */ null,
+        RtspBacklogRecoveryPolicy.DISABLED);
+  }
+
+  public TransferRtpDataChannelFactory(
+      long timeoutMs,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy) {
     this.timeoutMs = timeoutMs;
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
+    this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
   }
 
   @Override
   public RtpDataChannel createAndOpenDataChannel(int trackId) {
-    TransferRtpDataChannel dataChannel = new TransferRtpDataChannel(timeoutMs);
+    TransferRtpDataChannel dataChannel =
+        new TransferRtpDataChannel(
+            trackId, timeoutMs, rtspDiagnosticsListener, rtspBacklogRecoveryPolicy);
     dataChannel.open(RtpUtils.getIncomingRtpDataSpec(trackId * INTERLEAVED_CHANNELS_PER_TRACK));
     return dataChannel;
   }

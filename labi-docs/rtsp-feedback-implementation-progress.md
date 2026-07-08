@@ -369,3 +369,83 @@ Publication target:
 - version: `2.19.1-labi.7`
 - release tag: `exoplayer-rtsp-2.19.1-labi.7`
 - artifact scope: normal full Maven publication under `com.zknowai.exoplayer`.
+
+## `2.19.1-labi.8` RTSP Transport Strategy Release
+
+Status: Published.
+
+Release inputs:
+
+- source branch: `labi-rtsp-feedback-exoplayer-2.19.1`
+- source commit: `36eea9b5b60bc88547ebace0d80811740286f4ca`
+- version: `2.19.1-labi.8`
+- release tag: unchanged for this test release, per Cast-SDK request.
+- Pages repo root: `https://shenyingjun5.github.io/ExoPlayer/`
+- gh-pages commit: `c502f85fcfa71ea28bccd3d58d9ab1da7a4fb566`
+
+Scope:
+
+- Publish formal Maven artifacts for Cast-SDK verified RTSP transport strategy API:
+  `RtspMediaSource.Factory#setRtspTransportStrategy(int)`,
+  `RtspTransportStrategy`, `RtspTransportFallbackStats`,
+  `RtspTransportFallbackReason`, and
+  `RtspDiagnosticsListener#onTransportFallback(...)`.
+- Publish the normal full artifact set required by Cast-SDK:
+  `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
+  `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`,
+  `exoplayer-core`, `exoplayer-hls`, and `exoplayer-rtsp`.
+- Do not introduce Cast-SDK types into ExoPlayer artifacts.
+- Preserve ordinary RTSP default behavior: `EXOPLAYER_DEFAULT` remains UDP-first
+  with TCP fallback; diagnostics remain opt-in.
+
+Publication:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew -PreleaseVersionOverride=2.19.1-labi.8 -PmavenRepo=/private/tmp/exoplayer-gh-pages :library-common:publishReleasePublicationToMavenRepository :library-container:publishReleasePublicationToMavenRepository :library-database:publishReleasePublicationToMavenRepository :library-datasource:publishReleasePublicationToMavenRepository :library-decoder:publishReleasePublicationToMavenRepository :library-extractor:publishReleasePublicationToMavenRepository :library-core:publishReleasePublicationToMavenRepository :library-hls:publishReleasePublicationToMavenRepository :library-rtsp:publishReleasePublicationToMavenRepository
+```
+
+Normal publish result:
+
+- Failed at `:library-core:testReleaseUnitTest` with the known upstream async timeout tests:
+  `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`.
+- The same timeout class was already recorded in the release process and is not
+  caused by the RTSP transport strategy API.
+
+Final artifact publish command:
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew -PreleaseVersionOverride=2.19.1-labi.8 -PmavenRepo=/private/tmp/exoplayer-gh-pages :library-common:publishReleasePublicationToMavenRepository :library-container:publishReleasePublicationToMavenRepository :library-database:publishReleasePublicationToMavenRepository :library-datasource:publishReleasePublicationToMavenRepository :library-decoder:publishReleasePublicationToMavenRepository :library-extractor:publishReleasePublicationToMavenRepository :library-core:publishReleasePublicationToMavenRepository :library-hls:publishReleasePublicationToMavenRepository :library-rtsp:publishReleasePublicationToMavenRepository -x lint -x test -x testDebugUnitTest -x testReleaseUnitTest
+```
+
+Final artifact publish result: passed.
+
+Verification:
+
+- `maven-metadata.xml` for `exoplayer-core`, `exoplayer-hls`, and
+  `exoplayer-rtsp` has `latest/release` set to `2.19.1-labi.8`.
+- HTTP checks returned `200`:
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-core/2.19.1-labi.8/exoplayer-core-2.19.1-labi.8.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-hls/2.19.1-labi.8/exoplayer-hls-2.19.1-labi.8.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.8/exoplayer-rtsp-2.19.1-labi.8.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.8/exoplayer-rtsp-2.19.1-labi.8.aar`
+- Remote `exoplayer-rtsp-2.19.1-labi.8.aar` `classes.jar` contains:
+  - `com/google/android/exoplayer2/source/rtsp/RtspTransportStrategy.class`
+  - `com/google/android/exoplayer2/source/rtsp/RtspTransportFallbackStats.class`
+  - `com/google/android/exoplayer2/source/rtsp/RtspTransportFallbackReason.class`
+  - `com/google/android/exoplayer2/source/rtsp/RtspDiagnosticsListener.class`
+- Remote `exoplayer-rtsp-2.19.1-labi.8.aar` class list has no Cast-SDK package match.
+- SHA-256:
+  - RTSP AAR: `1baab928361874d106530059d65362a3df38b07ce9b3dcba1eb2c987d14f3102`
+  - RTSP POM: `7fcd964abdd2cbc454efcfaee27db3040ae64a8f988372544ed3c96b2e6e3eaa`
+  - Core POM: `eb6e9d4e4efeeb074fcc5f3b9c9a0233365b57bffa25fe16d4d4ed88bf9e8ac0`
+  - HLS POM: `adfb804b8a064ad37b59ad5c509ce643a8818584d0d8734fe7050bd5a48caaf2`
+
+Cast-SDK integration value:
+
+- Maven repository: `https://shenyingjun5.github.io/ExoPlayer/`
+- Gradle version to consume: `2.19.1-labi.8`
+- Main coordinates:
+  - `com.zknowai.exoplayer:exoplayer-core:2.19.1-labi.8`
+  - `com.zknowai.exoplayer:exoplayer-hls:2.19.1-labi.8`
+  - `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.8`

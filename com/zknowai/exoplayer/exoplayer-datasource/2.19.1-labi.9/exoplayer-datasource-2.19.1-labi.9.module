@@ -1,0 +1,81 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.zknowai.exoplayer",
+    "module": "exoplayer-datasource",
+    "version": "2.19.1-labi.9",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "7.4.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "exoplayer-datasource-2.19.1-labi.9.aar",
+          "url": "exoplayer-datasource-2.19.1-labi.9.aar",
+          "size": 145190,
+          "sha512": "05a50fe33faea7d58d95d6e56a5e39cbec8b6527e99f3310376ed6ba087924a1e7a605f711fe52c1f04d411f82fc354034922b4f42e48799ab32a3e3e2477a70",
+          "sha256": "c4d1bd00cf928b3b43c9e697e24c64c09e32d533417178941b57a9362ff0d06f",
+          "sha1": "23955aa54f62deabf17afe6dfa08344411a02daf",
+          "md5": "b60e6e0ed862d3b75733c15113715913"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-common",
+          "version": {
+            "requires": "2.19.1-labi.9"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-database",
+          "version": {
+            "requires": "2.19.1-labi.9"
+          }
+        },
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.3.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-datasource-2.19.1-labi.9.aar",
+          "url": "exoplayer-datasource-2.19.1-labi.9.aar",
+          "size": 145190,
+          "sha512": "05a50fe33faea7d58d95d6e56a5e39cbec8b6527e99f3310376ed6ba087924a1e7a605f711fe52c1f04d411f82fc354034922b4f42e48799ab32a3e3e2477a70",
+          "sha256": "c4d1bd00cf928b3b43c9e697e24c64c09e32d533417178941b57a9362ff0d06f",
+          "sha1": "23955aa54f62deabf17afe6dfa08344411a02daf",
+          "md5": "b60e6e0ed862d3b75733c15113715913"
+        }
+      ]
+    }
+  ]
+}

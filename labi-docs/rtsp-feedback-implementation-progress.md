@@ -526,9 +526,16 @@ Release:
   `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
   `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`,
   `exoplayer-core`, `exoplayer-hls`, and `exoplayer-rtsp`.
-- local `maven-metadata.xml` for `exoplayer-core`, `exoplayer-hls`, and
-  `exoplayer-rtsp` has `latest/release` set to `2.19.1-labi.9`.
-- local `exoplayer-rtsp-2.19.1-labi.9.aar` `classes.jar` contains:
+- remote HTTP checks returned `200`:
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-core/2.19.1-labi.9/exoplayer-core-2.19.1-labi.9.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-hls/2.19.1-labi.9/exoplayer-hls-2.19.1-labi.9.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.9/exoplayer-rtsp-2.19.1-labi.9.pom`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.9/exoplayer-rtsp-2.19.1-labi.9.aar`
+- remote `maven-metadata.xml` for `exoplayer-rtsp` has `latest/release`
+  set to `2.19.1-labi.9`; local metadata for `exoplayer-core`,
+  `exoplayer-hls`, and `exoplayer-rtsp` also has `latest/release` set to
+  `2.19.1-labi.9`.
+- remote `exoplayer-rtsp-2.19.1-labi.9.aar` `classes.jar` contains:
   `RtspBacklogRecoveryPolicy.class`,
   `RtspBacklogRecoveryPolicy$Builder.class`,
   `RtspBacklogRecoveryStats.class`,
@@ -540,7 +547,7 @@ Release:
   `RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT`,
   `RtspBacklogRecoveryPolicy.LOW_LATENCY`,
   and the Cast-SDK bridge Builder setter names.
-- local RTSP AAR class list has no Cast-SDK package match.
+- remote RTSP AAR class list has no Cast-SDK package match.
 - SHA-256:
   - RTSP AAR:
     `beef715b3fadfdf5b4409e1396ff5818208321ea2b6bdb7427d2aa99d46f1d7f`

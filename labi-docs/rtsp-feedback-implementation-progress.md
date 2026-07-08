@@ -452,7 +452,7 @@ Cast-SDK integration value:
 
 ## Low-Latency Backlog Recovery Policy
 
-Status: Implemented locally; publication pending.
+Status: Published as `2.19.1-labi.9`.
 
 Scope:
 
@@ -512,4 +512,41 @@ Verification:
   `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.TransferRtpDataChannelTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`.
 - Full RTSP unit tests passed:
   `:library-rtsp:testDebugUnitTest`.
+- Release AAR build passed:
+  `:library-rtsp:assembleRelease`.
 - `git diff --check`: passed.
+
+Release:
+
+- version: `2.19.1-labi.9`
+- source commit: `4535baa41d516b86a4efeee9942c34570ccab96d`
+- Pages repo root: `https://shenyingjun5.github.io/ExoPlayer/`
+- gh-pages commit: `587d14cdc1`
+- published modules:
+  `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
+  `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`,
+  `exoplayer-core`, `exoplayer-hls`, and `exoplayer-rtsp`.
+- local `maven-metadata.xml` for `exoplayer-core`, `exoplayer-hls`, and
+  `exoplayer-rtsp` has `latest/release` set to `2.19.1-labi.9`.
+- local `exoplayer-rtsp-2.19.1-labi.9.aar` `classes.jar` contains:
+  `RtspBacklogRecoveryPolicy.class`,
+  `RtspBacklogRecoveryPolicy$Builder.class`,
+  `RtspBacklogRecoveryStats.class`,
+  `RtspDiagnosticsListener.class`, and
+  `RtspMediaSource$Factory.class`.
+- `javap` confirmed:
+  `RtspMediaSource.Factory#setRtspBacklogRecoveryPolicy(RtspBacklogRecoveryPolicy)`,
+  `RtspBacklogRecoveryPolicy.DISABLED`,
+  `RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT`,
+  `RtspBacklogRecoveryPolicy.LOW_LATENCY`,
+  and the Cast-SDK bridge Builder setter names.
+- local RTSP AAR class list has no Cast-SDK package match.
+- SHA-256:
+  - RTSP AAR:
+    `beef715b3fadfdf5b4409e1396ff5818208321ea2b6bdb7427d2aa99d46f1d7f`
+  - RTSP POM:
+    `7cf830492ab097d3787efb5cc8a2e646334eb47d173b493747f37b683510666c`
+  - Core POM:
+    `770dd39eaf1e779d447c05a43187d109bd9b4f0ea1de5c7efafbd48790223a03`
+  - HLS POM:
+    `b963e412c01008129f3a59374dc5c4a9fde250198e43896eb195bfc235b8a36c`

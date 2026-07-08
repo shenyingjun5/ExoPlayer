@@ -30,6 +30,7 @@ import java.io.IOException;
 /* package */ final class UdpDataSourceRtpDataChannelFactory implements RtpDataChannel.Factory {
 
   private final long socketTimeoutMs;
+  private final boolean tcpFallbackEnabled;
 
   /**
    * Creates a new instance.
@@ -38,7 +39,12 @@ import java.io.IOException;
    *     packets is treated as the end of input.
    */
   public UdpDataSourceRtpDataChannelFactory(long socketTimeoutMs) {
+    this(socketTimeoutMs, /* tcpFallbackEnabled= */ true);
+  }
+
+  public UdpDataSourceRtpDataChannelFactory(long socketTimeoutMs, boolean tcpFallbackEnabled) {
     this.socketTimeoutMs = socketTimeoutMs;
+    this.tcpFallbackEnabled = tcpFallbackEnabled;
   }
 
   @Override
@@ -76,6 +82,8 @@ import java.io.IOException;
 
   @Override
   public RtpDataChannel.Factory createFallbackDataChannelFactory() {
-    return new TransferRtpDataChannelFactory(/* timeoutMs= */ socketTimeoutMs);
+    return tcpFallbackEnabled
+        ? new TransferRtpDataChannelFactory(/* timeoutMs= */ socketTimeoutMs)
+        : null;
   }
 }

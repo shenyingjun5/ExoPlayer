@@ -78,7 +78,7 @@ public final class RtspMediaSource extends BaseMediaSource {
     private long timeoutMs;
     private String userAgent;
     private SocketFactory socketFactory;
-    private boolean forceUseRtpTcp;
+    private @RtspTransportStrategy.Strategy int transportStrategy;
     private boolean debugLoggingEnabled;
     @Nullable private RtspDiagnosticsListener rtspDiagnosticsListener;
     @Nullable private RtspFeedbackListener rtspFeedbackListener;
@@ -90,6 +90,7 @@ public final class RtspMediaSource extends BaseMediaSource {
       userAgent = ExoPlayerLibraryInfo.VERSION_SLASHY;
       socketFactory = SocketFactory.getDefault();
       rtcpFeedbackPolicy = RtcpFeedbackPolicy.DEFAULT;
+      transportStrategy = RtspTransportStrategy.EXOPLAYER_DEFAULT;
     }
 
     /**
@@ -105,7 +106,25 @@ public final class RtspMediaSource extends BaseMediaSource {
      */
     @CanIgnoreReturnValue
     public Factory setForceUseRtpTcp(boolean forceUseRtpTcp) {
-      this.forceUseRtpTcp = forceUseRtpTcp;
+      this.transportStrategy =
+          forceUseRtpTcp ? RtspTransportStrategy.FORCE_TCP : RtspTransportStrategy.EXOPLAYER_DEFAULT;
+      return this;
+    }
+
+    /**
+     * Sets the RTP transport strategy.
+     *
+     * <p>The default value is {@link RtspTransportStrategy#EXOPLAYER_DEFAULT}, which preserves
+     * ExoPlayer's original UDP-first behavior with TCP fallback. This setter is additive and does not
+     * change the behavior of {@link #setForceUseRtpTcp(boolean)}.
+     *
+     * @param transportStrategy The RTP transport strategy.
+     * @return This Factory, for convenience.
+     */
+    @CanIgnoreReturnValue
+    public Factory setRtspTransportStrategy(
+        @RtspTransportStrategy.Strategy int transportStrategy) {
+      this.transportStrategy = transportStrategy;
       return this;
     }
 
@@ -254,24 +273,30 @@ public final class RtspMediaSource extends BaseMediaSource {
       checkNotNull(mediaItem.localConfiguration);
       return new RtspMediaSource(
           mediaItem,
-          shouldForceUseRtpTcp(mediaItem)
+          shouldUseTcp(mediaItem)
               ? new TransferRtpDataChannelFactory(timeoutMs)
-              : new UdpDataSourceRtpDataChannelFactory(timeoutMs),
+              : new UdpDataSourceRtpDataChannelFactory(
+                  timeoutMs, /* tcpFallbackEnabled= */ shouldAllowTcpFallback()),
           userAgent,
           socketFactory,
           debugLoggingEnabled,
           rtspDiagnosticsListener,
           rtspFeedbackListener,
           rtcpFeedbackPolicy,
-          rtspPacketDiagnosticsEnabled);
+          rtspPacketDiagnosticsEnabled,
+          transportStrategy);
     }
 
-    private boolean shouldForceUseRtpTcp(MediaItem mediaItem) {
-      if (forceUseRtpTcp) {
+    private boolean shouldUseTcp(MediaItem mediaItem) {
+      if (transportStrategy == RtspTransportStrategy.FORCE_TCP) {
         return true;
       }
       @Nullable String scheme = checkNotNull(mediaItem.localConfiguration).uri.getScheme();
       return scheme != null && Ascii.equalsIgnoreCase("rtspt", scheme);
+    }
+
+    private boolean shouldAllowTcpFallback() {
+      return transportStrategy != RtspTransportStrategy.FORCE_UDP;
     }
   }
 
@@ -307,6 +332,7 @@ public final class RtspMediaSource extends BaseMediaSource {
   @Nullable private final RtspFeedbackListener rtspFeedbackListener;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
+  private final @RtspTransportStrategy.Strategy int transportStrategy;
   private final ArrayList<RtspMediaPeriod> activeMediaPeriods;
   private final Object activeMediaPeriodsLock;
 
@@ -331,7 +357,8 @@ public final class RtspMediaSource extends BaseMediaSource {
         /* rtspDiagnosticsListener= */ null,
         /* rtspFeedbackListener= */ null,
         RtcpFeedbackPolicy.DEFAULT,
-        /* rtspPacketDiagnosticsEnabled= */ false);
+        /* rtspPacketDiagnosticsEnabled= */ false,
+        RtspTransportStrategy.EXOPLAYER_DEFAULT);
   }
 
   @VisibleForTesting
@@ -344,7 +371,8 @@ public final class RtspMediaSource extends BaseMediaSource {
       @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
       @Nullable RtspFeedbackListener rtspFeedbackListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
-      boolean rtspPacketDiagnosticsEnabled) {
+      boolean rtspPacketDiagnosticsEnabled,
+      @RtspTransportStrategy.Strategy int transportStrategy) {
     this.mediaItem = mediaItem;
     this.rtpDataChannelFactory = rtpDataChannelFactory;
     this.userAgent = userAgent;
@@ -355,6 +383,7 @@ public final class RtspMediaSource extends BaseMediaSource {
     this.rtspFeedbackListener = rtspFeedbackListener;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
+    this.transportStrategy = transportStrategy;
     this.activeMediaPeriods = new ArrayList<>();
     this.activeMediaPeriodsLock = new Object();
     this.timelineDurationUs = C.TIME_UNSET;
@@ -512,5 +541,10 @@ public final class RtspMediaSource extends BaseMediaSource {
   @VisibleForTesting
   /* package */ RtpDataChannel.Factory getRtpDataChannelFactory() {
     return rtpDataChannelFactory;
+  }
+
+  @VisibleForTesting
+  /* package */ @RtspTransportStrategy.Strategy int getRtspTransportStrategy() {
+    return transportStrategy;
   }
 }

@@ -168,11 +168,11 @@ import java.util.TreeSet;
     int sequenceNumberShift =
         calculateSequenceNumberShift(packetSequenceNumber, expectedSequenceNumber);
     if (abs(sequenceNumberShift) < MAX_SEQUENCE_LEAP_ALLOWED) {
-      if (sequenceNumberShift >= sequenceGapRequestThreshold
-          && sequenceGapRequestThreshold > 0
-          && rtcpFeedbackRequester != null) {
+      if (sequenceNumberShift >= sequenceGapRequestThreshold && sequenceGapRequestThreshold > 0) {
         lastOfferDiscontinuityReason = RtcpFeedbackReason.SEQUENCE_GAP;
-        rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.SEQUENCE_GAP);
+        if (rtcpFeedbackRequester != null) {
+          rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.SEQUENCE_GAP);
+        }
       }
       if (calculateSequenceNumberShift(packetSequenceNumber, lastDequeuedSequenceNumber) > 0) {
         // Add the packet in the queue only if a succeeding packet has not been dequeued already.
@@ -188,9 +188,11 @@ import java.util.TreeSet;
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onRtpReorderingQueueReset(createStats(sequenceNumberShift));
       }
-      if (requestKeyFrameOnQueueReset && rtcpFeedbackRequester != null) {
+      if (requestKeyFrameOnQueueReset) {
         lastOfferDiscontinuityReason = RtcpFeedbackReason.QUEUE_RESET;
-        rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
+        if (rtcpFeedbackRequester != null) {
+          rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
+        }
       }
       return true;
     }

@@ -68,8 +68,52 @@ public final class RtpExtractorTest {
     assertThat(diagnosticsListener.packetDroppedCount).isEqualTo(0);
   }
 
+  @Test
+  public void read_externalOnlySequenceGapNotifiesPayloadReaderDiscontinuity() throws Exception {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            new RtcpFeedbackPolicy.Builder()
+                .setFeedbackStrategy(RtcpFeedbackPolicy.EXTERNAL_ONLY)
+                .setSequenceGapRequestThreshold(1)
+                .build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.init(createExtractorOutput());
+    extractor.read(
+        new FakeExtractorInput.Builder()
+            .setData(
+                createRtpPacketBytes(
+                    /* sequenceNumber= */ 10,
+                    /* timestamp= */ 1000,
+                    /* payloadData= */ new byte[] {0x41, 0x01, 0x02}))
+            .build(),
+        new PositionHolder());
+    extractor.read(
+        new FakeExtractorInput.Builder()
+            .setData(
+                createRtpPacketBytes(
+                    /* sequenceNumber= */ 12,
+                    /* timestamp= */ 2000,
+                    /* payloadData= */ new byte[] {0x41, 0x03, 0x04}))
+            .build(),
+        new PositionHolder());
+
+    assertThat(diagnosticsListener.waitForIdrStartedCount).isEqualTo(1);
+    assertThat(diagnosticsListener.packetReceivedCount).isEqualTo(0);
+  }
+
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener, boolean rtspPacketDiagnosticsEnabled) {
+    return createExtractor(
+        diagnosticsListener, RtcpFeedbackPolicy.DEFAULT, rtspPacketDiagnosticsEnabled);
+  }
+
+  private static RtpExtractor createExtractor(
+      RtspDiagnosticsListener diagnosticsListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
     return new RtpExtractor(
         new RtpPayloadFormat(
             new Format.Builder().setSampleMimeType(MimeTypes.VIDEO_H264).build(),
@@ -81,7 +125,7 @@ public final class RtpExtractorTest {
         RtspTransportMode.TCP_INTERLEAVED,
         diagnosticsListener,
         /* rtcpFeedbackRequester= */ null,
-        RtcpFeedbackPolicy.DEFAULT,
+        rtcpFeedbackPolicy,
         rtspPacketDiagnosticsEnabled);
   }
 
@@ -91,13 +135,19 @@ public final class RtpExtractorTest {
   }
 
   private static byte[] createRtpPacketBytes() {
-    byte[] payloadData = new byte[] {0x65, 0x01, 0x02};
+    return createRtpPacketBytes(
+        /* sequenceNumber= */ 10,
+        /* timestamp= */ 1000,
+        /* payloadData= */ new byte[] {0x65, 0x01, 0x02});
+  }
+
+  private static byte[] createRtpPacketBytes(int sequenceNumber, long timestamp, byte[] payloadData) {
     RtpPacket packet =
         new RtpPacket.Builder()
             .setMarker(true)
             .setPayloadType((byte) 96)
-            .setSequenceNumber(10)
-            .setTimestamp(1000)
+            .setSequenceNumber(sequenceNumber)
+            .setTimestamp(timestamp)
             .setSsrc(0x12345678)
             .setPayloadData(payloadData)
             .build();
@@ -112,6 +162,7 @@ public final class RtpExtractorTest {
     public int packetReceivedCount;
     public int packetDequeuedCount;
     public int packetDroppedCount;
+    public int waitForIdrStartedCount;
 
     @Override
     public void onFirstRtpPacketReceived(RtpPacketStats packetStats) {
@@ -132,6 +183,11 @@ public final class RtpExtractorTest {
     @Override
     public void onRtpPacketDropped(RtpPacketStats packetStats, RtpReorderingStats reorderingStats) {
       packetDroppedCount++;
+    }
+
+    @Override
+    public void onH264WaitForIdrStarted(RtspH264RecoveryStats recoveryStats) {
+      waitForIdrStartedCount++;
     }
   }
 }

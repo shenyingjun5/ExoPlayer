@@ -817,7 +817,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           // Retry playback with TCP if no sample has been received so far, and we are not already
           // using TCP. Retrying will setup new loadables, so will not retry with the current
           // loadables.
-          retryWithRtpTcp();
+          retryWithRtpTcp(RtspTransportFallbackReason.UDP_NO_SAMPLE, loadable.trackId);
         }
         return;
       }
@@ -948,7 +948,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (error instanceof RtspMediaSource.RtspUdpUnsupportedTransportException && !isUsingRtpTcp) {
         // Retry playback with TCP if we receive RtspUdpUnsupportedTransportException, and we are
         // not already using TCP. Retrying will setup new loadables.
-        retryWithRtpTcp();
+        retryWithRtpTcp(
+            RtspTransportFallbackReason.UDP_UNSUPPORTED, /* trackId= */ C.INDEX_UNSET);
       } else {
         playbackException = error;
       }
@@ -974,20 +975,26 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
   }
 
-  private void retryWithRtpTcp() {
-    // Retry should only run once.
-    isUsingRtpTcp = true;
-
-    rtspClient.retryWithRtpTcp();
-
+  private void retryWithRtpTcp(
+      @RtspTransportFallbackReason.Reason int reason, int trackId) {
     @Nullable
     RtpDataChannel.Factory fallbackRtpDataChannelFactory =
         rtpDataChannelFactory.createFallbackDataChannelFactory();
     if (fallbackRtpDataChannelFactory == null) {
+      onTransportFallbackForDiagnostics(
+          reason, trackId, RtspTransportMode.UDP, RtspTransportMode.UNKNOWN);
       playbackException =
           new RtspPlaybackException("No fallback data channel factory for TCP retry");
       return;
     }
+
+    onTransportFallbackForDiagnostics(
+        reason, trackId, RtspTransportMode.UDP, RtspTransportMode.TCP_INTERLEAVED);
+
+    // Retry should only run once.
+    isUsingRtpTcp = true;
+
+    rtspClient.retryWithRtpTcp();
 
     ArrayList<RtspLoaderWrapper> newLoaderWrappers = new ArrayList<>(rtspLoaderWrappers.size());
     ArrayList<RtpLoadInfo> newSelectedLoadInfos = new ArrayList<>(selectedLoadInfos.size());
@@ -1023,6 +1030,19 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     for (int i = 0; i < oldRtspLoaderWrappers.size(); i++) {
       oldRtspLoaderWrappers.get(i).cancelLoad();
     }
+  }
+
+  /* package */ void onTransportFallbackForDiagnostics(
+      @RtspTransportFallbackReason.Reason int reason,
+      int trackId,
+      @RtspTransportMode.Mode int fromTransportMode,
+      @RtspTransportMode.Mode int toTransportMode) {
+    if (rtspDiagnosticsListener == null) {
+      return;
+    }
+    rtspDiagnosticsListener.onTransportFallback(
+        new RtspTransportFallbackStats(
+            trackId, reason, fromTransportMode, toTransportMode, SystemClock.elapsedRealtime()));
   }
 
   private final class SampleStreamImpl implements SampleStream {

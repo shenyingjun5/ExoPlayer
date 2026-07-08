@@ -33,6 +33,7 @@ import com.google.android.exoplayer2.source.rtsp.RtspH264RecoveryStats;
 import com.google.android.exoplayer2.testutil.FakeExtractorOutput;
 import com.google.android.exoplayer2.testutil.FakeTrackOutput;
 import com.google.android.exoplayer2.util.MimeTypes;
+import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.util.NalUnitUtil;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import com.google.common.collect.ImmutableList;
@@ -783,6 +784,38 @@ public final class RtpH264ReaderTest {
     assertThat(feedbackRequester.reasons).containsExactly(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
   }
 
+  @Test
+  public void malformedPacket_lowLatencyRecoveryReportsDiagnosticsWithoutWarningLog()
+      throws ParserException {
+    CapturingLogger logger = new CapturingLogger();
+    Log.setLogger(logger);
+    try {
+      CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+      RtpH264Reader h264Reader =
+          createH264Reader(
+              /* hasInitializationData= */ true,
+              diagnosticsListener,
+              /* rtcpFeedbackRequester= */ null,
+              /* lowLatencyRecoveryEnabled= */ true);
+
+      h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+      h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+      consume(
+          h264Reader,
+          createPacket(
+              RTP_TIMESTAMP_1,
+              /* sequenceNumber= */ 1,
+              /* marker= */ true,
+              /* payloadData= */ new byte[0]));
+
+      assertThat(diagnosticsListener.corruptedStats).hasSize(1);
+      assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+      assertThat(logger.warningCount).isEqualTo(0);
+    } finally {
+      Log.setLogger(Log.Logger.DEFAULT);
+    }
+  }
+
   private static RtpH264Reader createH264Reader() {
     return createH264Reader(/* hasInitializationData= */ false, /* diagnosticsListener= */ null);
   }
@@ -931,5 +964,24 @@ public final class RtpH264ReaderTest {
       reasons.add(reason);
       return true;
     }
+  }
+
+  private static final class CapturingLogger implements Log.Logger {
+
+    public int warningCount;
+
+    @Override
+    public void d(String tag, String message) {}
+
+    @Override
+    public void i(String tag, String message) {}
+
+    @Override
+    public void w(String tag, String message) {
+      warningCount++;
+    }
+
+    @Override
+    public void e(String tag, String message) {}
   }
 }

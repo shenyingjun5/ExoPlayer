@@ -502,7 +502,6 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       }
       throw ParserException.createForMalformedManifest(/* message= */ null, error);
     }
-    Log.w(TAG, "Malformed H264 RTP packet. Dropping access unit and waiting for IDR.", error);
     markCurrentAccessUnitCorrupted(RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED);
   }
 

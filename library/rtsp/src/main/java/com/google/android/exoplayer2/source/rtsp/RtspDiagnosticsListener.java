@@ -27,6 +27,9 @@ public interface RtspDiagnosticsListener {
   default void onTransportReady(
       int trackId, @RtspTransportMode.Mode int transportMode, String transport) {}
 
+  /** Called when RTP transport falls back from UDP to TCP or when fallback is unavailable. */
+  default void onTransportFallback(RtspTransportFallbackStats fallbackStats) {}
+
   /** Called when the first RTP packet for one track is dequeued for processing. */
   default void onFirstRtpPacketReceived(RtpPacketStats packetStats) {}
 

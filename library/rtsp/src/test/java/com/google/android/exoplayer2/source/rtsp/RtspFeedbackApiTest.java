@@ -39,6 +39,12 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaSource.getRtspFeedbackListener()).isNull();
     assertThat(mediaSource.getRtcpFeedbackPolicy()).isEqualTo(RtcpFeedbackPolicy.DEFAULT);
     assertThat(mediaSource.getRtspPacketDiagnosticsEnabled()).isFalse();
+    assertThat(mediaSource.getRtspTransportStrategy())
+        .isEqualTo(RtspTransportStrategy.EXOPLAYER_DEFAULT);
+    assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(UdpDataSourceRtpDataChannelFactory.class);
+    assertThat(mediaSource.getRtpDataChannelFactory().createFallbackDataChannelFactory())
+        .isInstanceOf(TransferRtpDataChannelFactory.class);
     assertThat(RtcpFeedbackPolicy.DEFAULT.pliEnabled).isFalse();
     assertThat(RtcpFeedbackPolicy.DEFAULT.firEnabled).isFalse();
     assertThat(RtcpFeedbackPolicy.DEFAULT.sequenceGapRequestThreshold).isEqualTo(0);
@@ -112,6 +118,62 @@ public final class RtspFeedbackApiTest {
 
     assertThat(mediaSource.getUri()).isEqualTo(android.net.Uri.parse("rtsp://127.0.0.1/test"));
     assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(TransferRtpDataChannelFactory.class);
+  }
+
+  @Test
+  public void factorySetForceUseRtpTcp_preservesLegacyTcpBehavior() {
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setForceUseRtpTcp(true)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+
+    assertThat(mediaSource.getRtspTransportStrategy()).isEqualTo(RtspTransportStrategy.FORCE_TCP);
+    assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(TransferRtpDataChannelFactory.class);
+  }
+
+  @Test
+  public void factorySetForceUseRtpTcpFalse_resetsToExoPlayerDefault() {
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setForceUseRtpTcp(true)
+            .setForceUseRtpTcp(false)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+
+    assertThat(mediaSource.getRtspTransportStrategy())
+        .isEqualTo(RtspTransportStrategy.EXOPLAYER_DEFAULT);
+    assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(UdpDataSourceRtpDataChannelFactory.class);
+    assertThat(mediaSource.getRtpDataChannelFactory().createFallbackDataChannelFactory())
+        .isInstanceOf(TransferRtpDataChannelFactory.class);
+  }
+
+  @Test
+  public void factorySetRtspTransportStrategyForceUdp_disablesTcpFallback() {
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspTransportStrategy(RtspTransportStrategy.FORCE_UDP)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+
+    assertThat(mediaSource.getRtspTransportStrategy()).isEqualTo(RtspTransportStrategy.FORCE_UDP);
+    assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(UdpDataSourceRtpDataChannelFactory.class);
+    assertThat(mediaSource.getRtpDataChannelFactory().createFallbackDataChannelFactory()).isNull();
+  }
+
+  @Test
+  public void factorySetRtspTransportStrategyAutoUdpThenTcp_keepsTcpFallback() {
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspTransportStrategy(RtspTransportStrategy.AUTO_UDP_THEN_TCP)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+
+    assertThat(mediaSource.getRtspTransportStrategy())
+        .isEqualTo(RtspTransportStrategy.AUTO_UDP_THEN_TCP);
+    assertThat(mediaSource.getRtpDataChannelFactory())
+        .isInstanceOf(UdpDataSourceRtpDataChannelFactory.class);
+    assertThat(mediaSource.getRtpDataChannelFactory().createFallbackDataChannelFactory())
         .isInstanceOf(TransferRtpDataChannelFactory.class);
   }
 
@@ -241,6 +303,13 @@ public final class RtspFeedbackApiTest {
             /* lastRtpSequence= */ 14,
             /* lastRtpTimestamp= */ 3234,
             /* idrRecoveredCount= */ 1);
+    RtspTransportFallbackStats transportFallbackStats =
+        new RtspTransportFallbackStats(
+            /* trackId= */ 1,
+            RtspTransportFallbackReason.UDP_NO_SAMPLE,
+            RtspTransportMode.UDP,
+            RtspTransportMode.TCP_INTERLEAVED,
+            /* fallbackElapsedRealtimeMs= */ 123);
 
     assertThat(packetStats)
         .isEqualTo(
@@ -269,6 +338,14 @@ public final class RtspFeedbackApiTest {
             new RtspH264RecoveryStats(
                 1, 13, 2234, true, 2, 3, RtcpFeedbackReason.ACCESS_UNIT_CORRUPTED, 44, 14,
                 3234, 1));
+    assertThat(transportFallbackStats)
+        .isEqualTo(
+            new RtspTransportFallbackStats(
+                1,
+                RtspTransportFallbackReason.UDP_NO_SAMPLE,
+                RtspTransportMode.UDP,
+                RtspTransportMode.TCP_INTERLEAVED,
+                123));
     assertThat(packetStats.toString()).contains("sequenceNumber=10");
     assertThat(reorderingStats.toString()).contains("queueDepth=2");
     assertThat(feedbackRequest.toString()).contains("detail=gap");
@@ -279,6 +356,7 @@ public final class RtspFeedbackApiTest {
     assertThat(decoderInputQueuedStats.toString()).contains("queuedElapsedRealtimeMs=889");
     assertThat(recoveryStats.toString()).contains("waitingForIdr=true");
     assertThat(recoveryStats.toString()).contains("waitingForIdrDurationMs=44");
+    assertThat(transportFallbackStats.toString()).contains("reason=2");
   }
 
   @Test
@@ -339,6 +417,36 @@ public final class RtspFeedbackApiTest {
   }
 
   @Test
+  public void transportFallbackDiagnostics_dispatchesLowFrequencyStats() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.onTransportFallbackForDiagnostics(
+        RtspTransportFallbackReason.UDP_UNSUPPORTED,
+        /* trackId= */ C.INDEX_UNSET,
+        RtspTransportMode.UDP,
+        RtspTransportMode.TCP_INTERLEAVED);
+
+    assertThat(diagnosticsListener.transportFallbackStats).hasSize(1);
+    RtspTransportFallbackStats fallbackStats = diagnosticsListener.transportFallbackStats.get(0);
+    assertThat(fallbackStats.reason).isEqualTo(RtspTransportFallbackReason.UDP_UNSUPPORTED);
+    assertThat(fallbackStats.fromTransportMode).isEqualTo(RtspTransportMode.UDP);
+    assertThat(fallbackStats.toTransportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
+    assertThat(fallbackStats.fallbackElapsedRealtimeMs).isAtLeast(0);
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
   public void emptyListeners_allowNoOpCallbacks() {
     RtspDiagnosticsListener diagnosticsListener = new RtspDiagnosticsListener() {};
     RtspFeedbackListener feedbackListener = new RtspFeedbackListener() {};
@@ -354,6 +462,13 @@ public final class RtspFeedbackApiTest {
 
     diagnosticsListener.onTransportReady(
         /* trackId= */ 1, RtspTransportMode.UDP, "RTP/AVP;unicast;client_port=1000-1001");
+    diagnosticsListener.onTransportFallback(
+        new RtspTransportFallbackStats(
+            1,
+            RtspTransportFallbackReason.UDP_NO_SAMPLE,
+            RtspTransportMode.UDP,
+            RtspTransportMode.TCP_INTERLEAVED,
+            123));
     diagnosticsListener.onFirstRtpPacketReceived(packetStats);
     diagnosticsListener.onFirstDecodableVideoAccessUnitReady(
         new RtspH264AccessUnitStats(
@@ -384,6 +499,13 @@ public final class RtspFeedbackApiTest {
   private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {
     public final java.util.ArrayList<RtspH264AccessUnitReadyStats> accessUnitReadyStats =
         new java.util.ArrayList<>();
+    public final java.util.ArrayList<RtspTransportFallbackStats> transportFallbackStats =
+        new java.util.ArrayList<>();
+
+    @Override
+    public void onTransportFallback(RtspTransportFallbackStats fallbackStats) {
+      transportFallbackStats.add(fallbackStats);
+    }
 
     @Override
     public void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {

@@ -139,6 +139,35 @@ public final class RtpExtractorTest {
     assertThat(diagnosticsListener.waitForIdrStartedCount).isEqualTo(0);
   }
 
+  @Test
+  public void initialWaitForIdrBacklogPolicyEnabled_dropsFirstPFrame() throws Exception {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setInitialWaitForIdr(true)
+                .build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+    FakeExtractorOutput extractorOutput = createExtractorOutput();
+
+    extractor.init(extractorOutput);
+    extractor.read(
+        new FakeExtractorInput.Builder()
+            .setData(
+                createRtpPacketBytes(
+                    /* sequenceNumber= */ 10,
+                    /* timestamp= */ 1000,
+                    /* payloadData= */ new byte[] {0x41, 0x01, 0x02}))
+            .build(),
+        new PositionHolder());
+
+    assertThat(diagnosticsListener.waitForIdrStartedCount).isEqualTo(1);
+    assertThat(extractorOutput.trackOutputs.get(1).getSampleCount()).isEqualTo(0);
+  }
+
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener, boolean rtspPacketDiagnosticsEnabled) {
     return createExtractor(

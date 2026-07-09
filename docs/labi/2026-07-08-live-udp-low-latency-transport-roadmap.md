@@ -332,6 +332,50 @@ enter WAIT_IDR
 - `WAIT_IDR timeout`：仍有 RTP 包，但一直没有完整 IDR。继续请求 IDR、降码率、必要时 rebuild。
 - `RTP no-packet timeout`：完全没 RTP 包。判断 UDP 链路断流、server 停止、端口不可达，触发 fallback TCP 或 session rebuild。
 
+### L4.1 UDP 启动首帧 IDR 门控
+
+结论：只靠发送端补 SPS/PPS 不能保证 UDP 启动不花屏。UDP low-latency 启动阶段必须由 ExoPlayer fork 在 H.264 reader 层先进入 `WAIT_IDR`，直到收到完整 `IDR + SPS/PPS` 才允许首个视频 AU 提交到 SampleQueue。
+
+触发范围必须严格限定：
+
+- 仅自家 `LOW_LATENCY + FORCE_UDP/AUTO_UDP_THEN_TCP` 路径启用。
+- 普通 RTSP `EXOPLAYER_DEFAULT + DEFAULT feedback + listener null + packet diagnostics false + RtspBacklogRecoveryPolicy.DISABLED` 不启用。
+- `FORCE_TCP` 低延迟稳定路径暂不默认启用 startup initial wait，避免影响 TCP 首帧速度；如后续 TCP 弱网证明也有启动花屏，再通过显式 policy 开关灰度。
+
+最小闭环：
+
+```text
+prepare UDP low-latency RTSP media source
+-> Cast-SDK 反射配置 ExoPlayer low-latency recovery policy + initialWaitForIdr
+-> RtpH264Reader 初始化即 waitingForIdr=true
+-> 首包/首 AU 如果是 P 帧或非完整 IDR，直接 drop，不提交 SampleQueue
+-> 发送端每个 IDR AU start 前发送 SPS/PPS
+-> 收到完整 IDR + SPS/PPS 后提交该 AU，exit WAIT_IDR
+-> 后续 sequence gap / corrupted AU / queue reset 继续走现有 WAIT_IDR/drop-until-idr
+```
+
+ExoPlayer fork 建议落点：
+
+- 放入现有 `RtspBacklogRecoveryPolicy`，不要放入 `RtcpFeedbackPolicy`，也暂不新增独立 H.264 policy，避免把“是否发 RTCP”和“是否启动期等 IDR”再次耦合。
+- policy 字段建议拆成两个默认关闭的 boolean：`initialWaitForIdr` 和 `initialWaitForIdrAfterSeek`。
+- Builder 增加 `setInitialWaitForIdr(boolean)` 和 `setInitialWaitForIdrAfterSeek(boolean)`；`DISABLED`、`LOW_LATENCY_DEFAULT`、`LOW_LATENCY` preset 第一阶段都保持 `false`，由 Cast-SDK UDP low-latency bridge 根据 transport strategy 显式打开。
+- 由 `DefaultRtpPayloadReaderFactory` 将 policy 传入 `RtpH264Reader`，避免 Cast-SDK 直接依赖 H.264 reader 内部类型。
+- `RtpH264Reader` 构造时如果 `initialWaitForIdr=true` 且 `lowLatencyRecoveryEnabled=true`，初始化 `waitingForIdr=true`，并使用 `WAITING_FOR_IDR` 或新增 `INITIAL_WAIT_FOR_IDR` reason 上报低频 diagnostics。
+- `seek()` 默认不改变原行为；只有 `initialWaitForIdrAfterSeek=true` 时，seek/reset/re-PLAY 后重新进入 WAIT_IDR，不能让首个 P 帧进入 SampleQueue。
+- 不在 RTP hot path 增加逐包日志、JSON、磁盘 IO、网络 IO 或阻塞回调。
+
+Cast-SDK sender 配套：
+
+- 实时发送路径已在每个 `frame.is_keyframe && frame.is_access_unit_start` 前发送 latest SPS/PPS。
+- startup short-GOP cache 当前 `startup_gop_frame_count() = 1`，所以现状等价于 cache 首个 IDR 前有 SPS/PPS；但为了未来 short-GOP 多 AU 安全，cache 发送路径也必须改成每个 keyframe AU start 前都补 SPS/PPS。
+- 不降低屏幕镜像验收指标，仍按 `1920x1080 @ 30fps / 7000kbps` 验证；SPS/PPS 开销很小，不作为降规格理由。
+
+Cast-SDK receiver 配套：
+
+- 只负责按 `LOW_LATENCY + FORCE_UDP/AUTO_UDP_THEN_TCP` 反射开启 `initialWaitForIdr=true` 和 `initialWaitForIdrAfterSeek=true`。
+- 继续通过 `LiveFeedbackController` 消费 `WAIT_IDR started / droppedUntilIdr / timeout / recovered`，并通过独立 live control channel 请求 IDR。
+- 不在 App 层做帧级判断，不绕过 ExoPlayer fork 的 H.264 AU 完整性守卫。
+
 ### L5 独立控制通道
 
 UDP 模式下默认 feedback strategy：
@@ -372,7 +416,7 @@ UDP 下可以比 TCP 更积极，但不能无限请求 IDR，否则 I 帧 burst 
 发送端必须配合：
 
 - 禁 B 帧。
-- IDR 必须带 SPS/PPS。
+- 每个 IDR AU start 前必须带 SPS/PPS；包括启动首帧、startup short-GOP cache、周期 IDR、独立控制通道请求出来的恢复 IDR。
 - 支持立即 `requestKeyFrame()`。
 - 支持 startup/recovery short-GOP。
 - UDP pacing，避免大 IDR burst。
@@ -636,6 +680,66 @@ UDP 必须单独建报告目录：
 qa/reports/receiver/live-udp-low-latency/<timestamp>/
 ```
 
+#### Camera / Screen Live 验收运行规范
+
+结论：所有 camera/screen 低延迟测试必须显式区分 TCP、FORCE_UDP 和 AUTO_UDP_THEN_TCP，不能用“默认 RTSP live 跑了一次”替代低延迟 UDP/TCP A/B。
+
+公共约束：
+
+- 测试对象必须是自家 live：`cast camera`、`cast screen`，或 macOS Demo 的“投送摄像头 / 投送屏幕”。普通 `cast rtsp --url` 只能算普通 RTSP smoke，不能算自家低延迟 live 验收。
+- `playbackMode` 必须是 `low_latency`，接收端 buffer 必须是 `150/500ms`。
+- 接收端必须走 `LEGACY_EXO`，不能走 `SYSTEM`。低延迟模式出现 `SYSTEM` route 时，本轮结果判为失败或无效，不能计入 UDP/TCP A/B。
+- TCP baseline 必须实际确认 `transportMode=tcp-interleaved`。
+- UDP strict 必须实际确认 `transportMode=udp`，且 `liveTransportStrategy=force_udp`。
+- UDP preferred / fallback 测试必须实际确认 `liveTransportStrategy=auto_udp_then_tcp`；报告必须写清最终 `transportMode` 是 `udp` 还是 `tcp-interleaved`，以及 `transportFallbackCount` / fallback reason。
+- CLI 默认 `--transport` 是 `rtsp-tcp`，所以测 UDP 必须显式带 `--transport rtsp-udp` 或 `--transport rtsp-udp-tcp`。
+- macOS Demo UI 当前默认 transport 是“自动 UDP -> TCP”，但报告仍必须记录 UI 选项和接收端实际 `transportMode`；不能只按 UI 选择判断。
+- frame trace 只在需要做端到端 trace join 或定位发送端积压时开启；基线性能测试默认关闭高频 trace，必要时单独标记“trace on”。
+
+CLI 标准命令：
+
+```bash
+# camera TCP baseline, 720p30
+cast-sender-cli cast camera --camera-id default --width 1280 --height 720 --fps 30 --bitrate-kbps 2500 --playback-mode low-latency --transport rtsp-tcp --hold-secs 600 --json
+
+# camera UDP strict, 720p30
+cast-sender-cli cast camera --camera-id default --width 1280 --height 720 --fps 30 --bitrate-kbps 2500 --playback-mode low-latency --transport rtsp-udp --hold-secs 600 --json
+
+# camera AUTO UDP -> TCP, 720p30
+cast-sender-cli cast camera --camera-id default --width 1280 --height 720 --fps 30 --bitrate-kbps 2500 --playback-mode low-latency --transport rtsp-udp-tcp --hold-secs 600 --json
+
+# screen TCP baseline, 1080p30
+cast-sender-cli cast screen --screen-id 0 --width 1920 --height 1080 --fps 30 --bitrate-kbps 7000 --playback-mode low-latency --transport rtsp-tcp --hold-secs 600 --json
+
+# screen UDP strict, 1080p30
+cast-sender-cli cast screen --screen-id 0 --width 1920 --height 1080 --fps 30 --bitrate-kbps 7000 --playback-mode low-latency --transport rtsp-udp --hold-secs 600 --json
+
+# screen AUTO UDP -> TCP, 1080p30
+cast-sender-cli cast screen --screen-id 0 --width 1920 --height 1080 --fps 30 --bitrate-kbps 7000 --playback-mode low-latency --transport rtsp-udp-tcp --hold-secs 600 --json
+```
+
+Demo 标准口径：
+
+- 摄像头：`1280x720 @ 30fps / 2500kbps`，低延迟模式，buffer `150/500ms`。
+- 屏幕：`1920x1080 @ 30fps / 7000kbps`，低延迟模式，buffer `150/500ms`。
+- TCP baseline：传输选 `TCP`。
+- UDP strict：传输选 `UDP`。
+- AUTO：传输选 `自动 UDP -> TCP`。
+- 每轮必须保存 Demo 状态区里的 `rtspConnected`、`transport`、`capture/pacer/encoded/rtp fps`、`keyframeRequests`、`socketBlocks/socketErrors`。
+
+每轮最小采样点：
+
+- start：开始播放后 10-30 秒。
+- 5min：持续播放 5 分钟。
+- 10min：持续播放 10 分钟。
+
+每个采样点必须记录：
+
+- sender：`rtspTransport`、`rtpSentFrameCount`、`rtpSentPacketCount`、`socketWriteErrorCount`、`socketWriteBlockCount`、`lastRtpSentAgeMs`、`keyframeRequestCount`、`liveControlKeyframeRequestCount/liveControlIdrEmittedCount`。
+- receiver `/debug/state`：`playbackState`、`playerRoute`、`livePlaybackMode`、`liveTransportStrategy`、`hasPresentedFrame`、`videoSize`。
+- receiver `/debug/live/latency`：`transportMode`、`packetReceivedCount`、`packetDroppedCount`、`sequenceGap`、`queueResetCount`、`rtpQueueMs`、`sampleQueueMs`、`firstRtpToPlayingMs`、`waitForIdrStartCount/recoveredCount/timeoutCount`、`transportFallbackCount`。
+- receiver logs：必须确认没有 `fallback from=LEGACY_EXO to=SYSTEM`；低延迟 recovery 失败时应看到 `fallback-skipped reason=rtsp-live-system-fallback-disabled`。
+
 每次报告必须包含：
 
 - sender stdout/stderr 和 control channel trace。
@@ -750,28 +854,30 @@ P2：
 | U6 | H.264 AU 完整性守卫 | ExoPlayer fork | 部分完成 | RTSP 单测 | 坏 FU-A、timestamp 变化无 marker、sequence discontinuity 不应进 SampleQueue；FU-A sequence 异常的原有 `Log.w` 需要迁移为 diagnostics 聚合或限流事件 |
 | U7 | UDP low-latency WAIT_IDR 恢复 | ExoPlayer fork + Cast-SDK receiver | 部分完成 | RTSP/JVM 单测 | fork 已具备 sequence gap/discontinuity -> H.264 WAIT_IDR 的基础路径，Cast-SDK 已聚合 H.264 corrupted/WAIT_IDR/dropped/recovered/fallback diagnostics；`LOW_LATENCY + FORCE_UDP/AUTO` 已使用 `EXTERNAL_ONLY + sequenceGapRequestThreshold=1`；仍需补 low-latency backlog/recovery policy 下的受控 queue reset/flush 和弱网 integration |
 | U8 | 独立控制通道扩展 RTP/loss metadata | Cast-SDK sender/receiver | 部分完成 | Rust/JVM 单测 | receiver `keyframe_request` 已携带 transportMode、lastRtpSequence、lastRtpTimestamp；lossRate5s、sender ack `nextIdrRtpTimestamp` 待补 |
-| U9 | 发送端 UDP IDR pacing | Cast-SDK sender | 进行中（动态 pacing 已落地，待复测） | Rust 单测 + GZ 真机 1080p/7Mbps | `RTP_MAX_PAYLOAD=1200`、`1920x1080@30fps/7000kbps` 产品指标和 GOP 策略保持不变；UDP 单个 NAL 拆包数达到 `16` 包后按 `8` 包一组做动态 pacing，默认按 `bitrateKbps * 1.5` 计算发送目标并 clamp 到 `1-8ms`；固定 sleep 首版已验证能解决长期 WAIT_IDR，动态版待 Rust/真机复测 |
+| U9 | 发送端 UDP IDR pacing | Cast-SDK sender | 部分完成（动态 pacing 正常网络长跑通过） | Rust 单测 + GZ 真机 1080p/7Mbps | `RTP_MAX_PAYLOAD=1200`、`1920x1080@30fps/7000kbps` 产品指标和 GOP 策略保持不变；UDP 单个 NAL 拆包数达到 `16` 包后按 `8` 包一组做动态 pacing，默认按 `bitrateKbps * 1.5` 计算发送目标并 clamp 到 `1-8ms`；GZ camera AUTO 10 分钟正常网络长跑未出现长期 WAIT_IDR、timeout 或 fallback，弱网矩阵待补 |
 | U10 | UDP loss 5s 滑窗和降级策略 | ExoPlayer fork + Cast-SDK receiver | 未开始 | 弱网测试 | >8% 持续 2s fallback TCP |
 | U11 | 弱网注入工具和报告 | QA/tools | 未开始 | dry-run + 真机 | 丢包、乱序、限速、短断流 |
-| U12 | 真机 TCP/UDP A/B 验收 | QA/device | 部分完成（GZ 正常网络 UDP 通过） | 10/30 分钟报告 | GZ 已完成自家 camera TCP interleaved 基线；GZ screen/camera `rtsp-udp-tcp` 正常网络均进入 `udp` 并播放成功；弱网、WAIT_IDR、fallback TCP 和长稳待补 |
+| U12 | 真机 TCP/UDP A/B 验收 | QA/device | 部分完成（GZ 正常网络三态和 camera 10 分钟通过） | 10/30 分钟报告 | GZ 已完成自家 camera TCP interleaved 基线；线上 Maven `2.19.1-labi.9` 新包下 screen `rtsp-tcp/rtsp-udp/rtsp-udp-tcp` 均可播放，camera `rtsp-udp-tcp` 正常网络进入 `udp` 并播放成功；camera AUTO 10 分钟长跑 `PLAYING -> STOPPED` 正常、`rebufferCount=0`、`queueResetCount=0`、`transportFallbackCount=0`；screen AUTO 能进入 `PLAYING + udp + 1920x1080`，但约 2 分钟 sender 进程终止，receiver no-packet rebuild 后连接 sender RTSP 端口得到 `ECONNREFUSED`；弱网、fallback TCP 和 30 分钟长稳待补 |
 | U13 | code review 和包体/性能评估 | 工程 | 部分完成 | review checklist | 本轮 Cast-SDK code review 已修正 capability 动态暴露、普通 RTSP 隔离、fallback diagnostics 聚合；`LegacyExoPlayerAdapter` 仍 >2000 行，diagnostics/recovery/rebuild 继续拆分 |
 | U14 | 拆分 `LegacyExoPlayerAdapter` RTSP 职责 | Cast-SDK receiver | 部分完成 | JVM 单测不变 + review | 已抽 `LegacyRtspMediaSourceBuilder`、transport resolver、feedback policy resolver；diagnostics/recovery/rebuild 继续留待下一步拆 |
 | U15 | 普通 RTSP strategy 迁移为 `EXOPLAYER_DEFAULT + passive` | Cast-SDK receiver | 已完成（Cast 侧，smoke 暴露 Exo 问题） | JVM 单测 + 普通 RTSP smoke | default 已不 force TCP、不启用 recovery/watchdog、feedback threshold=0；真机普通 RTSP smoke 证明 Cast 侧隔离生效，但 TCP-only `mediamtx` 返回 `SETUP 461` 后 fork 未 fallback TCP，需 ExoPlayer 侧修复后复测 |
 | U16 | ExoPlayer fork transport strategy API | ExoPlayer fork | 已完成（API 已推送，需修 fallback） | RTSP 单测 | branch `labi-rtsp-feedback-exoplayer-2.19.1` commit `36eea9b5b60bc88547ebace0d80811740286f4ca` 已提供 additive API 和 AAR；`EXOPLAYER_DEFAULT` 遇 `SETUP 461` 的 TCP fallback 需补真机/单测闭环 |
-| U17 | ExoPlayer fork recovery policy 拆分 | ExoPlayer fork | 部分完成 | RTSP 单测 | gap/reset discontinuity 与 RTCP requester 解耦已完成；下一步需要新增独立 low-latency backlog/recovery policy，默认 DISABLED，控制 TCP interleaved queue flush、RTP reorder max age/span reset、H.264 drop-until-idr |
+| U17 | ExoPlayer fork recovery policy 拆分 | ExoPlayer fork + Cast-SDK receiver | 已完成（正常网络真机集成通过） | RTSP/JVM 单测 + GZ 正常网络 | ExoPlayer `2.19.1-labi.9` 已发布 `RtspBacklogRecoveryPolicy`，默认 `DISABLED`；Cast-SDK 已新增 `LegacyRtspRecoveryPolicyBridge`，只在 `LOW_LATENCY` 路径反射启用，旧 artifact 不崩溃；GZ 日志确认 `rtsp low-latency recovery-policy configured=true`；`onRtspBacklogQueueReset` 已聚合到 recovery diagnostics，弱网触发待验证 |
 | U18 | Diagnostics value object 拆分 | Cast-SDK receiver + ExoPlayer fork | 未开始 | JVM/RTSP 单测 | transport/loss/recovery 分开，普通 RTSP diagnostics off 下行为不变 |
-| U19 | UDP 专项 QA 报告体系 | QA/tools | 部分完成 | dry-run + 真机报告 | 已建立 `qa/reports/receiver/live-udp-low-latency/`，保存 GZ manual、首轮失败、screen UDP 通过、camera UDP 通过报告；弱网/network profile 和 WAIT_IDR recovery timeline 待补 |
+| U19 | UDP 专项 QA 报告体系 | QA/tools | 部分完成 | dry-run + 真机报告 | 已建立 `qa/reports/receiver/live-udp-low-latency/`，新增 `20260709-labi9-gz/` 保存线上 Maven `2.19.1-labi.9` 的 GZ 三态、普通 RTSP smoke 和 camera AUTO 10 分钟证据；弱网/network profile、screen 长跑和 30 分钟报告待补 |
 | U20 | 普通 RTSP 性能回归门禁 | QA/工程 | 部分完成（smoke） | baseline 对比 | GZ 普通 RTSP smoke 证明 Cast-SDK default 隔离生效且系统播放器兜底可播放；Exo `SETUP 461` fallback/retry 闭环和性能三档对比待补 |
 | U21 | Rust/macOS sender live invite 下发 UDP transport strategy | Cast-SDK sender | 已完成 | Rust 单测 + GZ 真机复测 | `--transport rtsp-tcp/rtsp-udp/rtsp-udp-tcp/auto` 已映射到 `LiveTransportStrategy`、`UdpExperimentEnabled` 和 `TransportFallbackPolicy`；GZ 日志确认 `requestedStrategy=auto_udp_then_tcp` |
 | U22 | Rust RTSP publisher connected UDP socket 发送修复 | Cast-SDK sender | 已完成 | Rust 单测 + GZ 真机复测 | 修复 connected UDP socket 上 `send_to` 触发 `Socket is already connected (os error 56)`，改为 `send`；`udp_rtp_write_uses_connected_socket_send` 通过；GZ screen/camera UDP 均通过 |
 | U23 | low-latency RTSP live 控制层隔离修复 | Cast-SDK receiver | 已完成 | receiver JVM + GZ 远程 debug 复测 | 用户反馈接收端黑屏且出现控制条/菜单；代码侧已把 `LOW_LATENCY/AUTO_UDP_THEN_TCP` RTSP live 从 adapter runtime duration 误判 VOD 的路径隔离，并在 live 菜单键路径清理 remote/touch menu 内部状态；`receiver-android-unit-tests.sh` 通过 `794 tests`；GZ 新包 `20260708-172343-edbcc431` 已验证 camera/screen UDP 播放中 `PLAYING + hasPresentedFrame=true + videoSize=1280x720`，MENU 被拦截为 `live_menu_unsupported` toast，没有进入普通进度/倍速菜单 |
-| U24 | ExoPlayer fork artifact 对齐 | ExoPlayer fork + Cast-SDK receiver | 进行中（远端 Maven 已切换） | AAR class 检查 + Cast-SDK APK 构建 + GZ transport-ready 日志 | 远端 Maven `https://shenyingjun5.github.io/ExoPlayer` 已发布 `2.19.1-labi.8`；Cast-SDK 默认 `labiExoPlayerRtspVersion` 已切到 `2.19.1-labi.8`，不再依赖 `/private/tmp/labi-exoplayer-maven` 或 `2.19.1-labi.8-local`；Gradle 远端 artifact 编译验证进行中 |
-| U25 | sender latest-frame 队列策略 | Cast-SDK sender | 未开始 | Rust 单测 + 1080p/7Mbps A/B | macOS capture callback 当前 channel 满时丢新帧；低延迟屏幕更适合保留最新完整 AU，丢旧 P 帧或旧 AU，避免 publisher 慢时继续发送旧画面 |
-| U26 | ExoPlayer 内部 low-latency recovery policy | ExoPlayer fork | 未开始 | RTSP 单测 + Cast-SDK 集成 | 将“直接丢旧数据”收敛为显式 policy：默认 DISABLED；第一阶段仅在自家 low-latency live 下做 TCP interleaved queue 受控整段 flush -> QUEUE_RESET/WAIT_IDR、RTP reorder queue max age/span/depth reset、H264 AU assembler WAIT_IDR/drop-until-idr；普通 RTSP default 不启用 |
+| U24 | ExoPlayer fork artifact 对齐 | ExoPlayer fork + Cast-SDK receiver | 已完成 | AAR class 检查 + Cast-SDK APK 构建 + GZ transport-ready 日志 | 远端 Maven `https://shenyingjun5.github.io/ExoPlayer` 已发布 `2.19.1-labi.9`；Cast-SDK 默认 `labiExoPlayerRtspVersion` 已切到 `2.19.1-labi.9`，Gradle 依赖解析确认 `exoplayer-rtsp:2.19.1-labi.9`；接收端 debug APK `20260709-002048-bbc718da` 已安装到 GZ，screen/camera 正常网络日志确认 `transport-ready mode=udp` |
+| U25 | sender latest-frame 队列策略和 screen 长稳 | Cast-SDK sender | 未开始 | Rust 单测 + 1080p/7Mbps A/B + screen 10 分钟 | macOS capture callback 当前 channel 满时丢新帧；低延迟屏幕更适合保留最新完整 AU，丢旧 P 帧或旧 AU，避免 publisher 慢时继续发送旧画面；2026-07-09 GZ screen AUTO 长跑发现 sender 前台进程约 2 分钟收到终止，需补 sender 侧长稳日志/退出原因和 screen publisher 生命周期保护 |
+| U26 | ExoPlayer 内部 low-latency recovery policy | ExoPlayer fork + Cast-SDK receiver | 已完成（正常网络真机集成通过，弱网待验证） | RTSP 单测 + Cast-SDK 集成 + GZ 正常网络 | ExoPlayer `2.19.1-labi.9` 已提供 `RtspBacklogRecoveryPolicy`、`LOW_LATENCY_DEFAULT/LOW_LATENCY`、`Factory#setRtspBacklogRecoveryPolicy(...)` 和 `onRtspBacklogQueueReset(...)`；Cast-SDK 只在 `LOW_LATENCY` 反射配置该 policy，普通 RTSP default 不启用；GZ 正常网络日志确认 `rtsp low-latency recovery-policy configured=true`，camera 10 分钟长跑出现 `waitForIdrStartCount=5/recoveredCount=5/waitForIdrTimeoutCount=0/queueResetCount=0`；`RtspBacklogRecoveryStats` 已聚合到 queue reset/recovery diagnostics 并触发独立控制通道恢复闭环，弱网触发待验证 |
 | U26b | SampleQueue 受控清理评估 | ExoPlayer fork | 第二阶段暂缓 | RTSP 单测 + code review + 真机弱网 | 不做通用 sample age 静默丢弃；如 diagnostics 证明 SampleQueue 已形成不可追 backlog，再评估 low-latency policy 下停止 loader、reset queue、WAIT_IDR、完整 IDR 恢复的受控路径 |
 | U26c | H.264 hot-path 日志迁移 | ExoPlayer fork | 未开始 | RTSP 单测 + 日志量检查 | 将 `RtpH264Reader` FU-A sequence 异常的原有 `Log.w` 迁移为 diagnostics 聚合或限流事件；不在 RTP hot path 新增逐包日志、字符串格式化、JSON、IO、阻塞回调 |
-| U27 | Cast-SDK backlog 策略状态机收敛 | Cast-SDK receiver | 未开始 | JVM 单测 + 真机弱网 | `500ms warn`、`800ms strong/drop-until-idr+requestIdr`、`1500ms rebuild`、`no-packet 1500ms` 统一成明确状态机；普通 RTSP default 不启用 |
+| U27 | Cast-SDK backlog 策略状态机收敛 | Cast-SDK receiver | 部分完成 | JVM 单测 + 真机弱网 | `LiveFeedbackController` 已在 `lastBacklogMs >= 800ms`、WAIT_IDR、sequence gap 等聚合事件上走独立控制通道请求 IDR；普通 RTSP default 不注册 recovery。仍需把 `500ms warn`、`1500ms rebuild` 和弱网退避 throttle 收敛成独立状态机并补真机弱网验证 |
 | U28 | sender/receiver 累积延时诊断闭环 | Cast-SDK sender/receiver | 未开始 | CLI/Demo debug + 报告 | 同一报告里关联 sender `rawFrameDrop/realtimeQueueDuration/rtpSentAge/udpPacing` 和 receiver `rtpQueue/sampleQueue/exoBuffered/waitIdr`，判断积压发生在哪一端 |
+| U29 | UDP startup initial WAIT_IDR 首帧门控 | ExoPlayer fork + Cast-SDK receiver | ExoPlayer 实现和单测已完成，等待 artifact 发布 | RTSP 单测 + Cast-SDK JVM + GZ UDP 启动复测 | ExoPlayer fork 已在 `RtspBacklogRecoveryPolicy` 新增默认关闭的 `initialWaitForIdr` / `initialWaitForIdrAfterSeek` 和 Builder setter，`DISABLED` / `LOW_LATENCY_DEFAULT` / `LOW_LATENCY` preset 均保持 `false`；`DefaultRtpPayloadReaderFactory` 已传入 `RtpH264Reader`；H.264 reader 仅在 `lowLatencyRecoveryEnabled + explicit initialWaitForIdr` 下 startup 进入 `WAIT_IDR`，首包 P 帧、缺 SPS/PPS 的 IDR、非完整 IDR 不进 SampleQueue，完整 `SPS/PPS + IDR` 后恢复；`initialWaitForIdrAfterSeek=true` 可独立控制 seek/reset 后重新等待 IDR。验证：targeted RTSP 单测、`:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease` 均通过。Cast-SDK receiver 已改成仅在 `LOW_LATENCY + FORCE_UDP/AUTO_UDP_THEN_TCP` 反射启用，旧 artifact 缺 setter 时返回 `configured=false`；等待新版 Maven 后做 GZ UDP 启动复测 |
+| U30 | startup short-GOP cache 每个 IDR 前补 SPS/PPS | Cast-SDK sender | 已完成（本地单测通过，真机待复测） | Rust 单测 + GZ UDP 启动复测 | `send_cached_startup_gop_to_client` 已从“整段 cache 前补一次 SPS/PPS”改为“cache 循环中每个 keyframe AU start 前都发 latest SPS/PPS”；新增 `cached_startup_gop_sends_parameter_sets_before_each_keyframe` 覆盖 `SPS/PPS/IDR/SPS/PPS/IDR` RTP 输出顺序；`cargo test -p cast-sender-live-rtsp` 通过 `46 tests`。GZ UDP 启动复测等待 ExoPlayer initial WAIT_IDR artifact |
 
 ## 给 ExoPlayer fork 会话的 review 任务
 
@@ -960,3 +1066,11 @@ Review 结论必须分成：
 - 2026-07-08：按屏幕镜像产品指标 `1920x1080 @ 30fps / 7000kbps` 复测 UDP/AUTO WAIT_IDR 恢复链路。修复前 sender 端独立 live control 其实已通：`liveControlKeyframeRequestCount=42`、`liveControlKeyframeAckCount=42`、`liveControlIdrEmittedCount=42`，但 receiver 只有首个 `first-decodable-video-au`，第二次进入 WAIT_IDR 后长期不恢复，`droppedUntilIdr=990`、`waitingForIdrMs=36778`、`wait-idr-timeout=1`。根因不是没有请求 IDR，也不是发送端没放 IDR，而是 1080p 大 IDR 约 `165KB` 被连续 UDP burst 发出，接收端拿不到完整 IDR。
 - 2026-07-08：sender RTSP publisher 已增加 UDP 大 NAL burst pacing，不改变 `1080p/7Mbps`、GOP、payload size 或 TCP interleaved 行为。修复后同参数 GZ 实测：actual transport `udp`；sender `liveControlKeyframeRequestCount=3`、`liveControlKeyframeAckCount=3`、`liveControlIdrEmittedCount=3`、`socketWriteErrorCount=0`；receiver `wait-idr-started=3`、`wait-idr-ended=3`、`wait-idr-timeout=0`，恢复耗时约 `130ms / 865ms / 153ms`。其中一次 `865ms` 超出 `200-500ms` 目标，说明首版 pacing 已解决“长期拿不到完整 IDR”，但仍需继续调参和弱网矩阵验证。
 - 2026-07-08：ExoPlayer/Cast-SDK roadmap 同步更新累积延时治理边界：`RtpH264Reader` FU-A sequence 异常的原有 `Log.w` 后续迁移为 diagnostics 聚合或限流事件；第一阶段 backlog flush 仅覆盖 low-latency policy 下 TCP interleaved queue、RTP reorder queue 和 H.264 AU assembler；`RtspMediaPeriod` / SampleQueue 受控清理放到第二阶段评估，不做普通路径 sample age 静默丢弃。
+- 2026-07-08：已通知 ExoPlayer 项目 `开始RTSP改造` 会话按 U26 执行，实现默认关闭的 low-latency recovery/backlog policy，并在发布新版 Maven artifact 后通知 Cast-SDK 集成。Cast-SDK 侧已新增 `LegacyRtspRecoveryPolicyBridge`，只在 `LOW_LATENCY` 路径尝试反射接入 `RtpRecoveryPolicy` / `RtspRecoveryPolicy` / `RtspBacklogRecoveryPolicy` 或 boolean enable API；旧 Exo artifact 缺少该 API 时仅记录 `configured=false` 低频诊断，不影响播放。`sh scripts/receiver-android-unit-tests.sh` 已通过 `826` 个 JVM 测试。
+- 2026-07-09：ExoPlayer fork 发布 `2.19.1-labi.9`，实现 commit `4535baa41d516b86a4efeee9942c34570ccab96d`，发布校验 commit `b15bd88659`，gh-pages commit `587d14cdc150c341f33b6cb7c7b1c44afb8b8143`。Cast-SDK 默认版本已切到 `2.19.1-labi.9`，并确认远端 Maven 解析到 `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.9`；`sh scripts/receiver-android-unit-tests.sh` 通过 `826` 个 JVM 测试，`:receiver:android:sdk:player-exo-legacy:compileDebugJavaWithJavac` 通过，`:receiver:android:app:assembleDebug -PlabiDebugUseReleaseSigning=true` 通过。GZ APK `20260709-002048-bbc718da` 已安装到 `192.168.1.11:2202`，`/debug/state` 确认运行 buildId 和 release key 签名一致。
+- 2026-07-09：GZ 线上 Maven `2.19.1-labi.9` 正常网络集成复测通过，报告目录 `qa/reports/receiver/live-udp-low-latency/20260709-labi9-gz/`。screen AUTO 使用 `1920x1080 @ 30fps / 7000kbps`，receiver `transportMode=udp`、`packetReceivedCount=3263`、`sequenceGap=0`、`queueResetCount=0`、`rtpQueueMs=2`、`firstRtpToPlayingMs=82`；screen TCP 实际 `tcp-interleaved` 并播放成功；screen FORCE_UDP 实际 `udp` 并播放成功，`rtpQueueMs=0`；camera AUTO 实际 `udp` 并播放成功，`packetReceivedCount=3652`、`sequenceGap=0`、`queueResetCount=0`、`rtpQueueMs=0`、`firstRtpToPlayingMs=81`。日志确认 `rtsp transport-strategy configured=force_udp/auto_udp_then_tcp`、`rtsp low-latency recovery-policy configured=true`、`rtsp first-decodable-video-au ... type=IDR sps=true pps=true`。本轮没有注入丢包/乱序/限速/短断流，因此弱网、WAIT_IDR 恢复、fallback TCP 和长稳仍未完成。
+- 2026-07-09：GZ 普通 RTSP smoke 使用本机 `mediamtx` 和 `rtsp://192.168.1.5:8554/cast-sdk-basic` 验证。Cast-SDK 普通路径隔离通过：日志显示 `requestedStrategy=exoplayer_default strategy=exoplayer_default`、`forceTcp=false`、`recovery=false`、`feedback=false`、`packetDiagnostics=false`；用户可见播放成功路径为 `LEGACY_EXO SETUP 461 -> SYSTEM fallback`，`/debug/state` 显示 `playbackState=PLAYING`、`playerRoute=SYSTEM`、`videoWidth=1280`、`videoHeight=720`、`hasPresentedFrame=true`。该结果证明 Cast-SDK default 隔离和系统兜底可用，但仍不代表 ExoPlayer fork default UDP unsupported fallback 闭环已完成。
+- 2026-07-09：GZ camera AUTO 10 分钟正常网络长跑通过，命令参数保持 `1920x1080 @ 30fps / 7000kbps` 和 `rtsp-udp-tcp`。发送端 `playbackMonitor.errorCount=0`、`stoppedEarly=false`；停止后接收端 `playbackState=STOPPED`、`lastEvent=exo stop cleanup rtspPackets=188561 rtspTransport=udp`，播放期 `rebufferCount=0`。`/debug/live/latency` 最终显示 `transportMode=udp`、`packetReceivedCount=188561`、`packetDroppedCount=2`、`droppedBeforeEnqueueCount=2`、`sequenceGap=0`、`queueResetCount=0`、`maxQueueDepth=32`、`rtpQueueMs=1`、`sampleQueueMs=0`、`firstRtpToPlayingMs=71`、`firstRtpToFirstDecodableVideoAccessUnitMs=19`、`waitForIdrStartCount=5`、`recoveredCount=5`、`idrRecoveredCount=5`、`waitForIdrTimeoutCount=0`、`transportFallbackCount=0`。这证明正常网络下动态 pacing + recovery policy 没有造成长期卡死、fallback 或累积队列，但仍不是弱网验收。
+- 2026-07-09：screen 10 分钟长跑继续验证。重新枚举后 `cast-sender-cli live screen list --json` 返回 `sources=[{id=1,name=Display 0 (1710x1112)}]`，使用 `--screen-id 1 --transport rtsp-udp-tcp --width 1920 --height 1080 --fps 30 --bitrate-kbps 7000` 可成功进入 GZ `PLAYING + LEGACY_EXO + transportMode=udp + videoSize=1920x1080`，启动期 `sequenceGap=0`、`queueResetCount=0`、`rtpQueueMs=1`、`firstRtpToPlayingMs=106-155`。但前台 sender 进程两次在约 `115-166s` 后收到终止，receiver 先表现为 `no-packet-timeout rebuild ageMs=1501/1654`，随后重连 `192.168.1.5:8554` 返回 `ECONNREFUSED` 并进入 `PLAYBACK_ERROR`。本地 `live screen start` 不投接收端也能复现前台进程 `143` 退出；`CAST_SCREEN_RTSP_TRACE=1` 显示退出前 screen capture、pacer、VideoToolbox encode 和 RTSP frame 输出仍持续正常，未看到 native 主动报错。`nohup` detached 方式因 macOS screen capture 后台运行限制/无交互上下文无法有效启动。结论：screen UDP 接收端启动链路已通，但 screen 10 分钟长稳阻塞在 macOS sender screen publisher 生命周期/进程终止原因，需 sender 侧补退出原因日志和长稳保护后复测。
+- 2026-07-09：根据 UDP 启动初期花屏分析补充最小闭环最终方案：发送端每个 IDR AU start 前都带 SPS/PPS，含 startup short-GOP cache；ExoPlayer fork 在显式 `LOW_LATENCY + FORCE_UDP/AUTO_UDP_THEN_TCP` policy 下支持 startup initial WAIT_IDR，首包 P 帧或非完整 IDR 不进入 SampleQueue，完整 `IDR + SPS/PPS` 后恢复；Cast-SDK receiver 只负责反射配置 policy、聚合 diagnostics 和通过独立 live control channel 请求 IDR。已向 ExoPlayer `开始RTSP改造` 会话发送 review 并收到结论：`initialWaitForIdr` 放入 `RtspBacklogRecoveryPolicy`，新增 `initialWaitForIdr` / `initialWaitForIdrAfterSeek` 两个默认关闭开关，`LOW_LATENCY` preset 不默认开启，Cast-SDK 只在 UDP low-latency 路径显式启用。
+- 2026-07-09：U29 ExoPlayer fork 侧实现完成，待发布新版 Maven artifact。新增 `RtspBacklogRecoveryPolicy.initialWaitForIdr` / `initialWaitForIdrAfterSeek` 和 Builder setter，preset 默认 false；`RtpH264Reader` 在显式 low-latency policy 下 startup/seek 可进入 `WAIT_IDR`，只允许完整 `IDR + SPS/PPS` 恢复提交。ExoPlayer 验证：targeted RTSP 单测、`:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease` 均通过。Cast-SDK 侧已完成 sender startup short-GOP cache 每个 IDR 前补 SPS/PPS，以及 receiver `LegacyRtspRecoveryPolicyBridge` 对两个新 setter 的 UDP low-latency 专属反射配置；旧 artifact 缺 setter 时不走 fallback，避免误判初始门控已生效。Cast-SDK 验证：`cargo test -p cast-sender-live-rtsp` 通过 `46 tests`；`sh scripts/receiver-android-unit-tests.sh` 通过 `920 tests`。待 ExoPlayer 发布新 artifact 后切 Maven、构建 APK 并做 GZ UDP 启动花屏复测。

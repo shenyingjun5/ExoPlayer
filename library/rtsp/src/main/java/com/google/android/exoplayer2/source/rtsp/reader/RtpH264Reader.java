@@ -80,6 +80,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private final boolean accessUnitDiagnosticsEnabled;
   private final boolean rtcpFeedbackRequestsEnabled;
   private final long waitingForIdrTimeoutMs;
+  private final boolean initialWaitForIdr;
+  private final boolean initialWaitForIdrAfterSeek;
 
   private @MonotonicNonNull TrackOutput trackOutput;
   private @C.BufferFlags int bufferFlags;
@@ -146,7 +148,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         lowLatencyRecoveryEnabled,
         accessUnitDiagnosticsEnabled,
         /* rtcpFeedbackRequestsEnabled= */ rtcpFeedbackRequester != null,
-        /* waitingForIdrTimeoutMs= */ 0);
+        /* waitingForIdrTimeoutMs= */ 0,
+        /* initialWaitForIdr= */ false,
+        /* initialWaitForIdrAfterSeek= */ false);
   }
 
   /** Creates an instance. */
@@ -158,6 +162,29 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       boolean accessUnitDiagnosticsEnabled,
       boolean rtcpFeedbackRequestsEnabled,
       long waitingForIdrTimeoutMs) {
+    this(
+        payloadFormat,
+        rtspDiagnosticsListener,
+        rtcpFeedbackRequester,
+        lowLatencyRecoveryEnabled,
+        accessUnitDiagnosticsEnabled,
+        rtcpFeedbackRequestsEnabled,
+        waitingForIdrTimeoutMs,
+        /* initialWaitForIdr= */ false,
+        /* initialWaitForIdrAfterSeek= */ false);
+  }
+
+  /** Creates an instance. */
+  public RtpH264Reader(
+      RtpPayloadFormat payloadFormat,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      boolean lowLatencyRecoveryEnabled,
+      boolean accessUnitDiagnosticsEnabled,
+      boolean rtcpFeedbackRequestsEnabled,
+      long waitingForIdrTimeoutMs,
+      boolean initialWaitForIdr,
+      boolean initialWaitForIdrAfterSeek) {
     this.payloadFormat = payloadFormat;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtcpFeedbackRequester = rtcpFeedbackRequester;
@@ -165,6 +192,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     this.accessUnitDiagnosticsEnabled = accessUnitDiagnosticsEnabled;
     this.rtcpFeedbackRequestsEnabled = rtcpFeedbackRequestsEnabled;
     this.waitingForIdrTimeoutMs = waitingForIdrTimeoutMs;
+    this.initialWaitForIdr = initialWaitForIdr;
+    this.initialWaitForIdrAfterSeek = initialWaitForIdrAfterSeek;
     firstDecodableAccessUnitDiagnosticsEnabled = rtspDiagnosticsListener != null;
     fuScratchBuffer = new ParsableByteArray();
     firstReceivedTimestamp = C.TIME_UNSET;
@@ -184,6 +213,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     waitingForIdrTimeoutNotified = false;
     lastRtpSequence = C.INDEX_UNSET;
     lastRtpTimestamp = C.TIME_UNSET;
+    maybeEnterInitialWaitForIdr();
   }
 
   @Override
@@ -301,6 +331,9 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     waitingForIdr = false;
     waitingForIdrStartElapsedRealtimeMs = C.TIME_UNSET;
     waitingForIdrTimeoutNotified = false;
+    if (initialWaitForIdrAfterSeek) {
+      maybeEnterWaitForIdrAfterSeek();
+    }
     startTimeOffsetUs = timeUs;
   }
 
@@ -532,10 +565,15 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     if (rtspDiagnosticsListener != null) {
       rtspDiagnosticsListener.onH264AccessUnitCorrupted(createRecoveryStats(reason));
     }
-    enterWaitForIdr(reason);
+    enterWaitForIdr(reason, /* requestKeyFrame= */ true);
   }
 
   private void enterWaitForIdr(@RtcpFeedbackReason.Reason int reason) {
+    enterWaitForIdr(reason, /* requestKeyFrame= */ true);
+  }
+
+  private void enterWaitForIdr(
+      @RtcpFeedbackReason.Reason int reason, boolean requestKeyFrame) {
     if (!lowLatencyRecoveryEnabled || waitingForIdr) {
       return;
     }
@@ -545,11 +583,26 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
     if (rtspDiagnosticsListener != null) {
       rtspDiagnosticsListener.onH264WaitForIdrStarted(createRecoveryStats(reason));
     }
-    if (rtcpFeedbackRequestsEnabled
+    if (requestKeyFrame
+        && rtcpFeedbackRequestsEnabled
         && rtcpFeedbackRequester != null
         && reason != RtcpFeedbackReason.SEQUENCE_GAP
         && reason != RtcpFeedbackReason.QUEUE_RESET) {
       rtcpFeedbackRequester.requestKeyFrame(reason);
+    }
+  }
+
+  private void maybeEnterInitialWaitForIdr() {
+    maybeEnterConfiguredWaitForIdr(initialWaitForIdr);
+  }
+
+  private void maybeEnterWaitForIdrAfterSeek() {
+    maybeEnterConfiguredWaitForIdr(initialWaitForIdrAfterSeek);
+  }
+
+  private void maybeEnterConfiguredWaitForIdr(boolean enabled) {
+    if (lowLatencyRecoveryEnabled && enabled) {
+      enterWaitForIdr(RtcpFeedbackReason.WAITING_FOR_IDR, /* requestKeyFrame= */ false);
     }
   }
 

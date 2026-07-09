@@ -259,6 +259,8 @@ public final class RtspFeedbackApiTest {
             .setRtpReorderBacklogResetMs(200)
             .setRtpReorderBacklogResetPackets(240)
             .setWaitForIdrTimeoutMs(800)
+            .setInitialWaitForIdr(true)
+            .setInitialWaitForIdrAfterSeek(true)
             .build();
 
     assertThat(policy.enabled).isTrue();
@@ -269,10 +271,28 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.rtpReorderBacklogResetMs).isEqualTo(200);
     assertThat(policy.rtpReorderBacklogResetPackets).isEqualTo(240);
     assertThat(policy.waitForIdrTimeoutMs).isEqualTo(800);
+    assertThat(policy.initialWaitForIdr).isTrue();
+    assertThat(policy.initialWaitForIdrAfterSeek).isTrue();
     assertThat(policy.isTcpInterleavedBacklogRecoveryEnabled()).isTrue();
     assertThat(policy.isRtpReorderBacklogRecoveryEnabled()).isTrue();
-    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY).isEqualTo(policy);
-    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT).isEqualTo(policy);
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdr).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdrAfterSeek).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdr).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdrAfterSeek).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.DISABLED.initialWaitForIdr).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.DISABLED.initialWaitForIdrAfterSeek).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY)
+        .isEqualTo(
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogWarnMs(150)
+                .setTcpInterleavedBacklogResetMs(300)
+                .setTcpInterleavedBacklogResetPackets(240)
+                .setRtpReorderBacklogWarnMs(100)
+                .setRtpReorderBacklogResetMs(200)
+                .setRtpReorderBacklogResetPackets(240)
+                .setWaitForIdrTimeoutMs(800)
+                .build());
   }
 
   @Test

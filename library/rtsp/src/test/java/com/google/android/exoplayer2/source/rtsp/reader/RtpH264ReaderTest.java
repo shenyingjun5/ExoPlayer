@@ -426,6 +426,289 @@ public final class RtpH264ReaderTest {
   }
 
   @Test
+  public void consume_initialWaitForIdrDisabled_outputsFirstPFrame() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ false,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(1);
+    assertThat(diagnosticsListener.waitStartedStats).isEmpty();
+    assertThat(diagnosticsListener.droppedUntilIdrStats).isEmpty();
+  }
+
+  @Test
+  public void consume_initialWaitForIdrEnabled_dropsFirstPFrame() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    CapturingFeedbackRequester feedbackRequester = new CapturingFeedbackRequester();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            feedbackRequester,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ true,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ true,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(0);
+    assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(feedbackRequester.reasons).isEmpty();
+  }
+
+  @Test
+  public void consume_initialWaitForIdrEnabled_recoversOnSpsPpsIdr() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ false,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ true,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ false,
+            getBytesFromHexString("6742001E")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 3,
+            /* marker= */ false,
+            getBytesFromHexString("68CE06E2")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 4,
+            /* marker= */ true,
+            getBytesFromHexString("650708")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(1);
+    assertThat(trackOutput.getSampleFlags(0)).isEqualTo(C.BUFFER_FLAG_KEY_FRAME);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+  }
+
+  @Test
+  public void consume_initialWaitForIdrEnabled_idrWithoutSpsPpsKeepsDropping()
+      throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ false,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ true,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(0);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).isEmpty();
+  }
+
+  @Test
+  public void consume_initialWaitForIdrEnabled_recoversOnFragmentedIdr() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ true,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ false,
+            getBytesFromHexString("7C851122")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 3,
+            /* marker= */ true,
+            getBytesFromHexString("7C453344")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(1);
+    assertThat(trackOutput.getSampleFlags(0)).isEqualTo(C.BUFFER_FLAG_KEY_FRAME);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+  }
+
+  @Test
+  public void seek_initialWaitForIdrAfterSeekDisabled_outputsPFrame() throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ true,
+            /* initialWaitForIdrAfterSeek= */ false);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+    h264Reader.seek(RTP_TIMESTAMP_2, /* timeUs= */ C.MICROS_PER_SECOND);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(2);
+    assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).isEmpty();
+  }
+
+  @Test
+  public void seek_initialWaitForIdrAfterSeekEnabled_dropsUntilCompleteIdr()
+      throws ParserException {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpH264Reader h264Reader =
+        createH264Reader(
+            /* hasInitializationData= */ true,
+            diagnosticsListener,
+            /* rtcpFeedbackRequester= */ null,
+            /* lowLatencyRecoveryEnabled= */ true,
+            /* accessUnitDiagnosticsEnabled= */ true,
+            /* rtcpFeedbackRequestsEnabled= */ false,
+            /* waitingForIdrTimeoutMs= */ 0,
+            /* initialWaitForIdr= */ false,
+            /* initialWaitForIdrAfterSeek= */ true);
+
+    h264Reader.createTracks(extractorOutput, /* trackId= */ 0);
+    h264Reader.onReceivingFirstPacket(RTP_TIMESTAMP_1, /* sequenceNumber= */ 1);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_1,
+            /* sequenceNumber= */ 1,
+            /* marker= */ true,
+            getBytesFromHexString("650506")));
+    h264Reader.seek(RTP_TIMESTAMP_2, /* timeUs= */ C.MICROS_PER_SECOND);
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2,
+            /* sequenceNumber= */ 2,
+            /* marker= */ true,
+            getBytesFromHexString("410102")));
+    consume(
+        h264Reader,
+        createPacket(
+            RTP_TIMESTAMP_2 + 90_000,
+            /* sequenceNumber= */ 3,
+            /* marker= */ true,
+            getBytesFromHexString("650708")));
+
+    FakeTrackOutput trackOutput = extractorOutput.trackOutputs.get(0);
+    assertThat(trackOutput.getSampleCount()).isEqualTo(2);
+    assertThat(trackOutput.getSampleFlags(1)).isEqualTo(C.BUFFER_FLAG_KEY_FRAME);
+    assertThat(diagnosticsListener.waitStartedStats).hasSize(1);
+    assertThat(diagnosticsListener.droppedUntilIdrStats).hasSize(1);
+    assertThat(diagnosticsListener.waitEndedStats).hasSize(1);
+  }
+
+  @Test
   public void consume_timestampChangesWithoutMarker_entersWaitIdrAndOutputsNextIdr()
       throws ParserException {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
@@ -867,6 +1150,28 @@ public final class RtpH264ReaderTest {
       boolean accessUnitDiagnosticsEnabled,
       boolean rtcpFeedbackRequestsEnabled,
       long waitingForIdrTimeoutMs) {
+    return createH264Reader(
+        hasInitializationData,
+        diagnosticsListener,
+        rtcpFeedbackRequester,
+        lowLatencyRecoveryEnabled,
+        accessUnitDiagnosticsEnabled,
+        rtcpFeedbackRequestsEnabled,
+        waitingForIdrTimeoutMs,
+        /* initialWaitForIdr= */ false,
+        /* initialWaitForIdrAfterSeek= */ false);
+  }
+
+  private static RtpH264Reader createH264Reader(
+      boolean hasInitializationData,
+      RtspDiagnosticsListener diagnosticsListener,
+      RtcpFeedbackRequester rtcpFeedbackRequester,
+      boolean lowLatencyRecoveryEnabled,
+      boolean accessUnitDiagnosticsEnabled,
+      boolean rtcpFeedbackRequestsEnabled,
+      long waitingForIdrTimeoutMs,
+      boolean initialWaitForIdr,
+      boolean initialWaitForIdrAfterSeek) {
     return new RtpH264Reader(
         new RtpPayloadFormat(
             new Format.Builder()
@@ -886,7 +1191,9 @@ public final class RtpH264ReaderTest {
         lowLatencyRecoveryEnabled,
         accessUnitDiagnosticsEnabled,
         rtcpFeedbackRequestsEnabled,
-        waitingForIdrTimeoutMs);
+        waitingForIdrTimeoutMs,
+        initialWaitForIdr,
+        initialWaitForIdrAfterSeek);
   }
 
   private static RtpPacket createPacket(

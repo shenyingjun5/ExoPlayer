@@ -43,6 +43,8 @@ import com.google.android.exoplayer2.util.MimeTypes;
   private final boolean h264AccessUnitDiagnosticsEnabled;
   private final boolean rtcpFeedbackRequestsEnabled;
   private final long h264WaitingForIdrTimeoutMs;
+  private final boolean h264InitialWaitForIdr;
+  private final boolean h264InitialWaitForIdrAfterSeek;
 
   public DefaultRtpPayloadReaderFactory() {
     this(/* rtspDiagnosticsListener= */ null);
@@ -74,6 +76,8 @@ import com.google.android.exoplayer2.util.MimeTypes;
         rtspBacklogRecoveryPolicy.waitForIdrTimeoutMs > 0
             ? rtspBacklogRecoveryPolicy.waitForIdrTimeoutMs
             : rtcpFeedbackPolicy.waitingForIdrTimeoutMs;
+    h264InitialWaitForIdr = rtspBacklogRecoveryPolicy.initialWaitForIdr;
+    h264InitialWaitForIdrAfterSeek = rtspBacklogRecoveryPolicy.initialWaitForIdrAfterSeek;
   }
 
   @Override
@@ -107,7 +111,9 @@ import com.google.android.exoplayer2.util.MimeTypes;
             h264LowLatencyRecoveryEnabled,
             h264AccessUnitDiagnosticsEnabled,
             rtcpFeedbackRequestsEnabled,
-            h264WaitingForIdrTimeoutMs);
+            h264WaitingForIdrTimeoutMs,
+            h264InitialWaitForIdr,
+            h264InitialWaitForIdrAfterSeek);
       case MimeTypes.VIDEO_H265:
         return new RtpH265Reader(payloadFormat);
       case MimeTypes.VIDEO_MP4V:

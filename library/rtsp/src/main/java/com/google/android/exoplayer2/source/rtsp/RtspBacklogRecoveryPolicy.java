@@ -57,6 +57,10 @@ public final class RtspBacklogRecoveryPolicy {
   public final int rtpReorderBacklogResetPackets;
   /** Timeout for reporting prolonged wait for an IDR access unit, or {@code 0} to disable. */
   public final long waitForIdrTimeoutMs;
+  /** Whether H.264 starts in WAIT_IDR until a complete decodable IDR access unit arrives. */
+  public final boolean initialWaitForIdr;
+  /** Whether H.264 re-enters WAIT_IDR after seek/reset. */
+  public final boolean initialWaitForIdrAfterSeek;
   /** Maximum TCP interleaved queue age in milliseconds, or {@code 0} to disable. */
   public final long maxTcpInterleavedQueueAgeMs;
   /** Maximum TCP interleaved queue depth in RTP packets, or {@code 0} to disable. */
@@ -77,6 +81,8 @@ public final class RtspBacklogRecoveryPolicy {
     rtpReorderBacklogResetMs = builder.rtpReorderBacklogResetMs;
     rtpReorderBacklogResetPackets = builder.rtpReorderBacklogResetPackets;
     waitForIdrTimeoutMs = builder.waitForIdrTimeoutMs;
+    initialWaitForIdr = builder.initialWaitForIdr;
+    initialWaitForIdrAfterSeek = builder.initialWaitForIdrAfterSeek;
     maxTcpInterleavedQueueAgeMs = tcpInterleavedBacklogResetMs;
     maxTcpInterleavedQueueDepth = tcpInterleavedBacklogResetPackets;
     maxRtpReorderQueueAgeMs = rtpReorderBacklogResetMs;
@@ -118,7 +124,9 @@ public final class RtspBacklogRecoveryPolicy {
         && rtpReorderBacklogWarnMs == other.rtpReorderBacklogWarnMs
         && rtpReorderBacklogResetMs == other.rtpReorderBacklogResetMs
         && rtpReorderBacklogResetPackets == other.rtpReorderBacklogResetPackets
-        && waitForIdrTimeoutMs == other.waitForIdrTimeoutMs;
+        && waitForIdrTimeoutMs == other.waitForIdrTimeoutMs
+        && initialWaitForIdr == other.initialWaitForIdr
+        && initialWaitForIdrAfterSeek == other.initialWaitForIdrAfterSeek;
   }
 
   @Override
@@ -131,6 +139,8 @@ public final class RtspBacklogRecoveryPolicy {
     result = 31 * result + (int) (rtpReorderBacklogResetMs ^ (rtpReorderBacklogResetMs >>> 32));
     result = 31 * result + rtpReorderBacklogResetPackets;
     result = 31 * result + (int) (waitForIdrTimeoutMs ^ (waitForIdrTimeoutMs >>> 32));
+    result = 31 * result + (initialWaitForIdr ? 1 : 0);
+    result = 31 * result + (initialWaitForIdrAfterSeek ? 1 : 0);
     return result;
   }
 
@@ -144,6 +154,8 @@ public final class RtspBacklogRecoveryPolicy {
     private long rtpReorderBacklogResetMs;
     private int rtpReorderBacklogResetPackets;
     private long waitForIdrTimeoutMs;
+    private boolean initialWaitForIdr;
+    private boolean initialWaitForIdrAfterSeek;
 
     /** Sets whether low-latency backlog recovery is enabled. */
     @CanIgnoreReturnValue
@@ -205,6 +217,20 @@ public final class RtspBacklogRecoveryPolicy {
     public Builder setWaitForIdrTimeoutMs(long waitForIdrTimeoutMs) {
       checkArgument(waitForIdrTimeoutMs >= 0);
       this.waitForIdrTimeoutMs = waitForIdrTimeoutMs;
+      return this;
+    }
+
+    /** Sets whether H.264 starts in WAIT_IDR until a complete decodable IDR arrives. */
+    @CanIgnoreReturnValue
+    public Builder setInitialWaitForIdr(boolean initialWaitForIdr) {
+      this.initialWaitForIdr = initialWaitForIdr;
+      return this;
+    }
+
+    /** Sets whether H.264 re-enters WAIT_IDR after seek/reset. */
+    @CanIgnoreReturnValue
+    public Builder setInitialWaitForIdrAfterSeek(boolean initialWaitForIdrAfterSeek) {
+      this.initialWaitForIdrAfterSeek = initialWaitForIdrAfterSeek;
       return this;
     }
 

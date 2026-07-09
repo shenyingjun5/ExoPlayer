@@ -148,4 +148,12 @@ import java.net.InetAddress;
     rtcpChannel.dataSource.send(packet, rtcpChannel.remoteRtcpAddress, rtcpChannel.remoteRtcpPort);
     return true;
   }
+
+  @Override
+  public int readRtcpPacket(byte[] buffer, int offset, int length) throws IOException {
+    if (rtcpChannel == null) {
+      return C.RESULT_END_OF_INPUT;
+    }
+    return rtcpChannel.read(buffer, offset, length);
+  }
 }

@@ -77,6 +77,11 @@ import java.io.IOException;
     return false;
   }
 
+  /** Reads one inbound RTCP packet, if this channel supports direct RTCP receive. */
+  default int readRtcpPacket(byte[] buffer, int offset, int length) throws IOException {
+    return C.RESULT_END_OF_INPUT;
+  }
+
   /** Returns and clears a pending RTP stream discontinuity reason, if the channel generated one. */
   default @RtcpFeedbackReason.Reason int getAndClearPendingDiscontinuityReason() {
     return RtcpFeedbackReason.UNKNOWN;

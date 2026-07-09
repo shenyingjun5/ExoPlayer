@@ -358,6 +358,19 @@ public final class RtspFeedbackApiTest {
             RtspTransportMode.UDP,
             RtspTransportMode.TCP_INTERLEAVED,
             /* fallbackElapsedRealtimeMs= */ 123);
+    RtcpSenderReportStats senderReportStats =
+        new RtcpSenderReportStats(
+            /* trackId= */ 1,
+            /* ssrc= */ 0x12345678L,
+            /* rtpTimestamp= */ 0xFFFF_FFFEL,
+            /* ntpTimeMs= */ 2500,
+            /* rawNtpSeconds= */ 2,
+            /* rawNtpFraction= */ 0x8000_0000L,
+            /* receivedElapsedRealtimeMs= */ 456,
+            RtspTransportMode.TCP_INTERLEAVED,
+            /* clockRate= */ 90_000,
+            /* packetCount= */ 3,
+            /* octetCount= */ 4);
 
     assertThat(packetStats)
         .isEqualTo(
@@ -394,6 +407,20 @@ public final class RtspFeedbackApiTest {
                 RtspTransportMode.UDP,
                 RtspTransportMode.TCP_INTERLEAVED,
                 123));
+    assertThat(senderReportStats)
+        .isEqualTo(
+            new RtcpSenderReportStats(
+                1,
+                0x12345678L,
+                0xFFFF_FFFEL,
+                2500,
+                2,
+                0x8000_0000L,
+                456,
+                RtspTransportMode.TCP_INTERLEAVED,
+                90_000,
+                3,
+                4));
     assertThat(packetStats.toString()).contains("sequenceNumber=10");
     assertThat(reorderingStats.toString()).contains("queueDepth=2");
     assertThat(feedbackRequest.toString()).contains("detail=gap");
@@ -405,6 +432,7 @@ public final class RtspFeedbackApiTest {
     assertThat(recoveryStats.toString()).contains("waitingForIdr=true");
     assertThat(recoveryStats.toString()).contains("waitingForIdrDurationMs=44");
     assertThat(transportFallbackStats.toString()).contains("reason=2");
+    assertThat(senderReportStats.toString()).contains("rtpTimestamp=4294967294");
   }
 
   @Test
@@ -538,6 +566,9 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onRtpPacketDequeued(packetStats, reorderingStats);
     diagnosticsListener.onRtpPacketDropped(packetStats, reorderingStats);
     diagnosticsListener.onRtpReorderingQueueReset(reorderingStats);
+    diagnosticsListener.onRtcpSenderReport(
+        new RtcpSenderReportStats(1, 0x12345678L, 1234, 2500, 2, 0, 999,
+            RtspTransportMode.UDP, 90_000, 3, 4));
     feedbackListener.onRtcpFeedbackRequested(feedbackRequest);
     feedbackListener.onRtcpFeedbackThrottled(feedbackRequest);
     feedbackListener.onRtcpFeedbackSent(feedbackRequest);

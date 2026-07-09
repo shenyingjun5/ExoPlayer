@@ -39,6 +39,16 @@ public class UdpDataSourceRtpDataChannelTest {
   }
 
   @Test
+  public void readRtcpPacket_withoutAssociatedRtcpChannel_returnsEndOfInput() throws Exception {
+    UdpDataSourceRtpDataChannel rtpChannel =
+        new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
+    byte[] buffer = new byte[1];
+
+    assertThat(rtpChannel.readRtcpPacket(buffer, /* offset= */ 0, buffer.length))
+        .isEqualTo(com.google.android.exoplayer2.C.RESULT_END_OF_INPUT);
+  }
+
+  @Test
   public void sendRtcpPacket_withRemoteRtcpEndpoint_sendsFromRtcpChannel() throws Exception {
     UdpDataSourceRtpDataChannel rtpChannel =
         new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
@@ -64,6 +74,38 @@ public class UdpDataSourceRtpDataChannelTest {
     } finally {
       rtpChannel.close();
       receiver.close();
+    }
+  }
+
+  @Test
+  public void readRtcpPacket_withAssociatedRtcpChannel_readsInboundRtcpPacket() throws Exception {
+    UdpDataSourceRtpDataChannel rtpChannel =
+        new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
+    UdpDataSourceRtpDataChannel rtcpChannel =
+        new UdpDataSourceRtpDataChannel(UdpDataSource.DEFAULT_SOCKET_TIMEOUT_MILLIS);
+    DatagramSocket sender = new DatagramSocket(/* port= */ 0, InetAddress.getByName(null));
+    byte[] packet = Util.getBytesFromHexString("80C80006123456780000000280000000FFFFFFFE0000000300000004");
+
+    try {
+      rtpChannel.open(RtpUtils.getIncomingRtpDataSpec(/* portNumber= */ 0));
+      rtcpChannel.open(RtpUtils.getIncomingRtpDataSpec(/* portNumber= */ 0));
+      rtpChannel.setRtcpChannel(rtcpChannel);
+
+      sender.send(
+          new DatagramPacket(
+              packet,
+              packet.length,
+              InetAddress.getByName("127.0.0.1"),
+              rtcpChannel.getLocalPort()));
+
+      byte[] received = new byte[packet.length];
+      int bytesRead = rtpChannel.readRtcpPacket(received, /* offset= */ 0, received.length);
+
+      assertThat(bytesRead).isEqualTo(packet.length);
+      assertThat(received).isEqualTo(packet);
+    } finally {
+      rtpChannel.close();
+      sender.close();
     }
   }
 }

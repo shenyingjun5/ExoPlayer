@@ -557,3 +557,100 @@ Release:
     `770dd39eaf1e779d447c05a43187d109bd9b4f0ea1de5c7efafbd48790223a03`
   - HLS POM:
     `b963e412c01008129f3a59374dc5c4a9fde250198e43896eb195bfc235b8a36c`
+
+## RTCP SR Precise Latency Roadmap Review
+
+Status: Documentation review completed and re-scoped to server-first.
+
+Review document:
+
+- `labi-docs/rtcp-sr-latency-roadmap-review.md`
+
+Conclusion:
+
+- Cast-SDK 的 RTCP SR 精确延迟 roadmap 方向正确，但最新阶段边界改为
+  server-first：当前 P0 先让自家 RTSP server 发送标准、稳定、可抓包验证
+  的 RTCP Sender Report。
+- ExoPlayer fork 暂时保持不变，不实现 SR parser，不发布新 artifact。
+- 当前 fork 缺口仍记录为后续 P1/P0-next：没有
+  `onRtcpSenderReport(...)` listener，也缺少入站 RTCP receive path。TCP
+  interleaved 目前只注册 RTP channel listener；UDP RTCP channel 目前主要
+  用于 PLI/FIR 出站发送，没有独立读取循环。
+- 后续如进入 ExoPlayer SR implementation，必须先补 RTCP 入站 channel，再补
+  SR parser/stats/listener。不能把 RTCP packet 喂给 RTP extractor，也不能让
+  SR parser 改变 PLI/FIR、WAIT_IDR 或 drop-until-IDR 语义。
+
+Server-first decisions:
+
+- 自家单视频 TCP interleaved 默认 `0-1`，未来多 track 默认
+  `0-1/2-3/4-5`；通用 RTSP client 仍应以 SETUP response 为准。
+- SDP `a=ssrc` P0 可以不补；SR/RTP packet 中的 SSRC 已足够，`a=ssrc`
+  后续作为诊断增强。
+- RTCP SR 映射 media/presentation time，不无条件等同真实 capture time：
+  camera 使用 `CMSampleBuffer PTS`，screen 使用 synthetic presentation time。
+- `ntpTimeUs` P0 暂不暴露；`ntpTimeMs + rawNtpSeconds + rawNtpFraction`
+  足够支撑当前 debug 聚合。
+
+Next implementation package:
+
+- P0 server-side: RTSP publisher sends standard RTCP SR over TCP interleaved
+  RTCP channel and UDP RTCP port.
+- P0 server-side: timestamp/SSRC/channel fixtures and capture/presentation time
+  trace validation.
+- P1/P0-next ExoPlayer: `RtcpSenderReportPacket` parser and tests for
+  compound/malformed RTCP.
+- P1/P0-next ExoPlayer: `RtcpSenderReportStats` and
+  `RtspDiagnosticsListener#onRtcpSenderReport(...)`.
+- P1/P0-next ExoPlayer: TCP interleaved RTCP channel registration and passive
+  SR dispatch.
+- P1/P0-next ExoPlayer: UDP RTCP receive loop or equivalent non-blocking
+  receive path.
+- P1/P0-next ExoPlayer: trackId / mediaSsrc / clockRate mapping with 32-bit
+  RTP timestamp wrap handled by Cast-SDK mapper or exposed raw fields.
+- P1: SR sample age/count/confidence signals and future audio clock-rate
+  extension.
+
+Publication:
+
+- Server-only stage does not require a new ExoPlayer artifact.
+- A new immutable Maven artifact is required only after ExoPlayer SR
+  receive/parser/listener implementation lands.
+
+## RTCP SR Receive Diagnostics Implementation
+
+Status: Implemented, pending release.
+
+Scope:
+
+- Add `RtcpSenderReportPacket` parser for RTCP compound packets and Sender Report
+  extraction.
+- Add public `RtcpSenderReportStats`.
+- Add default no-op `RtspDiagnosticsListener#onRtcpSenderReport(...)`.
+- Add TCP interleaved RTCP receive listener registration in `RtspMediaPeriod`.
+- Add UDP RTCP receive through `RtpDataChannel#readRtcpPacket(...)` and
+  `UdpDataSourceRtpDataChannel`.
+- Keep default playback passive: no diagnostics listener means no SR receive
+  parser/loader state is started.
+
+Tests:
+
+- Targeted RTSP tests passed:
+  `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtcpSenderReportPacketTest --tests com.google.android.exoplayer2.source.rtsp.UdpDataSourceRtpDataChannelTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtspMessageChannelTest`.
+- Full RTSP unit tests passed:
+  `:library-rtsp:testDebugUnitTest`.
+- Release AAR build passed:
+  `:library-rtsp:assembleRelease`.
+
+Cast-SDK reflection fields:
+
+- `trackId`
+- `ssrc`
+- `rtpTimestamp`
+- `ntpTimeMs`
+- `rawNtpSeconds`
+- `rawNtpFraction`
+- `receivedElapsedRealtimeMs`
+- `transportMode`
+- `clockRate`
+- `packetCount`
+- `octetCount`

@@ -50,8 +50,10 @@ import com.google.android.exoplayer2.source.rtsp.RtspMediaSource.RtspPlaybackExc
 import com.google.android.exoplayer2.trackselection.ExoTrackSelection;
 import com.google.android.exoplayer2.trackselection.TrackSelection;
 import com.google.android.exoplayer2.upstream.Allocator;
+import com.google.android.exoplayer2.upstream.DataSourceUtil;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.Loader.Loadable;
+import com.google.android.exoplayer2.upstream.UdpDataSource;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
@@ -1145,6 +1147,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     public void cancelLoad() {
       if (!canceled) {
         loadInfo.loadable.cancelLoad();
+        loadInfo.cancelRtcpLoading();
         canceled = true;
 
         // Update loadingFinished every time loading is canceled.
@@ -1174,6 +1177,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (released) {
         return;
       }
+      loadInfo.cancelRtcpLoading();
       loader.release();
       sampleQueue.release();
       released = true;
@@ -1190,9 +1194,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Nullable private String transport;
     @Nullable private RtpDataChannel rtpDataChannel;
+    @Nullable private Loader rtcpLoader;
+    @Nullable private RtcpDataLoadable rtcpDataLoadable;
     private @RtspTransportMode.Mode int transportMode;
     private long lastFeedbackRequestElapsedRealtimeMs;
     private int firSequenceNumber;
+    private int rtcpInterleavedChannel;
 
     /** Creates a new instance. */
     public RtpLoadInfo(
@@ -1201,6 +1208,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       this.trackId = trackId;
       this.transportMode = RtspTransportMode.UNKNOWN;
       this.lastFeedbackRequestElapsedRealtimeMs = C.TIME_UNSET;
+      this.rtcpInterleavedChannel = C.INDEX_UNSET;
 
       // This listener runs on the playback thread, posted by the Loader thread.
       RtpDataLoadable.EventListener transportEventListener =
@@ -1216,9 +1224,22 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                     ? RtspTransportMode.TCP_INTERLEAVED
                     : RtspTransportMode.UDP;
             if (interleavedBinaryDataListener != null) {
+              rtcpInterleavedChannel = rtpDataChannel.getLocalPort() + 1;
               rtspClient.registerInterleavedDataChannel(
                   rtpDataChannel.getLocalPort(), interleavedBinaryDataListener);
+              if (rtspDiagnosticsListener != null) {
+                rtspClient.registerInterleavedDataChannel(
+                    rtcpInterleavedChannel,
+                    data ->
+                        handleRtcpPacket(
+                            data,
+                            data.length,
+                            RtspTransportMode.TCP_INTERLEAVED,
+                            SystemClock.elapsedRealtime()));
+              }
               isUsingRtpTcp = true;
+            } else if (rtspDiagnosticsListener != null) {
+              startUdpRtcpLoading(rtpDataChannel);
             }
             if (rtspDiagnosticsListener != null) {
               rtspDiagnosticsListener.onTransportReady(trackId, transportMode, transport);
@@ -1316,7 +1337,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         boolean sent;
         if (transportMode == RtspTransportMode.TCP_INTERLEAVED) {
           rtspClient.sendInterleavedBinaryData(
-              trackId * 2 + 1,
+              rtcpInterleavedChannel != C.INDEX_UNSET ? rtcpInterleavedChannel : trackId * 2 + 1,
               packet,
               new RtspMessageChannel.InterleavedBinaryDataSendListener() {
                 @Override
@@ -1412,6 +1433,102 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       }
       if (rtspDiagnosticsListener != null) {
         rtspDiagnosticsListener.onRtcpFeedbackSendFailed(request, error);
+      }
+    }
+
+    private void startUdpRtcpLoading(RtpDataChannel rtpDataChannel) {
+      cancelRtcpLoading();
+      rtcpDataLoadable = new RtcpDataLoadable(rtpDataChannel);
+      rtcpLoader = new Loader("ExoPlayer:RtspMediaPeriod:RtcpLoader " + trackId);
+      rtcpLoader.startLoading(
+          rtcpDataLoadable,
+          new Loader.Callback<RtcpDataLoadable>() {
+            @Override
+            public void onLoadCompleted(
+                RtcpDataLoadable loadable, long elapsedRealtimeMs, long loadDurationMs) {}
+
+            @Override
+            public void onLoadCanceled(
+                RtcpDataLoadable loadable,
+                long elapsedRealtimeMs,
+                long loadDurationMs,
+                boolean released) {}
+
+            @Override
+            public Loader.LoadErrorAction onLoadError(
+                RtcpDataLoadable loadable,
+                long elapsedRealtimeMs,
+                long loadDurationMs,
+                IOException error,
+                int errorCount) {
+              return Loader.DONT_RETRY;
+            }
+          },
+          /* defaultMinRetryCount= */ 0);
+    }
+
+    private void cancelRtcpLoading() {
+      if (rtcpDataLoadable != null) {
+        rtcpDataLoadable.cancelLoad();
+      }
+      if (rtcpLoader != null) {
+        rtcpLoader.release();
+      }
+      rtcpDataLoadable = null;
+      rtcpLoader = null;
+    }
+
+    private void handleRtcpPacket(
+        byte[] packet,
+        int packetLength,
+        @RtspTransportMode.Mode int transportMode,
+        long receivedElapsedRealtimeMs) {
+      if (rtspDiagnosticsListener == null) {
+        return;
+      }
+      ImmutableList<RtcpSenderReportStats> senderReports =
+          RtcpSenderReportPacket.parseSenderReports(
+              packet,
+              packetLength,
+              trackId,
+              transportMode,
+              mediaTrack.payloadFormat.clockRate,
+              receivedElapsedRealtimeMs);
+      for (int i = 0; i < senderReports.size(); i++) {
+        RtcpSenderReportStats stats = senderReports.get(i);
+        handler.post(() -> rtspDiagnosticsListener.onRtcpSenderReport(stats));
+      }
+    }
+
+    private final class RtcpDataLoadable implements Loadable {
+
+      private final RtpDataChannel rtpDataChannel;
+      private final byte[] buffer;
+      private volatile boolean canceled;
+
+      public RtcpDataLoadable(RtpDataChannel rtpDataChannel) {
+        this.rtpDataChannel = rtpDataChannel;
+        buffer = new byte[UdpDataSource.DEFAULT_MAX_PACKET_SIZE];
+      }
+
+      @Override
+      public void cancelLoad() {
+        canceled = true;
+        DataSourceUtil.closeQuietly(rtpDataChannel);
+      }
+
+      @Override
+      public void load() throws IOException {
+        while (!canceled) {
+          int bytesRead = rtpDataChannel.readRtcpPacket(buffer, /* offset= */ 0, buffer.length);
+          if (bytesRead == C.RESULT_END_OF_INPUT) {
+            continue;
+          }
+          if (bytesRead > 0) {
+            handleRtcpPacket(
+                buffer, bytesRead, RtspTransportMode.UDP, SystemClock.elapsedRealtime());
+          }
+        }
       }
     }
   }

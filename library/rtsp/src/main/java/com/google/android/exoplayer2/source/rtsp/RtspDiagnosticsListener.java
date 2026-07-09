@@ -100,6 +100,9 @@ public interface RtspDiagnosticsListener {
   /** Called when an RTCP FIR packet is sent. */
   default void onRtcpFirSent(RtcpFeedbackRequest request) {}
 
+  /** Called when an RTCP Sender Report packet is received. */
+  default void onRtcpSenderReport(RtcpSenderReportStats senderReportStats) {}
+
   /** Called when an RTCP feedback request failed to send. */
   default void onRtcpFeedbackSendFailed(RtcpFeedbackRequest request, Exception error) {}
 }

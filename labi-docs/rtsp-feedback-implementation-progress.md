@@ -450,6 +450,65 @@ Cast-SDK integration value:
   - `com.zknowai.exoplayer:exoplayer-hls:2.19.1-labi.8`
   - `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.8`
 
+## `2.19.1-labi.12` TCP Low-Latency Recovery Controls
+
+Status: Published on 2026-07-10.
+
+- version: `2.19.1-labi.12`
+- source commit: `b1d53e9e9faf3310f006c2cf00de778a816e33e1`
+- release tag: `exoplayer-rtsp-2.19.1-labi.12`
+- gh-pages commit: `e0540862a9`
+- Maven repo: `https://shenyingjun5.github.io/ExoPlayer/`
+- published modules:
+  - `com.zknowai.exoplayer:exoplayer-common:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-container:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-database:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-datasource:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-decoder:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-extractor:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-core:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-hls:2.19.1-labi.12`
+  - `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.12`
+- remote metadata:
+  - `exoplayer-core`: `latest/release=2.19.1-labi.12`
+  - `exoplayer-hls`: `latest/release=2.19.1-labi.12`
+  - `exoplayer-rtsp`: `latest/release=2.19.1-labi.12`
+- remote HTTP/SHA256:
+  - RTSP POM: `6663453340b16820515ceeeb977958f3fe10282d25fd24d6bdb6097a702ea50c`
+  - RTSP AAR: `e0914be6b3b06b2eaf48532c58b765321b5c88c15cbf497145356581724cc14f`
+  - RTSP metadata: `23e4366868754752bb0e4e530c9fb413d57c1d9ca9aa4aa6c88a32812d493ecb`
+- remote `exoplayer-rtsp-2.19.1-labi.12.aar` `classes.jar` contains:
+  - `RtspBacklogRecoveryPolicy.Builder#setTcpInterleavedRtpReorderWaitMs(long)`
+  - `RtspBacklogRecoveryPolicy.Builder#setUdpRtpReorderWaitMs(long)`
+  - `RtspBacklogRecoveryPolicy.Builder#setMediaPeriodRecoverySignalEnabled(boolean)`
+  - `RtspMediaSource#requestRtcpPli(int)`
+  - `RtspMediaSource#requestOneShotRtcpPli(int)`
+  - `RtspMediaSource#requestRtcpFir(int)`
+  - `RtspMediaSource#requestOneShotRtcpFir(int)`
+  - `RtspDiagnosticsListener#onRtspMediaPeriodRecoveryRequired(RtspMediaPeriodRecoveryStats)`
+  - `RtcpFeedbackResult`
+  - `RtspMediaPeriodRecoveryStats`
+- remote RTSP AAR class list has no Cast-SDK package match.
+- tests:
+  - targeted RTSP tests passed:
+    `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`
+  - full RTSP unit tests passed:
+    `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
+  - RTSP release AAR passed:
+    `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease`
+  - first full publish without skips hit existing non-RTSP `:library-core:testDebugUnitTest`
+    async/fixture failures: `ExoPlayerTest.onEvents_correspondToListenerCalls`,
+    `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`,
+    `PlaylistPlaybackTest.test_subtitle`; Maven publish then followed existing policy with
+    `-x lint -x test -x testDebugUnitTest -x testReleaseUnitTest`.
+- default behavior:
+  - ordinary RTSP default remains `EXOPLAYER_DEFAULT + RtcpFeedbackPolicy.DEFAULT
+    + RtspBacklogRecoveryPolicy.DISABLED + listener null + packet diagnostics false`.
+  - `DISABLED` keeps original RTP reorder wait `30ms`.
+  - media-period recovery signal defaults false and only emits for explicit policy enabled
+    + signal enabled + TCP interleaved reset.
+  - one-shot PLI/FIR requires explicit public API call and does not enable automatic RTCP feedback.
+
 ## Low-Latency Backlog Recovery Policy
 
 Status: Published as `2.19.1-labi.9`.

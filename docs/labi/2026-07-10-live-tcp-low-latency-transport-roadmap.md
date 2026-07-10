@@ -574,3 +574,17 @@ duration: 2min smoke / 10min trend / 30min stability
 - 2026-07-10：targeted 测试通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`。
 - 2026-07-10：完整 RTSP 单测通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`。
 - 2026-07-10：release AAR 构建通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease`。
+- 2026-07-10：已发布 `2.19.1-labi.12` 到 GitHub Pages Maven repo。source commit `b1d53e9e9faf3310f006c2cf00de778a816e33e1`，tag `exoplayer-rtsp-2.19.1-labi.12`，gh-pages commit `e0540862a9`。
+- 2026-07-10：发布模块：`exoplayer-common`、`exoplayer-container`、`exoplayer-database`、`exoplayer-datasource`、`exoplayer-decoder`、`exoplayer-extractor`、`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。三组关键 metadata 均为 `latest/release=2.19.1-labi.12`：`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。
+- 2026-07-10：远端 HTTP/SHA256 校验通过：
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.12/exoplayer-rtsp-2.19.1-labi.12.pom`：`6663453340b16820515ceeeb977958f3fe10282d25fd24d6bdb6097a702ea50c`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.12/exoplayer-rtsp-2.19.1-labi.12.aar`：`e0914be6b3b06b2eaf48532c58b765321b5c88c15cbf497145356581724cc14f`
+  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/maven-metadata.xml`：`23e4366868754752bb0e4e530c9fb413d57c1d9ca9aa4aa6c88a32812d493ecb`
+- 2026-07-10：远端 RTSP AAR `classes.jar` 经 `javap` 确认包含：
+  - `RtspBacklogRecoveryPolicy.Builder#setTcpInterleavedRtpReorderWaitMs(long)`
+  - `RtspBacklogRecoveryPolicy.Builder#setUdpRtpReorderWaitMs(long)`
+  - `RtspBacklogRecoveryPolicy.Builder#setMediaPeriodRecoverySignalEnabled(boolean)`
+  - `RtspMediaSource#requestRtcpPli(int)`、`requestOneShotRtcpPli(int)`、`requestRtcpFir(int)`、`requestOneShotRtcpFir(int)`
+  - `RtspDiagnosticsListener#onRtspMediaPeriodRecoveryRequired(RtspMediaPeriodRecoveryStats)`
+  - `RtcpFeedbackResult`、`RtspMediaPeriodRecoveryStats`
+- 2026-07-10：远端 RTSP AAR class list 未包含 Cast-SDK 类型。首次全量 publish 未跳过测试时触发既有非 RTSP `:library-core:testDebugUnitTest` async/fixture 失败：`ExoPlayerTest.onEvents_correspondToListenerCalls` timeout、`DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` timeout、`PlaylistPlaybackTest.test_subtitle` comparison failure；随后按既有发布策略使用 `-x lint -x test -x testDebugUnitTest -x testReleaseUnitTest` 完成 Maven 发布。RTSP targeted/full 单测和 release AAR 构建均已单独通过。

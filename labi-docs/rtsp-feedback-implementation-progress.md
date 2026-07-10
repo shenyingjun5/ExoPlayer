@@ -716,7 +716,7 @@ Cast-SDK reflection fields:
 
 ## RTP Sequence Wrap Boundary Fix
 
-Status: Implemented, tested, pending release as `2.19.1-labi.13`.
+Status: Implemented, tested, released as `2.19.1-labi.13`.
 
 Scope:
 
@@ -742,6 +742,17 @@ Tests:
   `:library-rtsp:testDebugUnitTest`.
 - Passed release AAR build:
   `:library-rtsp:assembleRelease`.
+
+Publication:
+
+- Version: `2.19.1-labi.13`.
+- Source commit/tag: `944cc32560`, `exoplayer-rtsp-2.19.1-labi.13`.
+- GitHub Pages commit: `a152784ee8`.
+- Published modules: `exoplayer-common`, `exoplayer-container`,
+  `exoplayer-database`, `exoplayer-datasource`, `exoplayer-decoder`,
+  `exoplayer-extractor`, `exoplayer-core`, `exoplayer-hls`, `exoplayer-rtsp`.
+- Local RTSP AAR SHA256 before remote propagation:
+  `f85bc6ec28e6adee4e9ff99d20b407ad4514d6635fd1f29b3b0e060dd55cfd27`.
 
 Performance/default-path review:
 

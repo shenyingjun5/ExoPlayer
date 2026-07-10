@@ -412,6 +412,77 @@ public class RtpPacketReorderingQueueTest {
     assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet3);
   }
 
+  @Test
+  public void reorder_receivingContinuousPacketsAtWrapBoundary_returnsPacketsInCorrectOrder() {
+    RtpPacket packet65534 = makePacket(/* sequenceNumber= */ 65534);
+    RtpPacket packet65535 = makePacket(/* sequenceNumber= */ RtpPacket.MAX_SEQUENCE_NUMBER);
+    RtpPacket packet0 = makePacket(/* sequenceNumber= */ 0);
+    RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
+
+    assertThat(reorderingQueue.offer(packet65534, /* receivedTimestampMs= */ 1)).isTrue();
+    assertThat(reorderingQueue.offer(packet65535, /* receivedTimestampMs= */ 2)).isTrue();
+    assertThat(reorderingQueue.offer(packet0, /* receivedTimestampMs= */ 3)).isTrue();
+    assertThat(reorderingQueue.offer(packet1, /* receivedTimestampMs= */ 4)).isTrue();
+
+    assertThat(reorderingQueue.getLastOfferDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(reorderingQueue.createStats(/* sequenceGap= */ 0).droppedBeforeEnqueueCount)
+        .isEqualTo(0);
+    assertThat(reorderingQueue.createStats(/* sequenceGap= */ 0).duplicatePacketCount)
+        .isEqualTo(0);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65534);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65535);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet0);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet1);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isNull();
+  }
+
+  @Test
+  public void reorder_receivingOutOfOrderPacketsAtWrapBoundary_returnsPacketsInCorrectOrder() {
+    RtpPacket packet65534 = makePacket(/* sequenceNumber= */ 65534);
+    RtpPacket packet65535 = makePacket(/* sequenceNumber= */ RtpPacket.MAX_SEQUENCE_NUMBER);
+    RtpPacket packet0 = makePacket(/* sequenceNumber= */ 0);
+    RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
+
+    reorderingQueue.offer(packet65534, /* receivedTimestampMs= */ 1);
+    reorderingQueue.offer(packet0, /* receivedTimestampMs= */ 2);
+    reorderingQueue.offer(packet65535, /* receivedTimestampMs= */ 3);
+    reorderingQueue.offer(packet1, /* receivedTimestampMs= */ 4);
+
+    assertThat(reorderingQueue.getLastOfferDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(reorderingQueue.createStats(/* sequenceGap= */ 0).duplicatePacketCount)
+        .isEqualTo(0);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65534);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65535);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet0);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet1);
+  }
+
+  @Test
+  public void offer_receivingLateOldPacketAcrossWrapBoundary_dropsPacket() {
+    RtpPacket packet65534 = makePacket(/* sequenceNumber= */ 65534);
+    RtpPacket packet65535 = makePacket(/* sequenceNumber= */ RtpPacket.MAX_SEQUENCE_NUMBER);
+    RtpPacket packet0 = makePacket(/* sequenceNumber= */ 0);
+    RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
+
+    reorderingQueue.offer(packet65534, /* receivedTimestampMs= */ 1);
+    reorderingQueue.offer(packet65535, /* receivedTimestampMs= */ 2);
+    reorderingQueue.offer(packet0, /* receivedTimestampMs= */ 3);
+    reorderingQueue.offer(packet1, /* receivedTimestampMs= */ 4);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65534);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet65535);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet0);
+    assertThat(reorderingQueue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet1);
+
+    assertThat(reorderingQueue.offer(packet65535, /* receivedTimestampMs= */ 5)).isFalse();
+
+    assertThat(reorderingQueue.getLastOfferDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(reorderingQueue.createStats(/* sequenceGap= */ 0).droppedBeforeEnqueueCount)
+        .isEqualTo(1);
+  }
+
   private static RtpPacket makePacket(int sequenceNumber) {
     return new RtpPacket.Builder().setSequenceNumber(sequenceNumber).build();
   }

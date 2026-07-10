@@ -41,6 +41,8 @@ import java.util.TreeSet;
   /** The maximum sequence number discontinuity allowed without resetting the re-ordering buffer. */
   @VisibleForTesting /* package */ static final int MAX_SEQUENCE_LEAP_ALLOWED = 1000;
 
+  private static final int SEQUENCE_NUMBER_MODULUS = RtpPacket.MAX_SEQUENCE_NUMBER + 1;
+
   /** Queue size threshold for resetting the queue. 5000 packets equate about 7MB in buffer size. */
   private static final int QUEUE_SIZE_THRESHOLD_FOR_RESET = 5000;
 
@@ -366,7 +368,7 @@ import java.util.TreeSet;
       int shift =
           min(sequenceNumber, previousSequenceNumber)
               - max(sequenceNumber, previousSequenceNumber)
-              + RtpPacket.MAX_SEQUENCE_NUMBER;
+              + SEQUENCE_NUMBER_MODULUS;
       // Check whether this is actually an wrap-over. For example, it is a wrap around if receiving
       // 65500 (prevSequenceNumber) after 1 (sequenceNumber); but it is not when prevSequenceNumber
       // is 30000.

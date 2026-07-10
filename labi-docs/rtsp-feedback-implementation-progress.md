@@ -713,3 +713,40 @@ Cast-SDK reflection fields:
 - `clockRate`
 - `packetCount`
 - `octetCount`
+
+## RTP Sequence Wrap Boundary Fix
+
+Status: Implemented, tested, pending release as `2.19.1-labi.13`.
+
+Scope:
+
+- Fix `RtpPacketReorderingQueue.calculateSequenceNumberShift()` to use the RTP
+  16-bit sequence number space size, `RtpPacket.MAX_SEQUENCE_NUMBER + 1`, when
+  calculating wrap-around distance.
+- Prevent adjacent packets `65535 -> 0` from being treated as equal by the
+  `TreeSet` comparator, which previously caused sequence `0` to be dropped as a
+  duplicate at every 65,536-packet boundary.
+- Keep the change as a protocol correctness fix for all RTSP transports. It is
+  not guarded by low-latency policy because default RTSP should also preserve
+  continuous RTP sequence semantics.
+
+Tests:
+
+- Added coverage for continuous `65534,65535,0,1` wrap boundary ordering.
+- Added coverage for out-of-order packets across the same wrap boundary.
+- Added coverage for a late old packet after wrap, which should still be
+  dropped without reporting a discontinuity.
+- Passed targeted RTSP test:
+  `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest`.
+- Passed full RTSP unit tests:
+  `:library-rtsp:testDebugUnitTest`.
+- Passed release AAR build:
+  `:library-rtsp:assembleRelease`.
+
+Performance/default-path review:
+
+- No new logging, diagnostics callback, JSON, file IO, network IO, blocking call
+  or allocation in the RTP hot path.
+- The runtime change is one integer constant in existing arithmetic. Comparator
+  behavior becomes strictly correct at wrap boundaries and remains unchanged for
+  non-wrap sequence comparisons.

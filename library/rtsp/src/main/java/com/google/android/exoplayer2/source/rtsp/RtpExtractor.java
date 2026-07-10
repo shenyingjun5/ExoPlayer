@@ -53,6 +53,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Nullable private final RtcpFeedbackRequester rtcpFeedbackRequester;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
+  private final long rtpReorderWaitMs;
   private final boolean rtspPacketDiagnosticsEnabled;
   private final boolean payloadReaderDiscontinuityNotificationsEnabled;
   private final Object lock;
@@ -100,6 +101,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
+    rtpReorderWaitMs = rtspBacklogRecoveryPolicy.getRtpReorderWaitMs(transportMode);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     payloadReaderDiscontinuityNotificationsEnabled =
         rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
@@ -315,10 +317,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
    * <p>Returns the cutoff time to pass to {@link RtpPacketReorderingQueue#poll(long)} based on the
    * given RtpPacket arrival time.
    */
-  private static long getCutoffTimeMs(long packetArrivalTimeMs) {
-    // TODO(internal b/172331505) 30ms is roughly the time for one video frame. It is not rigorously
-    // chosen and will need fine tuning in the future.
-    return packetArrivalTimeMs - 30;
+  private long getCutoffTimeMs(long packetArrivalTimeMs) {
+    return packetArrivalTimeMs - rtpReorderWaitMs;
+  }
+
+  /* package */ long getRtpReorderWaitMsForTesting() {
+    return rtpReorderWaitMs;
   }
 
   private RtpPacketStats createPacketStats(RtpPacket packet, long packetArrivalTimeMs) {

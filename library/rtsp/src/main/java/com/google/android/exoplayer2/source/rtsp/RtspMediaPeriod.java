@@ -60,6 +60,9 @@ import java.io.IOException;
 import java.net.BindException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.net.SocketFactory;
 import org.checkerframework.checker.nullness.compatqual.NullableType;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
@@ -207,6 +210,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return rtspDiagnosticsListener;
   }
 
+  /* package */ @Nullable RtspDiagnosticsListener getForwardingRtspDiagnosticsListenerForTesting() {
+    return forwardingRtspDiagnosticsListener;
+  }
+
   /* package */ @Nullable RtspFeedbackListener getRtspFeedbackListener() {
     return rtspFeedbackListener;
   }
@@ -230,9 +237,47 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return requestKeyFrameInternal(reason);
   }
 
+  /* package */ RtcpFeedbackResult requestRtcpFeedback(
+      @RtcpFeedbackType.Type int feedbackType, @RtcpFeedbackReason.Reason int reason) {
+    if (Looper.myLooper() != handler.getLooper()) {
+      AtomicReference<RtcpFeedbackResult> resultReference = new AtomicReference<>();
+      CountDownLatch latch = new CountDownLatch(1);
+      boolean posted =
+          handler.post(
+              () -> {
+                try {
+                  resultReference.set(requestRtcpFeedbackInternal(feedbackType, reason));
+                } finally {
+                  latch.countDown();
+                }
+              });
+      if (!posted) {
+        return createFeedbackResult(
+            RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler unavailable");
+      }
+      try {
+        if (!latch.await(1000, TimeUnit.MILLISECONDS)) {
+          return createFeedbackResult(
+              RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler timeout");
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return createFeedbackResult(
+            RtcpFeedbackResult.FAILED, /* request= */ null, "interrupted");
+      }
+      @Nullable RtcpFeedbackResult result = resultReference.get();
+      return result != null
+          ? result
+          : createFeedbackResult(
+              RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler failed");
+    }
+    return requestRtcpFeedbackInternal(feedbackType, reason);
+  }
+
   private boolean requestKeyFrameInternal(@RtcpFeedbackReason.Reason int reason) {
     boolean requested = false;
-    List<RtpLoadInfo> loadInfos = selectedLoadInfos.isEmpty() ? new ArrayList<>() : selectedLoadInfos;
+    List<RtpLoadInfo> loadInfos =
+        selectedLoadInfos.isEmpty() ? new ArrayList<>() : selectedLoadInfos;
     if (selectedLoadInfos.isEmpty()) {
       for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
         loadInfos.add(rtspLoaderWrappers.get(i).loadInfo);
@@ -242,6 +287,38 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       requested |= loadInfos.get(i).requestKeyFrame(reason);
     }
     return requested;
+  }
+
+  private RtcpFeedbackResult requestRtcpFeedbackInternal(
+      @RtcpFeedbackType.Type int feedbackType, @RtcpFeedbackReason.Reason int reason) {
+    RtcpFeedbackResult result =
+        createFeedbackResult(
+            RtcpFeedbackResult.FAILED, /* request= */ null, "no active RTSP RTP track");
+    List<RtpLoadInfo> loadInfos =
+        selectedLoadInfos.isEmpty() ? new ArrayList<>() : selectedLoadInfos;
+    if (selectedLoadInfos.isEmpty()) {
+      for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
+        loadInfos.add(rtspLoaderWrappers.get(i).loadInfo);
+      }
+    }
+    for (int i = 0; i < loadInfos.size(); i++) {
+      RtcpFeedbackResult trackResult = loadInfos.get(i).requestRtcpFeedback(feedbackType, reason);
+      if (trackResult.status == RtcpFeedbackResult.SCHEDULED) {
+        return trackResult;
+      }
+      if (result.status == RtcpFeedbackResult.FAILED
+          || trackResult.status == RtcpFeedbackResult.THROTTLED) {
+        result = trackResult;
+      }
+    }
+    return result;
+  }
+
+  private static RtcpFeedbackResult createFeedbackResult(
+      @RtcpFeedbackResult.Status int status,
+      @Nullable RtcpFeedbackRequest request,
+      @Nullable String detail) {
+    return new RtcpFeedbackResult(status, request, SystemClock.elapsedRealtime(), detail);
   }
 
   /** Releases the {@link RtspMediaPeriod}. */
@@ -758,11 +835,48 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     @Override
     public void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {
       checkNotNull(rtspDiagnosticsListener).onRtpReorderingQueueReset(reorderingStats);
+      maybeNotifyMediaPeriodRecoveryRequired(
+          reorderingStats.trackId,
+          reorderingStats.transportMode,
+          RtcpFeedbackReason.QUEUE_RESET,
+          "rtp_reordering_queue_reset");
     }
 
     @Override
     public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
       checkNotNull(rtspDiagnosticsListener).onRtspBacklogQueueReset(backlogRecoveryStats);
+      maybeNotifyMediaPeriodRecoveryRequired(
+          backlogRecoveryStats.trackId,
+          backlogRecoveryStats.transportMode,
+          backlogRecoveryStats.reason,
+          "rtsp_backlog_queue_reset");
+    }
+
+    private void maybeNotifyMediaPeriodRecoveryRequired(
+        int trackId,
+        @RtspTransportMode.Mode int transportMode,
+        @RtcpFeedbackReason.Reason int reason,
+        String detail) {
+      if (!rtspBacklogRecoveryPolicy.isMediaPeriodRecoverySignalEnabled()
+          || transportMode != RtspTransportMode.TCP_INTERLEAVED) {
+        return;
+      }
+      checkNotNull(rtspDiagnosticsListener)
+          .onRtspMediaPeriodRecoveryRequired(
+              new RtspMediaPeriodRecoveryStats(
+                  trackId,
+                  transportMode,
+                  reason,
+                  RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+                  SystemClock.elapsedRealtime(),
+                  detail));
+    }
+
+    @Override
+    public void onRtspMediaPeriodRecoveryRequired(
+        RtspMediaPeriodRecoveryStats mediaPeriodRecoveryStats) {
+      checkNotNull(rtspDiagnosticsListener)
+          .onRtspMediaPeriodRecoveryRequired(mediaPeriodRecoveryStats);
     }
 
     @Override
@@ -1309,19 +1423,63 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     private boolean requestKeyFrameInternal(@RtcpFeedbackReason.Reason int reason) {
+      return requestRtcpFeedbackInternal(RtcpFeedbackType.UNKNOWN, reason).status
+          == RtcpFeedbackResult.SCHEDULED;
+    }
+
+    public RtcpFeedbackResult requestRtcpFeedback(
+        @RtcpFeedbackType.Type int requestedFeedbackType, @RtcpFeedbackReason.Reason int reason) {
+      if (Looper.myLooper() != handler.getLooper()) {
+        AtomicReference<RtcpFeedbackResult> resultReference = new AtomicReference<>();
+        CountDownLatch latch = new CountDownLatch(1);
+        boolean posted =
+            handler.post(
+                () -> {
+                  try {
+                    resultReference.set(
+                        requestRtcpFeedbackInternal(requestedFeedbackType, reason));
+                  } finally {
+                    latch.countDown();
+                  }
+                });
+        if (!posted) {
+          return createFeedbackResult(
+              RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler unavailable");
+        }
+        try {
+          if (!latch.await(1000, TimeUnit.MILLISECONDS)) {
+            return createFeedbackResult(
+                RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler timeout");
+          }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          return createFeedbackResult(
+              RtcpFeedbackResult.FAILED, /* request= */ null, "interrupted");
+        }
+        @Nullable RtcpFeedbackResult result = resultReference.get();
+        return result != null
+            ? result
+            : createFeedbackResult(
+                RtcpFeedbackResult.FAILED, /* request= */ null, "playback handler failed");
+      }
+      return requestRtcpFeedbackInternal(requestedFeedbackType, reason);
+    }
+
+    private RtcpFeedbackResult requestRtcpFeedbackInternal(
+        @RtcpFeedbackType.Type int requestedFeedbackType, @RtcpFeedbackReason.Reason int reason) {
       long nowMs = SystemClock.elapsedRealtime();
-      @RtcpFeedbackType.Type int feedbackType = getFeedbackType();
+      @RtcpFeedbackType.Type int feedbackType = getFeedbackType(requestedFeedbackType);
       RtcpFeedbackRequest request =
           createFeedbackRequest(feedbackType, reason, nowMs, /* detail= */ null);
       if (feedbackType == RtcpFeedbackType.UNKNOWN) {
         notifyRtcpFeedbackSendFailed(request, new IllegalStateException("RTCP feedback disabled"));
-        return false;
+        return createFeedbackResult(RtcpFeedbackResult.FAILED, request, "RTCP feedback disabled");
       }
       if (lastFeedbackRequestElapsedRealtimeMs != C.TIME_UNSET
           && nowMs - lastFeedbackRequestElapsedRealtimeMs
               < rtcpFeedbackPolicy.minRequestIntervalMs) {
         notifyRtcpFeedbackThrottled(request);
-        return false;
+        return createFeedbackResult(RtcpFeedbackResult.THROTTLED, request, "throttled");
       }
 
       byte[] packet =
@@ -1365,14 +1523,22 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           lastFeedbackRequestElapsedRealtimeMs = nowMs;
           notifyRtcpFeedbackSent(request);
         }
-        return true;
+        return createFeedbackResult(RtcpFeedbackResult.SCHEDULED, request, /* detail= */ null);
       } catch (IOException | RuntimeException e) {
         notifyRtcpFeedbackSendFailed(request, e);
-        return false;
+        return createFeedbackResult(
+            RtcpFeedbackResult.FAILED, request, e.getClass().getSimpleName());
       }
     }
 
-    private @RtcpFeedbackType.Type int getFeedbackType() {
+    private @RtcpFeedbackType.Type int getFeedbackType(
+        @RtcpFeedbackType.Type int requestedFeedbackType) {
+      if (requestedFeedbackType == RtcpFeedbackType.PLI) {
+        return rtcpFeedbackPolicy.pliEnabled ? RtcpFeedbackType.PLI : RtcpFeedbackType.UNKNOWN;
+      }
+      if (requestedFeedbackType == RtcpFeedbackType.FIR) {
+        return rtcpFeedbackPolicy.firEnabled ? RtcpFeedbackType.FIR : RtcpFeedbackType.UNKNOWN;
+      }
       if (!rtcpFeedbackPolicy.canSendRtcpFeedback()) {
         return RtcpFeedbackType.UNKNOWN;
       }

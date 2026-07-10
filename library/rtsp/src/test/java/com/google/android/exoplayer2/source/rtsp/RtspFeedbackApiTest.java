@@ -61,6 +61,13 @@ public final class RtspFeedbackApiTest {
     assertThat(RtspBacklogRecoveryPolicy.DISABLED.isTcpInterleavedBacklogRecoveryEnabled())
         .isFalse();
     assertThat(RtspBacklogRecoveryPolicy.DISABLED.isRtpReorderBacklogRecoveryEnabled()).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.DISABLED.getRtpReorderWaitMs(RtspTransportMode.UDP))
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
+    assertThat(
+            RtspBacklogRecoveryPolicy.DISABLED.getRtpReorderWaitMs(
+                RtspTransportMode.TCP_INTERLEAVED))
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
+    assertThat(RtspBacklogRecoveryPolicy.DISABLED.isMediaPeriodRecoverySignalEnabled()).isFalse();
 
     RtspMediaPeriod mediaPeriod =
         (RtspMediaPeriod)
@@ -96,6 +103,9 @@ public final class RtspFeedbackApiTest {
             .setTcpInterleavedBacklogResetPackets(240)
             .setRtpReorderBacklogResetMs(200)
             .setRtpReorderBacklogResetPackets(240)
+            .setTcpInterleavedRtpReorderWaitMs(2)
+            .setUdpRtpReorderWaitMs(30)
+            .setMediaPeriodRecoverySignalEnabled(true)
             .setWaitForIdrTimeoutMs(800)
             .build();
 
@@ -126,6 +136,161 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaPeriod.getRtcpFeedbackPolicy()).isEqualTo(feedbackPolicy);
     assertThat(mediaPeriod.getRtspBacklogRecoveryPolicy()).isEqualTo(backlogRecoveryPolicy);
     assertThat(mediaPeriod.getRtspPacketDiagnosticsEnabled()).isTrue();
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void rtspBacklogRecoveryPolicyBuilder_buildsTransportAwarePolicy() {
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedRtpReorderWaitMs(1)
+            .setUdpRtpReorderWaitMs(25)
+            .setMediaPeriodRecoverySignalEnabled(true)
+            .build();
+
+    assertThat(policy.getRtpReorderWaitMs(RtspTransportMode.TCP_INTERLEAVED)).isEqualTo(1);
+    assertThat(policy.getRtpReorderWaitMs(RtspTransportMode.UDP)).isEqualTo(25);
+    assertThat(policy.getRtpReorderWaitMs(RtspTransportMode.UNKNOWN))
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
+    assertThat(policy.isMediaPeriodRecoverySignalEnabled()).isTrue();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.getRtpReorderWaitMs(
+            RtspTransportMode.TCP_INTERLEAVED))
+        .isEqualTo(2);
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.getRtpReorderWaitMs(RtspTransportMode.UDP))
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.isMediaPeriodRecoverySignalEnabled())
+        .isFalse();
+  }
+
+  @Test
+  public void requestOneShotRtcpFeedback_withoutActivePeriod_returnsFailed() {
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+
+    RtcpFeedbackResult pliResult =
+        mediaSource.requestOneShotRtcpPli(RtcpFeedbackReason.APPLICATION);
+    RtcpFeedbackResult firResult =
+        mediaSource.requestOneShotRtcpFir(RtcpFeedbackReason.APPLICATION);
+
+    assertThat(pliResult.status).isEqualTo(RtcpFeedbackResult.FAILED);
+    assertThat(pliResult.request).isNull();
+    assertThat(pliResult.detail).isEqualTo("no active RTSP media period");
+    assertThat(firResult.status).isEqualTo(RtcpFeedbackResult.FAILED);
+    assertThat(firResult.request).isNull();
+  }
+
+  @Test
+  public void rtcpFeedbackResult_valueSemantics() {
+    RtcpFeedbackRequest request =
+        new RtcpFeedbackRequest(
+            1,
+            RtcpFeedbackType.PLI,
+            RtcpFeedbackReason.APPLICATION,
+            RtspTransportMode.TCP_INTERLEAVED,
+            0x1234,
+            0x5678,
+            100,
+            "test");
+    RtcpFeedbackResult result =
+        new RtcpFeedbackResult(RtcpFeedbackResult.SCHEDULED, request, 101, "scheduled");
+
+    assertThat(result)
+        .isEqualTo(
+            new RtcpFeedbackResult(RtcpFeedbackResult.SCHEDULED, request, 101, "scheduled"));
+    assertThat(result.hashCode())
+        .isEqualTo(
+            new RtcpFeedbackResult(RtcpFeedbackResult.SCHEDULED, request, 101, "scheduled")
+                .hashCode());
+    assertThat(result.toString()).contains("status=1");
+  }
+
+  @Test
+  public void mediaPeriodRecoveryStats_valueSemantics() {
+    RtspMediaPeriodRecoveryStats stats =
+        new RtspMediaPeriodRecoveryStats(
+            1,
+            RtspTransportMode.TCP_INTERLEAVED,
+            RtcpFeedbackReason.QUEUE_RESET,
+            RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+            123,
+            "rtsp_backlog_queue_reset");
+
+    assertThat(stats)
+        .isEqualTo(
+            new RtspMediaPeriodRecoveryStats(
+                1,
+                RtspTransportMode.TCP_INTERLEAVED,
+                RtcpFeedbackReason.QUEUE_RESET,
+                RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+                123,
+                "rtsp_backlog_queue_reset"));
+    assertThat(stats.hashCode())
+        .isEqualTo(
+            new RtspMediaPeriodRecoveryStats(
+                    1,
+                    RtspTransportMode.TCP_INTERLEAVED,
+                    RtcpFeedbackReason.QUEUE_RESET,
+                    RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+                    123,
+                    "rtsp_backlog_queue_reset")
+                .hashCode());
+    assertThat(stats.toString()).contains("action=1");
+  }
+
+  @Test
+  public void mediaPeriodRecoverySignal_onlyEmittedForEnabledTcpReset() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setMediaPeriodRecoverySignalEnabled(true)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+    RtspDiagnosticsListener forwardingListener =
+        mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting();
+
+    assertThat(forwardingListener).isNotNull();
+    forwardingListener.onRtspBacklogQueueReset(
+        new RtspBacklogRecoveryStats(
+            1,
+            RtspTransportMode.TCP_INTERLEAVED,
+            RtcpFeedbackReason.QUEUE_RESET,
+            12,
+            12,
+            301,
+            301,
+            999));
+    forwardingListener.onRtspBacklogQueueReset(
+        new RtspBacklogRecoveryStats(
+            1,
+            RtspTransportMode.UDP,
+            RtcpFeedbackReason.QUEUE_RESET,
+            12,
+            12,
+            301,
+            301,
+            999));
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    RtspMediaPeriodRecoveryStats recoveryStats =
+        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
+    assertThat(recoveryStats.trackId).isEqualTo(1);
+    assertThat(recoveryStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
+    assertThat(recoveryStats.action)
+        .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
 
     mediaSource.releasePeriod(mediaPeriod);
   }
@@ -258,6 +423,9 @@ public final class RtspFeedbackApiTest {
             .setRtpReorderBacklogWarnMs(100)
             .setRtpReorderBacklogResetMs(200)
             .setRtpReorderBacklogResetPackets(240)
+            .setTcpInterleavedRtpReorderWaitMs(2)
+            .setUdpRtpReorderWaitMs(30)
+            .setMediaPeriodRecoverySignalEnabled(true)
             .setWaitForIdrTimeoutMs(800)
             .setInitialWaitForIdr(true)
             .setInitialWaitForIdrAfterSeek(true)
@@ -270,6 +438,9 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.rtpReorderBacklogWarnMs).isEqualTo(100);
     assertThat(policy.rtpReorderBacklogResetMs).isEqualTo(200);
     assertThat(policy.rtpReorderBacklogResetPackets).isEqualTo(240);
+    assertThat(policy.tcpInterleavedRtpReorderWaitMs).isEqualTo(2);
+    assertThat(policy.udpRtpReorderWaitMs).isEqualTo(30);
+    assertThat(policy.mediaPeriodRecoverySignalEnabled).isTrue();
     assertThat(policy.waitForIdrTimeoutMs).isEqualTo(800);
     assertThat(policy.initialWaitForIdr).isTrue();
     assertThat(policy.initialWaitForIdrAfterSeek).isTrue();
@@ -277,8 +448,12 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.isRtpReorderBacklogRecoveryEnabled()).isTrue();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdr).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdrAfterSeek).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.isMediaPeriodRecoverySignalEnabled())
+        .isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdr).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdrAfterSeek).isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.isMediaPeriodRecoverySignalEnabled())
+        .isFalse();
     assertThat(RtspBacklogRecoveryPolicy.DISABLED.initialWaitForIdr).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.DISABLED.initialWaitForIdrAfterSeek).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY)
@@ -291,6 +466,8 @@ public final class RtspFeedbackApiTest {
                 .setRtpReorderBacklogWarnMs(100)
                 .setRtpReorderBacklogResetMs(200)
                 .setRtpReorderBacklogResetPackets(240)
+                .setTcpInterleavedRtpReorderWaitMs(2)
+                .setUdpRtpReorderWaitMs(30)
                 .setWaitForIdrTimeoutMs(800)
                 .build());
   }
@@ -586,6 +763,14 @@ public final class RtspFeedbackApiTest {
     diagnosticsListener.onRtpPacketDequeued(packetStats, reorderingStats);
     diagnosticsListener.onRtpPacketDropped(packetStats, reorderingStats);
     diagnosticsListener.onRtpReorderingQueueReset(reorderingStats);
+    diagnosticsListener.onRtspMediaPeriodRecoveryRequired(
+        new RtspMediaPeriodRecoveryStats(
+            1,
+            RtspTransportMode.TCP_INTERLEAVED,
+            RtcpFeedbackReason.QUEUE_RESET,
+            RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+            999,
+            "test"));
     diagnosticsListener.onRtcpSenderReport(
         new RtcpSenderReportStats(1, 0x12345678L, 1234, 2500, 2, 0, 999,
             RtspTransportMode.UDP, 90_000, 3, 4));
@@ -600,6 +785,8 @@ public final class RtspFeedbackApiTest {
         new java.util.ArrayList<>();
     public final java.util.ArrayList<RtspTransportFallbackStats> transportFallbackStats =
         new java.util.ArrayList<>();
+    public final java.util.ArrayList<RtspMediaPeriodRecoveryStats> mediaPeriodRecoveryStats =
+        new java.util.ArrayList<>();
 
     @Override
     public void onTransportFallback(RtspTransportFallbackStats fallbackStats) {
@@ -609,6 +796,12 @@ public final class RtspFeedbackApiTest {
     @Override
     public void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {
       accessUnitReadyStats.add(accessUnitStats);
+    }
+
+    @Override
+    public void onRtspMediaPeriodRecoveryRequired(
+        RtspMediaPeriodRecoveryStats mediaPeriodRecoveryStats) {
+      this.mediaPeriodRecoveryStats.add(mediaPeriodRecoveryStats);
     }
   }
 }

@@ -91,6 +91,15 @@ public interface RtspDiagnosticsListener {
   /** Called when a low-latency RTSP backlog queue is flushed or reset. */
   default void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {}
 
+  /**
+   * Called when low-latency TCP recovery requires a controlled media-period rebuild.
+   *
+   * <p>This is only emitted when explicitly enabled by {@link RtspBacklogRecoveryPolicy}; it is not
+   * part of ExoPlayer's default RTSP behavior.
+   */
+  default void onRtspMediaPeriodRecoveryRequired(
+      RtspMediaPeriodRecoveryStats mediaPeriodRecoveryStats) {}
+
   /** Called when an RTCP feedback request is blocked by policy. */
   default void onRtcpFeedbackThrottled(RtcpFeedbackRequest request) {}
 

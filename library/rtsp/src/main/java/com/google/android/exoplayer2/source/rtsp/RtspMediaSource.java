@@ -20,6 +20,7 @@ import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 
 import android.net.Uri;
+import android.os.SystemClock;
 import androidx.annotation.IntRange;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
@@ -498,6 +499,62 @@ public final class RtspMediaSource extends BaseMediaSource {
       requested |= mediaPeriods.get(i).requestKeyFrame(reason);
     }
     return requested;
+  }
+
+  /**
+   * Requests one RTCP PLI packet on an active RTSP period.
+   *
+   * <p>This explicit one-shot API can send when {@link RtcpFeedbackPolicy#EXTERNAL_ONLY} is used,
+   * as long as PLI is enabled in the policy. It does not enable automatic RTCP feedback.
+   */
+  public RtcpFeedbackResult requestRtcpPli(@RtcpFeedbackReason.Reason int reason) {
+    return requestRtcpFeedback(RtcpFeedbackType.PLI, reason);
+  }
+
+  /** Alias for reflection callers that use one-shot naming. */
+  public RtcpFeedbackResult requestOneShotRtcpPli(@RtcpFeedbackReason.Reason int reason) {
+    return requestRtcpPli(reason);
+  }
+
+  /**
+   * Requests one RTCP FIR packet on an active RTSP period.
+   *
+   * <p>This explicit one-shot API can send when {@link RtcpFeedbackPolicy#EXTERNAL_ONLY} is used,
+   * as long as FIR is enabled in the policy. It does not enable automatic RTCP feedback.
+   */
+  public RtcpFeedbackResult requestRtcpFir(@RtcpFeedbackReason.Reason int reason) {
+    return requestRtcpFeedback(RtcpFeedbackType.FIR, reason);
+  }
+
+  /** Alias for reflection callers that use one-shot naming. */
+  public RtcpFeedbackResult requestOneShotRtcpFir(@RtcpFeedbackReason.Reason int reason) {
+    return requestRtcpFir(reason);
+  }
+
+  private RtcpFeedbackResult requestRtcpFeedback(
+      @RtcpFeedbackType.Type int feedbackType, @RtcpFeedbackReason.Reason int reason) {
+    ArrayList<RtspMediaPeriod> mediaPeriods;
+    synchronized (activeMediaPeriodsLock) {
+      mediaPeriods = new ArrayList<>(activeMediaPeriods);
+    }
+    RtcpFeedbackResult result =
+        new RtcpFeedbackResult(
+            RtcpFeedbackResult.FAILED,
+            /* request= */ null,
+            SystemClock.elapsedRealtime(),
+            "no active RTSP media period");
+    for (int i = 0; i < mediaPeriods.size(); i++) {
+      RtcpFeedbackResult periodResult =
+          mediaPeriods.get(i).requestRtcpFeedback(feedbackType, reason);
+      if (periodResult.status == RtcpFeedbackResult.SCHEDULED) {
+        return periodResult;
+      }
+      if (result.status == RtcpFeedbackResult.FAILED
+          || periodResult.status == RtcpFeedbackResult.THROTTLED) {
+        result = periodResult;
+      }
+    }
+    return result;
   }
 
   // Internal methods.

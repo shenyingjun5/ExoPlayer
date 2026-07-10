@@ -168,6 +168,48 @@ public final class RtpExtractorTest {
     assertThat(extractorOutput.trackOutputs.get(1).getSampleCount()).isEqualTo(0);
   }
 
+  @Test
+  public void defaultBacklogPolicy_usesOriginalRtpReorderWait() {
+    RtpExtractor extractor =
+        createExtractor(
+            new CapturingDiagnosticsListener(),
+            RtcpFeedbackPolicy.DEFAULT,
+            RtspBacklogRecoveryPolicy.DISABLED,
+            RtspTransportMode.TCP_INTERLEAVED,
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    assertThat(extractor.getRtpReorderWaitMsForTesting())
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
+  }
+
+  @Test
+  public void lowLatencyBacklogPolicy_usesTransportAwareRtpReorderWait() {
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedRtpReorderWaitMs(1)
+            .setUdpRtpReorderWaitMs(25)
+            .build();
+
+    RtpExtractor tcpExtractor =
+        createExtractor(
+            new CapturingDiagnosticsListener(),
+            RtcpFeedbackPolicy.DEFAULT,
+            policy,
+            RtspTransportMode.TCP_INTERLEAVED,
+            /* rtspPacketDiagnosticsEnabled= */ false);
+    RtpExtractor udpExtractor =
+        createExtractor(
+            new CapturingDiagnosticsListener(),
+            RtcpFeedbackPolicy.DEFAULT,
+            policy,
+            RtspTransportMode.UDP,
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    assertThat(tcpExtractor.getRtpReorderWaitMsForTesting()).isEqualTo(1);
+    assertThat(udpExtractor.getRtpReorderWaitMsForTesting()).isEqualTo(25);
+  }
+
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener, boolean rtspPacketDiagnosticsEnabled) {
     return createExtractor(
@@ -182,6 +224,7 @@ public final class RtpExtractorTest {
         diagnosticsListener,
         rtcpFeedbackPolicy,
         RtspBacklogRecoveryPolicy.DISABLED,
+        RtspTransportMode.TCP_INTERLEAVED,
         rtspPacketDiagnosticsEnabled);
   }
 
@@ -189,6 +232,20 @@ public final class RtpExtractorTest {
       RtspDiagnosticsListener diagnosticsListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
       RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
+    return createExtractor(
+        diagnosticsListener,
+        rtcpFeedbackPolicy,
+        rtspBacklogRecoveryPolicy,
+        RtspTransportMode.TCP_INTERLEAVED,
+        rtspPacketDiagnosticsEnabled);
+  }
+
+  private static RtpExtractor createExtractor(
+      RtspDiagnosticsListener diagnosticsListener,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
+      @RtspTransportMode.Mode int transportMode,
       boolean rtspPacketDiagnosticsEnabled) {
     return new RtpExtractor(
         new RtpPayloadFormat(
@@ -198,7 +255,7 @@ public final class RtpExtractorTest {
             /* fmtpParameters= */ ImmutableMap.of(),
             RtpPayloadFormat.RTP_MEDIA_H264),
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
+        transportMode,
         diagnosticsListener,
         /* rtcpFeedbackRequester= */ null,
         rtcpFeedbackPolicy,

@@ -22,6 +22,9 @@ import com.google.errorprone.annotations.CanIgnoreReturnValue;
 /** Policy for low-latency RTSP backlog recovery. */
 public final class RtspBacklogRecoveryPolicy {
 
+  /** ExoPlayer 2.19.1 RTP reordering wait, roughly one video frame. */
+  public static final long DEFAULT_RTP_REORDER_WAIT_MS = 30;
+
   /** Disabled policy that preserves ExoPlayer's default RTSP behavior. */
   public static final RtspBacklogRecoveryPolicy DISABLED = new Builder().build();
 
@@ -35,6 +38,8 @@ public final class RtspBacklogRecoveryPolicy {
           .setRtpReorderBacklogWarnMs(100)
           .setRtpReorderBacklogResetMs(200)
           .setRtpReorderBacklogResetPackets(240)
+          .setTcpInterleavedRtpReorderWaitMs(2)
+          .setUdpRtpReorderWaitMs(DEFAULT_RTP_REORDER_WAIT_MS)
           .setWaitForIdrTimeoutMs(800)
           .build();
 
@@ -57,6 +62,12 @@ public final class RtspBacklogRecoveryPolicy {
   public final int rtpReorderBacklogResetPackets;
   /** Timeout for reporting prolonged wait for an IDR access unit, or {@code 0} to disable. */
   public final long waitForIdrTimeoutMs;
+  /** RTP reordering wait for TCP interleaved transport in milliseconds. */
+  public final long tcpInterleavedRtpReorderWaitMs;
+  /** RTP reordering wait for UDP transport in milliseconds. */
+  public final long udpRtpReorderWaitMs;
+  /** Whether TCP resets should tell the app that media-period rebuild recovery is required. */
+  public final boolean mediaPeriodRecoverySignalEnabled;
   /** Whether H.264 starts in WAIT_IDR until a complete decodable IDR access unit arrives. */
   public final boolean initialWaitForIdr;
   /** Whether H.264 re-enters WAIT_IDR after seek/reset. */
@@ -81,6 +92,9 @@ public final class RtspBacklogRecoveryPolicy {
     rtpReorderBacklogResetMs = builder.rtpReorderBacklogResetMs;
     rtpReorderBacklogResetPackets = builder.rtpReorderBacklogResetPackets;
     waitForIdrTimeoutMs = builder.waitForIdrTimeoutMs;
+    tcpInterleavedRtpReorderWaitMs = builder.tcpInterleavedRtpReorderWaitMs;
+    udpRtpReorderWaitMs = builder.udpRtpReorderWaitMs;
+    mediaPeriodRecoverySignalEnabled = builder.mediaPeriodRecoverySignalEnabled;
     initialWaitForIdr = builder.initialWaitForIdr;
     initialWaitForIdrAfterSeek = builder.initialWaitForIdrAfterSeek;
     maxTcpInterleavedQueueAgeMs = tcpInterleavedBacklogResetMs;
@@ -108,6 +122,25 @@ public final class RtspBacklogRecoveryPolicy {
     return enabled;
   }
 
+  /** Returns the RTP reordering wait for one transport mode. */
+  public long getRtpReorderWaitMs(@RtspTransportMode.Mode int transportMode) {
+    if (!enabled) {
+      return DEFAULT_RTP_REORDER_WAIT_MS;
+    }
+    if (transportMode == RtspTransportMode.TCP_INTERLEAVED) {
+      return tcpInterleavedRtpReorderWaitMs;
+    }
+    if (transportMode == RtspTransportMode.UDP) {
+      return udpRtpReorderWaitMs;
+    }
+    return DEFAULT_RTP_REORDER_WAIT_MS;
+  }
+
+  /** Returns whether TCP queue reset should be surfaced as a media-period rebuild signal. */
+  public boolean isMediaPeriodRecoverySignalEnabled() {
+    return enabled && mediaPeriodRecoverySignalEnabled;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (this == obj) {
@@ -125,6 +158,9 @@ public final class RtspBacklogRecoveryPolicy {
         && rtpReorderBacklogResetMs == other.rtpReorderBacklogResetMs
         && rtpReorderBacklogResetPackets == other.rtpReorderBacklogResetPackets
         && waitForIdrTimeoutMs == other.waitForIdrTimeoutMs
+        && tcpInterleavedRtpReorderWaitMs == other.tcpInterleavedRtpReorderWaitMs
+        && udpRtpReorderWaitMs == other.udpRtpReorderWaitMs
+        && mediaPeriodRecoverySignalEnabled == other.mediaPeriodRecoverySignalEnabled
         && initialWaitForIdr == other.initialWaitForIdr
         && initialWaitForIdrAfterSeek == other.initialWaitForIdrAfterSeek;
   }
@@ -139,6 +175,11 @@ public final class RtspBacklogRecoveryPolicy {
     result = 31 * result + (int) (rtpReorderBacklogResetMs ^ (rtpReorderBacklogResetMs >>> 32));
     result = 31 * result + rtpReorderBacklogResetPackets;
     result = 31 * result + (int) (waitForIdrTimeoutMs ^ (waitForIdrTimeoutMs >>> 32));
+    result =
+        31 * result
+            + (int) (tcpInterleavedRtpReorderWaitMs ^ (tcpInterleavedRtpReorderWaitMs >>> 32));
+    result = 31 * result + (int) (udpRtpReorderWaitMs ^ (udpRtpReorderWaitMs >>> 32));
+    result = 31 * result + (mediaPeriodRecoverySignalEnabled ? 1 : 0);
     result = 31 * result + (initialWaitForIdr ? 1 : 0);
     result = 31 * result + (initialWaitForIdrAfterSeek ? 1 : 0);
     return result;
@@ -154,8 +195,16 @@ public final class RtspBacklogRecoveryPolicy {
     private long rtpReorderBacklogResetMs;
     private int rtpReorderBacklogResetPackets;
     private long waitForIdrTimeoutMs;
+    private long tcpInterleavedRtpReorderWaitMs;
+    private long udpRtpReorderWaitMs;
+    private boolean mediaPeriodRecoverySignalEnabled;
     private boolean initialWaitForIdr;
     private boolean initialWaitForIdrAfterSeek;
+
+    public Builder() {
+      tcpInterleavedRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
+      udpRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
+    }
 
     /** Sets whether low-latency backlog recovery is enabled. */
     @CanIgnoreReturnValue
@@ -217,6 +266,31 @@ public final class RtspBacklogRecoveryPolicy {
     public Builder setWaitForIdrTimeoutMs(long waitForIdrTimeoutMs) {
       checkArgument(waitForIdrTimeoutMs >= 0);
       this.waitForIdrTimeoutMs = waitForIdrTimeoutMs;
+      return this;
+    }
+
+    /** Sets the RTP reordering wait for TCP interleaved transport in milliseconds. */
+    @CanIgnoreReturnValue
+    public Builder setTcpInterleavedRtpReorderWaitMs(long tcpInterleavedRtpReorderWaitMs) {
+      checkArgument(tcpInterleavedRtpReorderWaitMs >= 0);
+      this.tcpInterleavedRtpReorderWaitMs = tcpInterleavedRtpReorderWaitMs;
+      return this;
+    }
+
+    /** Sets the RTP reordering wait for UDP transport in milliseconds. */
+    @CanIgnoreReturnValue
+    public Builder setUdpRtpReorderWaitMs(long udpRtpReorderWaitMs) {
+      checkArgument(udpRtpReorderWaitMs >= 0);
+      this.udpRtpReorderWaitMs = udpRtpReorderWaitMs;
+      return this;
+    }
+
+    /**
+     * Sets whether TCP reset events should be surfaced as media-period rebuild recovery signals.
+     */
+    @CanIgnoreReturnValue
+    public Builder setMediaPeriodRecoverySignalEnabled(boolean mediaPeriodRecoverySignalEnabled) {
+      this.mediaPeriodRecoverySignalEnabled = mediaPeriodRecoverySignalEnabled;
       return this;
     }
 

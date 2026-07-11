@@ -764,7 +764,7 @@ Performance/default-path review:
 
 ## TCP T30/T32 Recovery Observability
 
-Status: Implemented, tested, pending release.
+Status: Implemented, tested, released as `2.19.1-labi.14`.
 
 Scope:
 
@@ -802,3 +802,20 @@ Performance/default-path review:
   backlog policy are both present. It uses primitive fields and the existing
   queue synchronization; no new RTP hot-path logging, allocation, lock, JSON,
   file IO, network IO, or blocking callback is introduced.
+
+Publication:
+
+- Version: `2.19.1-labi.14`.
+- Source commit/tag: `86731dbe10`, `exoplayer-rtsp-2.19.1-labi.14`.
+- GitHub Pages commit: `2ad553165a`.
+- Published modules: `exoplayer-common`, `exoplayer-container`,
+  `exoplayer-database`, `exoplayer-datasource`, `exoplayer-decoder`,
+  `exoplayer-extractor`, `exoplayer-core`, `exoplayer-hls`, `exoplayer-rtsp`.
+- Remote HTTP verification:
+  - AAR SHA256: `b7d93208e8d0621abc77b0305ceddf3937252011807f1e886a7737ff9400b090`.
+  - POM SHA256: `a6ee5ed23610e5c66cc67a350fe5505a71b918394c0af7695bd5b7895d13ffc3`.
+  - RTSP metadata SHA256: `eb36f83e517332a024c0dae466de2af82075d2e91184058599135dd06bd62de0`;
+    `latest/release=2.19.1-labi.14`.
+  - Remote `classes.jar` contains `RtspSampleRtpTimestampMappingStatus`,
+    `RtspBacklogRecoveryStats`, `RtspSampleReadStats` and
+    `RtspDecoderInputQueuedStats`; `javap` confirms all T30 reset-context fields.

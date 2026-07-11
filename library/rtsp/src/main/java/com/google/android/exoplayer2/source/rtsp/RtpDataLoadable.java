@@ -194,6 +194,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     try {
       if (dataChannel == null) {
         dataChannel = rtpDataChannelFactory.createAndOpenDataChannel(trackId);
+        dataChannel.setRtspDiagnosticsListener(rtspDiagnosticsListener);
         String transport = dataChannel.getTransport();
         @RtspTransportMode.Mode
         int transportMode =

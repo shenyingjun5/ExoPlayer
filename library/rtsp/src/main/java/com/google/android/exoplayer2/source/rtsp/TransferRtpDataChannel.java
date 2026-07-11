@@ -50,7 +50,7 @@ import java.util.concurrent.LinkedBlockingQueue;
   @Nullable private final LinkedBlockingQueue<Long> packetArrivalElapsedRealtimeMsQueue;
   private final int trackId;
   private final long pollTimeoutMs;
-  @Nullable private final RtspDiagnosticsListener rtspDiagnosticsListener;
+  @Nullable private volatile RtspDiagnosticsListener rtspDiagnosticsListener;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
 
   private byte[] unreadData;
@@ -116,6 +116,11 @@ import java.util.concurrent.LinkedBlockingQueue;
   @Override
   public InterleavedBinaryDataListener getInterleavedBinaryDataListener() {
     return this;
+  }
+
+  @Override
+  public void setRtspDiagnosticsListener(@Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {
+    this.rtspDiagnosticsListener = rtspDiagnosticsListener;
   }
 
   @Override

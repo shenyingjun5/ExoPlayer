@@ -727,3 +727,18 @@ duration: 2min smoke / 10min trend / 30min stability
 - 发布模块：`exoplayer-common`、`exoplayer-container`、`exoplayer-database`、`exoplayer-datasource`、`exoplayer-decoder`、`exoplayer-extractor`、`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。
 - 已通过：`MediaCodecLowLatencyProfileTest`、`DefaultLoadControlTest`、`MediaCodecVideoRendererTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。
 - 远端 `exoplayer-core` metadata 的 `latest/release` 均为 `2.19.1-labi.16`；AAR SHA256 为 `a48d0d62704e597a1221d4f7e02addbc1bf4ce32a8f7985c8b0b3afd7b6813b4`，POM SHA256 为 `62130c90dda51bf00f9b709a1a6ed587406dfd20f617509c5e05519a8a8ee9c8`。`javap` 已确认 `MediaCodecLowLatencyProfile`、`DefaultRenderersFactory#setMediaCodecLowLatencyProfile(...)` 和 builder setter 均在远端 AAR。
+
+## TCP Media-Period Recovery Signal 修复
+
+### 2026-07-11 根因与边界
+
+- Cast-SDK T42 真实视频现场的 `expected/actual/last sequence=-1` 证明 reset 来自 `TransferRtpDataChannel.maybeFlushBacklog()`，不是 `RtpPacketReorderingQueue`。
+- `.16` 中 `TransferRtpDataChannelFactory` 在 `RtspMediaSource.Factory` 创建时持有外层 listener；TCP channel 直接上报 `onRtspBacklogQueueReset`，绕过 `RtspMediaPeriod.ForwardingRtspDiagnosticsListener`，因此未调用 `maybeNotifyMediaPeriodRecoveryRequired()`，没有 `ACTION_REBUILD_REQUIRED`。
+- 修复在 `RtpDataLoadable` 创建 channel 后、注册 interleaved listener 前，将其 diagnostics listener 重绑为当前 period forwarding listener。`TransferRtpDataChannel` 使用 `volatile` 引用保证 RTSP message thread 可见；没有 RTP hot-path 日志、IO、锁、阻塞 callback 或逐包对象分配。
+- `RtspMediaPeriod` 现在为每个实际 queue-reset rebuild request 递增 period-local `recoveryGeneration`，不再使用旧构造器的 generation `0`。transport queue 触发的 stats 明确以 `sampleQueue/mediaPeriodBufferedAheadMs=TIME_UNSET` 表示其来源不是 SampleQueue backlog。
+- 默认隔离：`listener=null` 时 forwarding listener 不创建；policy `DISABLED` 时不会产生 reset flush 或 rebuild signal。普通 RTSP 不改变 transport、buffer、decoder 或 retry 行为。
+
+### 验证
+
+- 新增 `tcpInterleavedChannelReset_forwardsMediaPeriodRecoverySignal`：复现 TCP queue reset 绕过路径，验证 `onRtspBacklogQueueReset -> ACTION_REBUILD_REQUIRED`；连续两次 reset generation 为 `1`、`2`。
+- 已通过定向 `RtspFeedbackApiTest`、`TransferRtpDataChannelTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。

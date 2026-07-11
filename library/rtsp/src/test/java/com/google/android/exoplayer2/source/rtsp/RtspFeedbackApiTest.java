@@ -292,6 +292,52 @@ public final class RtspFeedbackApiTest {
     assertThat(recoveryStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
     assertThat(recoveryStats.action)
         .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
+    assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void tcpInterleavedChannelReset_forwardsMediaPeriodRecoverySignal() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedBacklogResetPackets(2)
+            .setMediaPeriodRecoverySignalEnabled(true)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+    TransferRtpDataChannel dataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 1, /* pollTimeoutMs= */ 0, diagnosticsListener, policy);
+
+    dataChannel.setRtspDiagnosticsListener(
+        mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting());
+    dataChannel.onInterleavedBinaryDataReceived(new byte[] {1});
+    dataChannel.onInterleavedBinaryDataReceived(new byte[] {2});
+    dataChannel.onInterleavedBinaryDataReceived(new byte[] {3});
+    dataChannel.onInterleavedBinaryDataReceived(new byte[] {4});
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(2);
+    RtspMediaPeriodRecoveryStats recoveryStats =
+        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
+    assertThat(recoveryStats.trackId).isEqualTo(1);
+    assertThat(recoveryStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
+    assertThat(recoveryStats.reason).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+    assertThat(recoveryStats.action)
+        .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
+    assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(1).recoveryGeneration).isEqualTo(2);
 
     mediaSource.releasePeriod(mediaPeriod);
   }

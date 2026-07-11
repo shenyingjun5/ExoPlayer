@@ -69,6 +69,14 @@ import java.io.IOException;
   @Nullable
   InterleavedBinaryDataListener getInterleavedBinaryDataListener();
 
+  /**
+   * Sets the diagnostics listener for this channel after its owning media period has been created.
+   *
+   * <p>The default implementation is a no-op because only transport channels that emit diagnostics
+   * need to retain the listener.
+   */
+  default void setRtspDiagnosticsListener(@Nullable RtspDiagnosticsListener rtspDiagnosticsListener) {}
+
   /** Sets the remote RTCP endpoint, if this channel supports UDP RTCP feedback. */
   default void setRemoteRtcpEndpoint(String host, int port) throws IOException {}
 

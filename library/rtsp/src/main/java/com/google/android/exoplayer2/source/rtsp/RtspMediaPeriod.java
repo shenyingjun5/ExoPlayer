@@ -956,6 +956,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                   reason,
                   RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
                   SystemClock.elapsedRealtime(),
+                  ++recoveryGeneration,
+                  C.TIME_UNSET,
+                  C.TIME_UNSET,
                   detail));
     }
 

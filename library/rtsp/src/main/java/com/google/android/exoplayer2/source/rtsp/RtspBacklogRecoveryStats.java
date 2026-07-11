@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 
@@ -41,6 +42,14 @@ public final class RtspBacklogRecoveryStats {
   public final long recentPacketInterArrivalMaxMs;
   /** Largest elapsed interval between extractor reads since the prior reset. */
   public final long extractorReadStallMs;
+  /** Whether the TCP data channel consumer was in {@code read()} at the reset trigger. */
+  public final boolean dataChannelReadInProgress;
+  /** Elapsed duration of the in-progress data-channel read, or {@code 0} when idle. */
+  public final long dataChannelReadInProgressMs;
+  /** Elapsed duration since the data-channel consumer last completed a read. */
+  public final long dataChannelConsumerStallMs;
+  /** Name of the last data-channel consumer thread, or {@code null} when unavailable. */
+  @Nullable public final String dataChannelReaderThreadName;
 
   public RtspBacklogRecoveryStats(
       int trackId,
@@ -65,7 +74,11 @@ public final class RtspBacklogRecoveryStats {
         C.INDEX_UNSET,
         C.INDEX_UNSET,
         /* recentPacketInterArrivalMaxMs= */ 0,
-        /* extractorReadStallMs= */ 0);
+        /* extractorReadStallMs= */ 0,
+        /* dataChannelReadInProgress= */ false,
+        /* dataChannelReadInProgressMs= */ 0,
+        /* dataChannelConsumerStallMs= */ C.TIME_UNSET,
+        /* dataChannelReaderThreadName= */ null);
   }
 
   public RtspBacklogRecoveryStats(
@@ -83,6 +96,46 @@ public final class RtspBacklogRecoveryStats {
       int lastQueuedSequenceNumber,
       long recentPacketInterArrivalMaxMs,
       long extractorReadStallMs) {
+    this(
+        trackId,
+        transportMode,
+        reason,
+        queueDepth,
+        droppedPacketCount,
+        oldestPacketAgeMs,
+        queueSpanMs,
+        resetElapsedRealtimeMs,
+        expectedSequenceNumber,
+        actualSequenceNumber,
+        lastDequeuedSequenceNumber,
+        lastQueuedSequenceNumber,
+        recentPacketInterArrivalMaxMs,
+        extractorReadStallMs,
+        /* dataChannelReadInProgress= */ false,
+        /* dataChannelReadInProgressMs= */ 0,
+        /* dataChannelConsumerStallMs= */ C.TIME_UNSET,
+        /* dataChannelReaderThreadName= */ null);
+  }
+
+  public RtspBacklogRecoveryStats(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @RtcpFeedbackReason.Reason int reason,
+      int queueDepth,
+      int droppedPacketCount,
+      long oldestPacketAgeMs,
+      long queueSpanMs,
+      long resetElapsedRealtimeMs,
+      int expectedSequenceNumber,
+      int actualSequenceNumber,
+      int lastDequeuedSequenceNumber,
+      int lastQueuedSequenceNumber,
+      long recentPacketInterArrivalMaxMs,
+      long extractorReadStallMs,
+      boolean dataChannelReadInProgress,
+      long dataChannelReadInProgressMs,
+      long dataChannelConsumerStallMs,
+      @Nullable String dataChannelReaderThreadName) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.reason = reason;
@@ -97,6 +150,10 @@ public final class RtspBacklogRecoveryStats {
     this.lastQueuedSequenceNumber = lastQueuedSequenceNumber;
     this.recentPacketInterArrivalMaxMs = recentPacketInterArrivalMaxMs;
     this.extractorReadStallMs = extractorReadStallMs;
+    this.dataChannelReadInProgress = dataChannelReadInProgress;
+    this.dataChannelReadInProgressMs = dataChannelReadInProgressMs;
+    this.dataChannelConsumerStallMs = dataChannelConsumerStallMs;
+    this.dataChannelReaderThreadName = dataChannelReaderThreadName;
   }
 
   @Override
@@ -121,7 +178,11 @@ public final class RtspBacklogRecoveryStats {
         && lastDequeuedSequenceNumber == other.lastDequeuedSequenceNumber
         && lastQueuedSequenceNumber == other.lastQueuedSequenceNumber
         && recentPacketInterArrivalMaxMs == other.recentPacketInterArrivalMaxMs
-        && extractorReadStallMs == other.extractorReadStallMs;
+        && extractorReadStallMs == other.extractorReadStallMs
+        && dataChannelReadInProgress == other.dataChannelReadInProgress
+        && dataChannelReadInProgressMs == other.dataChannelReadInProgressMs
+        && dataChannelConsumerStallMs == other.dataChannelConsumerStallMs
+        && Util.areEqual(dataChannelReaderThreadName, other.dataChannelReaderThreadName);
   }
 
   @Override
@@ -140,6 +201,10 @@ public final class RtspBacklogRecoveryStats {
     result = 31 * result + lastQueuedSequenceNumber;
     result = 31 * result + (int) (recentPacketInterArrivalMaxMs ^ (recentPacketInterArrivalMaxMs >>> 32));
     result = 31 * result + (int) (extractorReadStallMs ^ (extractorReadStallMs >>> 32));
+    result = 31 * result + (dataChannelReadInProgress ? 1 : 0);
+    result = 31 * result + (int) (dataChannelReadInProgressMs ^ (dataChannelReadInProgressMs >>> 32));
+    result = 31 * result + (int) (dataChannelConsumerStallMs ^ (dataChannelConsumerStallMs >>> 32));
+    result = 31 * result + (dataChannelReaderThreadName == null ? 0 : dataChannelReaderThreadName.hashCode());
     return result;
   }
 
@@ -150,7 +215,9 @@ public final class RtspBacklogRecoveryStats {
             + "queueDepth=%d, droppedPacketCount=%d, oldestPacketAgeMs=%d, queueSpanMs=%d, "
             + "resetElapsedRealtimeMs=%d, expectedSequenceNumber=%d, actualSequenceNumber=%d, "
             + "lastDequeuedSequenceNumber=%d, lastQueuedSequenceNumber=%d, "
-            + "recentPacketInterArrivalMaxMs=%d, extractorReadStallMs=%d)",
+            + "recentPacketInterArrivalMaxMs=%d, extractorReadStallMs=%d, "
+            + "dataChannelReadInProgress=%b, dataChannelReadInProgressMs=%d, "
+            + "dataChannelConsumerStallMs=%d, dataChannelReaderThreadName=%s)",
         trackId,
         transportMode,
         reason,
@@ -164,6 +231,10 @@ public final class RtspBacklogRecoveryStats {
         lastDequeuedSequenceNumber,
         lastQueuedSequenceNumber,
         recentPacketInterArrivalMaxMs,
-        extractorReadStallMs);
+        extractorReadStallMs,
+        dataChannelReadInProgress,
+        dataChannelReadInProgressMs,
+        dataChannelConsumerStallMs,
+        dataChannelReaderThreadName);
   }
 }

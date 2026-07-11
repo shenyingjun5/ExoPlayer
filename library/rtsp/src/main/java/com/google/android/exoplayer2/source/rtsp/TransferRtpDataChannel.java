@@ -48,6 +48,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 
   private final LinkedBlockingQueue<byte[]> packetQueue;
   @Nullable private final LinkedBlockingQueue<Long> packetArrivalElapsedRealtimeMsQueue;
+  private final boolean collectReadStallSnapshot;
   private final int trackId;
   private final long pollTimeoutMs;
   @Nullable private volatile RtspDiagnosticsListener rtspDiagnosticsListener;
@@ -56,6 +57,10 @@ import java.util.concurrent.LinkedBlockingQueue;
   private byte[] unreadData;
   private int channelNumber;
   private long lastPacketArrivalElapsedRealtimeMs;
+  private volatile boolean readInProgress;
+  private volatile long readStartElapsedRealtimeMs;
+  private volatile long lastReadCompletionElapsedRealtimeMs;
+  @Nullable private volatile String readerThreadName;
   private volatile boolean clearUnreadDataOnNextRead;
   private volatile @RtcpFeedbackReason.Reason int pendingDiscontinuityReason;
 
@@ -89,9 +94,14 @@ import java.util.concurrent.LinkedBlockingQueue;
         rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled()
             ? new LinkedBlockingQueue<>()
             : null;
+    collectReadStallSnapshot =
+        rtspDiagnosticsListener != null
+            && rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled();
     unreadData = new byte[0];
     channelNumber = C.INDEX_UNSET;
     lastPacketArrivalElapsedRealtimeMs = C.TIME_UNSET;
+    readStartElapsedRealtimeMs = C.TIME_UNSET;
+    lastReadCompletionElapsedRealtimeMs = C.TIME_UNSET;
     clearUnreadDataOnNextRead = false;
     pendingDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
   }
@@ -144,6 +154,24 @@ import java.util.concurrent.LinkedBlockingQueue;
       return 0;
     }
 
+    if (collectReadStallSnapshot) {
+      readInProgress = true;
+      readStartElapsedRealtimeMs = SystemClock.elapsedRealtime();
+      if (readerThreadName == null) {
+        readerThreadName = Thread.currentThread().getName();
+      }
+    }
+    try {
+      return readInternal(buffer, offset, length);
+    } finally {
+      if (collectReadStallSnapshot) {
+        lastReadCompletionElapsedRealtimeMs = SystemClock.elapsedRealtime();
+        readInProgress = false;
+      }
+    }
+  }
+
+  private int readInternal(byte[] buffer, int offset, int length) {
     if (clearUnreadDataOnNextRead) {
       unreadData = new byte[0];
       clearUnreadDataOnNextRead = false;
@@ -222,7 +250,21 @@ import java.util.concurrent.LinkedBlockingQueue;
               droppedPacketCount,
               oldestPacketAgeMs,
               queueSpanMs,
-              nowElapsedRealtimeMs));
+              nowElapsedRealtimeMs,
+              C.INDEX_UNSET,
+              C.INDEX_UNSET,
+              C.INDEX_UNSET,
+              C.INDEX_UNSET,
+              /* recentPacketInterArrivalMaxMs= */ 0,
+              /* extractorReadStallMs= */ 0,
+              readInProgress,
+              readInProgress && readStartElapsedRealtimeMs != C.TIME_UNSET
+                  ? Math.max(0, nowElapsedRealtimeMs - readStartElapsedRealtimeMs)
+                  : 0,
+              lastReadCompletionElapsedRealtimeMs == C.TIME_UNSET
+                  ? C.TIME_UNSET
+                  : Math.max(0, nowElapsedRealtimeMs - lastReadCompletionElapsedRealtimeMs),
+              readerThreadName));
     }
   }
 

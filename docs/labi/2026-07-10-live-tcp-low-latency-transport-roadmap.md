@@ -744,3 +744,13 @@ duration: 2min smoke / 10min trend / 30min stability
 - 已通过定向 `RtspFeedbackApiTest`、`TransferRtpDataChannelTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。
 - 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.17`。source commit/tag 为 `2fa74c7679` / `exoplayer-rtsp-2.19.1-labi.17`，GitHub Pages commit 为 `837c900570`。
 - 远端 RTSP metadata 的 `latest/release` 均为 `2.19.1-labi.17`；AAR SHA256 为 `8ed198be164009f37ce552194fc205f3eab3e7ecd28de5c900c963a29c13083a`，POM SHA256 为 `8e09c14889fb8426beb06ca3b482c6d988ac0974c54c8b79c43c7f0503d52f30`。
+
+## T44 TCP Read-Stall Snapshot
+
+### 2026-07-11 实施复核
+
+- T43 整 AU admission/staging 已由 Cast-SDK 经过五轮真机验证否决并撤回；本 fork 不重新引入 staging、事务 buffer、阈值放宽或等待时间。
+- 真机 reset 为 `TransferRtpDataChannel` 特征：sequence 字段均为 `-1`、`queueDepth=1`、queue age/span `300-550ms`。`RtspMessageChannel` receiver callback 在其专用 loader thread，同期 main dispatch `2-8ms`、Java/native heap 无压力；当前证据无法把根因归为主线程或内存。
+- 原有 `extractorReadStallMs` 只在 RTP 包已经被 `RtpExtractor` 成功读取后更新，reset 会先丢掉仍在 Transfer queue 的包，因此对本故障存在盲区。没有足够证据安全修改 socket receiver loop、调度或 queue/recovery 阈值。
+- 新增低频 reset snapshot 字段：`dataChannelReadInProgress`、`dataChannelReadInProgressMs`、`dataChannelConsumerStallMs`、`dataChannelReaderThreadName`。仅当显式 TCP backlog recovery policy 已启用且 diagnostics listener 非空时维护原始状态；不增加逐包对象分配、日志、锁、IO、阻塞 callback 或普通 RTSP 开销。
+- Cast-SDK 后续应只在 `onRtspBacklogQueueReset` 时读取这四个字段：`readInProgress=true` 表示卡在 channel read；否则 `consumerStallMs` 指向 loader 已离开 channel read 后的 extractor/output/scheduling 停顿。拿到真机分类证据前，不改 reset/WAIT_IDR/no-packet 阈值。

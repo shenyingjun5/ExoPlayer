@@ -104,6 +104,34 @@ public class TransferRtpDataChannelTest {
     assertThat(diagnosticsListener.lastStats.transportMode)
         .isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
     assertThat(diagnosticsListener.lastStats.droppedPacketCount).isEqualTo(2);
+    assertThat(diagnosticsListener.lastStats.dataChannelReadInProgress).isFalse();
+    assertThat(diagnosticsListener.lastStats.dataChannelConsumerStallMs).isEqualTo(C.TIME_UNSET);
+    assertThat(diagnosticsListener.lastStats.dataChannelReaderThreadName).isNull();
+  }
+
+  @Test
+  public void backlogRecoverySnapshot_reportsIdleConsumerAfterPriorRead() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(2)
+                .build());
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    assertThat(transferRtpDataChannel.read(new byte[4], /* offset= */ 0, /* length= */ 4))
+        .isEqualTo(4);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastStats.dataChannelReadInProgress).isFalse();
+    assertThat(diagnosticsListener.lastStats.dataChannelConsumerStallMs).isAtLeast(0);
+    assertThat(diagnosticsListener.lastStats.dataChannelReaderThreadName).isNotNull();
   }
 
   @Test

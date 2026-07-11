@@ -25,6 +25,7 @@ public final class RtspDecoderInputQueuedStats {
   public final int sampleQueueIndex;
   public final long sampleTimeUs;
   public final long rtpTimestamp;
+  public final @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus;
   public final long queuedElapsedRealtimeMs;
 
   public RtspDecoderInputQueuedStats(
@@ -33,10 +34,29 @@ public final class RtspDecoderInputQueuedStats {
       long sampleTimeUs,
       long rtpTimestamp,
       long queuedElapsedRealtimeMs) {
+    this(
+        trackId,
+        sampleQueueIndex,
+        sampleTimeUs,
+        rtpTimestamp,
+        rtpTimestamp == com.google.android.exoplayer2.C.TIME_UNSET
+            ? RtspSampleRtpTimestampMappingStatus.NOT_FOUND
+            : RtspSampleRtpTimestampMappingStatus.MAPPED,
+        queuedElapsedRealtimeMs);
+  }
+
+  public RtspDecoderInputQueuedStats(
+      int trackId,
+      int sampleQueueIndex,
+      long sampleTimeUs,
+      long rtpTimestamp,
+      @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus,
+      long queuedElapsedRealtimeMs) {
     this.trackId = trackId;
     this.sampleQueueIndex = sampleQueueIndex;
     this.sampleTimeUs = sampleTimeUs;
     this.rtpTimestamp = rtpTimestamp;
+    this.rtpTimestampMappingStatus = rtpTimestampMappingStatus;
     this.queuedElapsedRealtimeMs = queuedElapsedRealtimeMs;
   }
 
@@ -53,6 +73,7 @@ public final class RtspDecoderInputQueuedStats {
         && sampleQueueIndex == other.sampleQueueIndex
         && sampleTimeUs == other.sampleTimeUs
         && rtpTimestamp == other.rtpTimestamp
+        && rtpTimestampMappingStatus == other.rtpTimestampMappingStatus
         && queuedElapsedRealtimeMs == other.queuedElapsedRealtimeMs;
   }
 
@@ -62,6 +83,7 @@ public final class RtspDecoderInputQueuedStats {
     result = 31 * result + sampleQueueIndex;
     result = 31 * result + (int) (sampleTimeUs ^ (sampleTimeUs >>> 32));
     result = 31 * result + (int) (rtpTimestamp ^ (rtpTimestamp >>> 32));
+    result = 31 * result + rtpTimestampMappingStatus;
     result = 31 * result + (int) (queuedElapsedRealtimeMs ^ (queuedElapsedRealtimeMs >>> 32));
     return result;
   }
@@ -70,7 +92,12 @@ public final class RtspDecoderInputQueuedStats {
   public String toString() {
     return Util.formatInvariant(
         "RtspDecoderInputQueuedStats(trackId=%d, sampleQueueIndex=%d, sampleTimeUs=%d, "
-            + "rtpTimestamp=%d, queuedElapsedRealtimeMs=%d)",
-        trackId, sampleQueueIndex, sampleTimeUs, rtpTimestamp, queuedElapsedRealtimeMs);
+            + "rtpTimestamp=%d, rtpTimestampMappingStatus=%d, queuedElapsedRealtimeMs=%d)",
+        trackId,
+        sampleQueueIndex,
+        sampleTimeUs,
+        rtpTimestamp,
+        rtpTimestampMappingStatus,
+        queuedElapsedRealtimeMs);
   }
 }

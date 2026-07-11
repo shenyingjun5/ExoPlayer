@@ -64,6 +64,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private volatile long firstTimestamp;
   private volatile int firstSequenceNumber;
   private volatile int lastSsrc;
+  private long lastExtractorReadElapsedRealtimeMs;
 
   @GuardedBy("lock")
   private boolean isSeekPending;
@@ -132,6 +133,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;
+    lastExtractorReadElapsedRealtimeMs = C.TIME_UNSET;
     nextRtpTimestamp = C.TIME_UNSET;
     playbackStartTimeUs = C.TIME_UNSET;
   }
@@ -209,6 +211,14 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     lastSsrc = packet.ssrc;
 
     long packetArrivalTimeMs = SystemClock.elapsedRealtime();
+    long extractorReadStallMs = 0;
+    if (rtspDiagnosticsListener != null
+        && rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled()) {
+      if (lastExtractorReadElapsedRealtimeMs != C.TIME_UNSET) {
+        extractorReadStallMs = Math.max(0, packetArrivalTimeMs - lastExtractorReadElapsedRealtimeMs);
+      }
+      lastExtractorReadElapsedRealtimeMs = packetArrivalTimeMs;
+    }
     long packetCutoffTimeMs = getCutoffTimeMs(packetArrivalTimeMs);
     boolean emitPacketDiagnostics =
         rtspDiagnosticsListener != null && rtspPacketDiagnosticsEnabled;
@@ -217,7 +227,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (emitPacketDiagnostics) {
       rtspDiagnosticsListener.onRtpPacketReceived(checkNotNull(parsedPacketStats));
     }
-    if (!reorderingQueue.offer(packet, packetArrivalTimeMs)) {
+    if (!reorderingQueue.offer(packet, packetArrivalTimeMs, extractorReadStallMs)) {
       if (emitPacketDiagnostics) {
         rtspDiagnosticsListener.onRtpPacketDropped(
             checkNotNull(parsedPacketStats), reorderingQueue.createStats(/* sequenceGap= */ 0));

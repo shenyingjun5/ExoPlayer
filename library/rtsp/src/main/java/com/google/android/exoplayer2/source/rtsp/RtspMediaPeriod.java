@@ -26,6 +26,7 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.SparseIntArray;
 import androidx.annotation.Nullable;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
@@ -106,8 +107,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
-  private final Object sampleRtpTimestampMappingsLock;
-  private final ArrayList<SampleRtpTimestampMapping> sampleRtpTimestampMappings;
+  @Nullable private final Object sampleRtpTimestampMappingsLock;
+  @Nullable private final ArrayList<SampleRtpTimestampMapping> sampleRtpTimestampMappings;
+  @Nullable private final SparseIntArray sampleRtpTimestampMappingMissingStatuses;
 
   private @MonotonicNonNull Callback callback;
   private @MonotonicNonNull ImmutableList<TrackGroup> trackGroups;
@@ -182,8 +184,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtcpFeedbackPolicy = checkNotNull(rtcpFeedbackPolicy);
     this.rtspBacklogRecoveryPolicy = checkNotNull(rtspBacklogRecoveryPolicy);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
-    sampleRtpTimestampMappingsLock = new Object();
-    sampleRtpTimestampMappings = new ArrayList<>();
+    if (rtspDiagnosticsListener != null && rtspPacketDiagnosticsEnabled) {
+      sampleRtpTimestampMappingsLock = new Object();
+      sampleRtpTimestampMappings = new ArrayList<>();
+      sampleRtpTimestampMappingMissingStatuses = new SparseIntArray();
+    } else {
+      sampleRtpTimestampMappingsLock = null;
+      sampleRtpTimestampMappings = null;
+      sampleRtpTimestampMappingMissingStatuses = null;
+    }
 
     handler = Util.createHandlerForCurrentLooper();
     internalListener = new InternalListener();
@@ -588,8 +597,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         && rtspDiagnosticsListener != null
         && rtspPacketDiagnosticsEnabled) {
       long readElapsedRealtimeMs = SystemClock.elapsedRealtime();
-      long rtpTimestamp =
-          removeSampleRtpTimestampForDiagnostics(loaderWrapper.loadInfo.trackId, buffer.timeUs);
+      SampleRtpTimestampLookupResult mappingResult =
+          lookupSampleRtpTimestampForDiagnostics(loaderWrapper.loadInfo.trackId, buffer.timeUs);
       long sampleQueueBufferedAheadMs =
           getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs);
       long mediaPeriodBufferedAheadMs = getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs);
@@ -598,7 +607,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               loaderWrapper.loadInfo.trackId,
               sampleQueueIndex,
               buffer.timeUs,
-              rtpTimestamp,
+              mappingResult.rtpTimestamp,
+              mappingResult.status,
               readElapsedRealtimeMs,
               sampleQueueBufferedAheadMs,
               mediaPeriodBufferedAheadMs));
@@ -607,7 +617,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               loaderWrapper.loadInfo.trackId,
               sampleQueueIndex,
               buffer.timeUs,
-              rtpTimestamp,
+              mappingResult.rtpTimestamp,
+              mappingResult.status,
               readElapsedRealtimeMs));
     }
     return result;
@@ -640,32 +651,65 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /* package */ void recordSampleRtpTimestampForDiagnostics(
       int trackId, long sampleTimeUs, long rtpTimestamp) {
-    if (!rtspPacketDiagnosticsEnabled || sampleTimeUs == C.TIME_UNSET) {
+    if (!rtspPacketDiagnosticsEnabled
+        || sampleTimeUs == C.TIME_UNSET
+        || sampleRtpTimestampMappingsLock == null) {
       return;
     }
     synchronized (sampleRtpTimestampMappingsLock) {
-      sampleRtpTimestampMappings.add(
+      ArrayList<SampleRtpTimestampMapping> mappings = checkNotNull(sampleRtpTimestampMappings);
+      mappings.add(
           new SampleRtpTimestampMapping(trackId, sampleTimeUs, rtpTimestamp));
-      while (sampleRtpTimestampMappings.size() > MAX_SAMPLE_RTP_TIMESTAMP_MAPPINGS) {
-        sampleRtpTimestampMappings.remove(0);
+      while (mappings.size() > MAX_SAMPLE_RTP_TIMESTAMP_MAPPINGS) {
+        mappings.remove(0);
       }
+      checkNotNull(sampleRtpTimestampMappingMissingStatuses).delete(trackId);
     }
   }
 
   /* package */ long removeSampleRtpTimestampForDiagnostics(int trackId, long sampleTimeUs) {
-    if (!rtspPacketDiagnosticsEnabled || sampleTimeUs == C.TIME_UNSET) {
-      return C.TIME_UNSET;
+    return lookupSampleRtpTimestampForDiagnostics(trackId, sampleTimeUs).rtpTimestamp;
+  }
+
+  /* package */ SampleRtpTimestampLookupResult lookupSampleRtpTimestampForDiagnostics(
+      int trackId, long sampleTimeUs) {
+    if (!rtspPacketDiagnosticsEnabled
+        || sampleTimeUs == C.TIME_UNSET
+        || sampleRtpTimestampMappingsLock == null) {
+      return new SampleRtpTimestampLookupResult(
+          C.TIME_UNSET, RtspSampleRtpTimestampMappingStatus.NOT_FOUND);
     }
-    synchronized (sampleRtpTimestampMappingsLock) {
-      for (int i = sampleRtpTimestampMappings.size() - 1; i >= 0; i--) {
-        SampleRtpTimestampMapping mapping = sampleRtpTimestampMappings.get(i);
+    synchronized (checkNotNull(sampleRtpTimestampMappingsLock)) {
+      ArrayList<SampleRtpTimestampMapping> mappings = checkNotNull(sampleRtpTimestampMappings);
+      for (int i = mappings.size() - 1; i >= 0; i--) {
+        SampleRtpTimestampMapping mapping = mappings.get(i);
         if (mapping.trackId == trackId && mapping.sampleTimeUs == sampleTimeUs) {
-          sampleRtpTimestampMappings.remove(i);
-          return mapping.rtpTimestamp;
+          mappings.remove(i);
+          return new SampleRtpTimestampLookupResult(
+              mapping.rtpTimestamp, RtspSampleRtpTimestampMappingStatus.MAPPED);
         }
       }
+      return new SampleRtpTimestampLookupResult(
+          C.TIME_UNSET,
+          checkNotNull(sampleRtpTimestampMappingMissingStatuses)
+              .get(trackId, RtspSampleRtpTimestampMappingStatus.NOT_FOUND));
     }
-    return C.TIME_UNSET;
+  }
+
+  private void clearSampleRtpTimestampMappingsForRecovery(int trackId) {
+    if (!rtspPacketDiagnosticsEnabled || sampleRtpTimestampMappingsLock == null) {
+      return;
+    }
+    synchronized (sampleRtpTimestampMappingsLock) {
+      ArrayList<SampleRtpTimestampMapping> mappings = checkNotNull(sampleRtpTimestampMappings);
+      for (int i = mappings.size() - 1; i >= 0; i--) {
+        if (mappings.get(i).trackId == trackId) {
+          mappings.remove(i);
+        }
+      }
+      checkNotNull(sampleRtpTimestampMappingMissingStatuses)
+          .put(trackId, RtspSampleRtpTimestampMappingStatus.CLEARED_FOR_RECOVERY);
+    }
   }
 
   private boolean suppressRead() {
@@ -834,6 +878,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {
+      clearSampleRtpTimestampMappingsForRecovery(reorderingStats.trackId);
       checkNotNull(rtspDiagnosticsListener).onRtpReorderingQueueReset(reorderingStats);
       maybeNotifyMediaPeriodRecoveryRequired(
           reorderingStats.trackId,
@@ -844,6 +889,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
+      clearSampleRtpTimestampMappingsForRecovery(backlogRecoveryStats.trackId);
       checkNotNull(rtspDiagnosticsListener).onRtspBacklogQueueReset(backlogRecoveryStats);
       maybeNotifyMediaPeriodRecoveryRequired(
           backlogRecoveryStats.trackId,
@@ -909,6 +955,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       this.trackId = trackId;
       this.sampleTimeUs = sampleTimeUs;
       this.rtpTimestamp = rtpTimestamp;
+    }
+  }
+
+  /* package */ static final class SampleRtpTimestampLookupResult {
+    public final long rtpTimestamp;
+    public final @RtspSampleRtpTimestampMappingStatus.Status int status;
+
+    public SampleRtpTimestampLookupResult(
+        long rtpTimestamp, @RtspSampleRtpTimestampMappingStatus.Status int status) {
+      this.rtpTimestamp = rtpTimestamp;
+      this.status = status;
     }
   }
 

@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 
 /** Statistics for a low-latency RTSP backlog recovery event. */
@@ -28,6 +29,18 @@ public final class RtspBacklogRecoveryStats {
   public final long oldestPacketAgeMs;
   public final long queueSpanMs;
   public final long resetElapsedRealtimeMs;
+  /** Expected sequence number at the reset trigger, or {@link C#INDEX_UNSET}. */
+  public final int expectedSequenceNumber;
+  /** Actual sequence number at the reset trigger, or {@link C#INDEX_UNSET}. */
+  public final int actualSequenceNumber;
+  /** Last dequeued sequence number at the reset trigger, or {@link C#INDEX_UNSET}. */
+  public final int lastDequeuedSequenceNumber;
+  /** Last queued sequence number at the reset trigger, or {@link C#INDEX_UNSET}. */
+  public final int lastQueuedSequenceNumber;
+  /** Largest observed packet inter-arrival interval since the prior reset. */
+  public final long recentPacketInterArrivalMaxMs;
+  /** Largest elapsed interval between extractor reads since the prior reset. */
+  public final long extractorReadStallMs;
 
   public RtspBacklogRecoveryStats(
       int trackId,
@@ -38,6 +51,38 @@ public final class RtspBacklogRecoveryStats {
       long oldestPacketAgeMs,
       long queueSpanMs,
       long resetElapsedRealtimeMs) {
+    this(
+        trackId,
+        transportMode,
+        reason,
+        queueDepth,
+        droppedPacketCount,
+        oldestPacketAgeMs,
+        queueSpanMs,
+        resetElapsedRealtimeMs,
+        C.INDEX_UNSET,
+        C.INDEX_UNSET,
+        C.INDEX_UNSET,
+        C.INDEX_UNSET,
+        /* recentPacketInterArrivalMaxMs= */ 0,
+        /* extractorReadStallMs= */ 0);
+  }
+
+  public RtspBacklogRecoveryStats(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @RtcpFeedbackReason.Reason int reason,
+      int queueDepth,
+      int droppedPacketCount,
+      long oldestPacketAgeMs,
+      long queueSpanMs,
+      long resetElapsedRealtimeMs,
+      int expectedSequenceNumber,
+      int actualSequenceNumber,
+      int lastDequeuedSequenceNumber,
+      int lastQueuedSequenceNumber,
+      long recentPacketInterArrivalMaxMs,
+      long extractorReadStallMs) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.reason = reason;
@@ -46,6 +91,12 @@ public final class RtspBacklogRecoveryStats {
     this.oldestPacketAgeMs = oldestPacketAgeMs;
     this.queueSpanMs = queueSpanMs;
     this.resetElapsedRealtimeMs = resetElapsedRealtimeMs;
+    this.expectedSequenceNumber = expectedSequenceNumber;
+    this.actualSequenceNumber = actualSequenceNumber;
+    this.lastDequeuedSequenceNumber = lastDequeuedSequenceNumber;
+    this.lastQueuedSequenceNumber = lastQueuedSequenceNumber;
+    this.recentPacketInterArrivalMaxMs = recentPacketInterArrivalMaxMs;
+    this.extractorReadStallMs = extractorReadStallMs;
   }
 
   @Override
@@ -64,7 +115,13 @@ public final class RtspBacklogRecoveryStats {
         && droppedPacketCount == other.droppedPacketCount
         && oldestPacketAgeMs == other.oldestPacketAgeMs
         && queueSpanMs == other.queueSpanMs
-        && resetElapsedRealtimeMs == other.resetElapsedRealtimeMs;
+        && resetElapsedRealtimeMs == other.resetElapsedRealtimeMs
+        && expectedSequenceNumber == other.expectedSequenceNumber
+        && actualSequenceNumber == other.actualSequenceNumber
+        && lastDequeuedSequenceNumber == other.lastDequeuedSequenceNumber
+        && lastQueuedSequenceNumber == other.lastQueuedSequenceNumber
+        && recentPacketInterArrivalMaxMs == other.recentPacketInterArrivalMaxMs
+        && extractorReadStallMs == other.extractorReadStallMs;
   }
 
   @Override
@@ -77,6 +134,12 @@ public final class RtspBacklogRecoveryStats {
     result = 31 * result + (int) (oldestPacketAgeMs ^ (oldestPacketAgeMs >>> 32));
     result = 31 * result + (int) (queueSpanMs ^ (queueSpanMs >>> 32));
     result = 31 * result + (int) (resetElapsedRealtimeMs ^ (resetElapsedRealtimeMs >>> 32));
+    result = 31 * result + expectedSequenceNumber;
+    result = 31 * result + actualSequenceNumber;
+    result = 31 * result + lastDequeuedSequenceNumber;
+    result = 31 * result + lastQueuedSequenceNumber;
+    result = 31 * result + (int) (recentPacketInterArrivalMaxMs ^ (recentPacketInterArrivalMaxMs >>> 32));
+    result = 31 * result + (int) (extractorReadStallMs ^ (extractorReadStallMs >>> 32));
     return result;
   }
 
@@ -85,7 +148,9 @@ public final class RtspBacklogRecoveryStats {
     return Util.formatInvariant(
         "RtspBacklogRecoveryStats(trackId=%d, transportMode=%d, reason=%d, "
             + "queueDepth=%d, droppedPacketCount=%d, oldestPacketAgeMs=%d, queueSpanMs=%d, "
-            + "resetElapsedRealtimeMs=%d)",
+            + "resetElapsedRealtimeMs=%d, expectedSequenceNumber=%d, actualSequenceNumber=%d, "
+            + "lastDequeuedSequenceNumber=%d, lastQueuedSequenceNumber=%d, "
+            + "recentPacketInterArrivalMaxMs=%d, extractorReadStallMs=%d)",
         trackId,
         transportMode,
         reason,
@@ -93,6 +158,12 @@ public final class RtspBacklogRecoveryStats {
         droppedPacketCount,
         oldestPacketAgeMs,
         queueSpanMs,
-        resetElapsedRealtimeMs);
+        resetElapsedRealtimeMs,
+        expectedSequenceNumber,
+        actualSequenceNumber,
+        lastDequeuedSequenceNumber,
+        lastQueuedSequenceNumber,
+        recentPacketInterArrivalMaxMs,
+        extractorReadStallMs);
   }
 }

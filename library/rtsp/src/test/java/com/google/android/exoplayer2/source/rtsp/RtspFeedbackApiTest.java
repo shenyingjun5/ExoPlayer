@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer2.source.rtsp;
 
+import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -685,6 +686,49 @@ public final class RtspFeedbackApiTest {
     assertThat(diagnosticsListener.accessUnitReadyStats).hasSize(1);
     assertThat(mediaPeriod.removeSampleRtpTimestampForDiagnostics(1, 4567))
         .isEqualTo(C.TIME_UNSET);
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleRtpTimestampMapping_recoveryResetClearsStaleMappingAndRecoversWithNewAccessUnit() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspPacketDiagnosticsEnabled(true)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.recordSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 10, 20);
+    checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting())
+        .onRtspBacklogQueueReset(
+            new RtspBacklogRecoveryStats(
+                /* trackId= */ 1,
+                RtspTransportMode.TCP_INTERLEAVED,
+                RtcpFeedbackReason.QUEUE_RESET,
+                /* queueDepth= */ 2,
+                /* droppedPacketCount= */ 1,
+                /* oldestPacketAgeMs= */ 370,
+                /* queueSpanMs= */ 370,
+                /* resetElapsedRealtimeMs= */ 100));
+
+    RtspMediaPeriod.SampleRtpTimestampLookupResult clearedResult =
+        mediaPeriod.lookupSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 10);
+    assertThat(clearedResult.rtpTimestamp).isEqualTo(C.TIME_UNSET);
+    assertThat(clearedResult.status)
+        .isEqualTo(RtspSampleRtpTimestampMappingStatus.CLEARED_FOR_RECOVERY);
+
+    mediaPeriod.recordSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 30, 40);
+    RtspMediaPeriod.SampleRtpTimestampLookupResult recoveredResult =
+        mediaPeriod.lookupSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 30);
+    assertThat(recoveredResult.rtpTimestamp).isEqualTo(40);
+    assertThat(recoveredResult.status).isEqualTo(RtspSampleRtpTimestampMappingStatus.MAPPED);
 
     mediaSource.releasePeriod(mediaPeriod);
   }

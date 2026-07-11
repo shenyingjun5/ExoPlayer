@@ -312,14 +312,20 @@ public class RtpPacketReorderingQueueTest {
     RtpPacket packet1 = makePacket(/* sequenceNumber= */ 1);
     RtpPacket packet2 = makePacket(/* sequenceNumber= */ 2);
 
-    queue.offer(packet1, /* receivedTimestampMs= */ 1);
-    queue.offer(packet2, /* receivedTimestampMs= */ 2);
+    queue.offer(packet1, /* receivedTimestampMs= */ 1, /* extractorReadStallMs= */ 3);
+    queue.offer(packet2, /* receivedTimestampMs= */ 2, /* extractorReadStallMs= */ 17);
 
     assertThat(queue.getLastOfferDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
     assertThat(queue.poll(/* cutoffTimestampMs= */ 0)).isEqualTo(packet2);
     assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
     assertThat(diagnosticsListener.lastBacklogStats.trackId).isEqualTo(2);
     assertThat(diagnosticsListener.lastBacklogStats.droppedPacketCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastBacklogStats.expectedSequenceNumber).isEqualTo(1);
+    assertThat(diagnosticsListener.lastBacklogStats.actualSequenceNumber).isEqualTo(2);
+    assertThat(diagnosticsListener.lastBacklogStats.lastDequeuedSequenceNumber).isEqualTo(0);
+    assertThat(diagnosticsListener.lastBacklogStats.lastQueuedSequenceNumber).isEqualTo(2);
+    assertThat(diagnosticsListener.lastBacklogStats.recentPacketInterArrivalMaxMs).isEqualTo(1);
+    assertThat(diagnosticsListener.lastBacklogStats.extractorReadStallMs).isEqualTo(17);
   }
 
   @Test

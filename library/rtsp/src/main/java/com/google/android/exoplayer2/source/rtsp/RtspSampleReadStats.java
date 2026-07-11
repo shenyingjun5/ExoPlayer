@@ -26,6 +26,7 @@ public final class RtspSampleReadStats {
   public final int sampleQueueIndex;
   public final long sampleTimeUs;
   public final long rtpTimestamp;
+  public final @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus;
   public final long readElapsedRealtimeMs;
   public final long sampleQueueBufferedAheadMs;
   public final long mediaPeriodBufferedAheadMs;
@@ -42,6 +43,7 @@ public final class RtspSampleReadStats {
         sampleQueueIndex,
         sampleTimeUs,
         /* rtpTimestamp= */ C.TIME_UNSET,
+        RtspSampleRtpTimestampMappingStatus.NOT_FOUND,
         readElapsedRealtimeMs,
         sampleQueueBufferedAheadMs,
         mediaPeriodBufferedAheadMs);
@@ -55,10 +57,33 @@ public final class RtspSampleReadStats {
       long readElapsedRealtimeMs,
       long sampleQueueBufferedAheadMs,
       long mediaPeriodBufferedAheadMs) {
+    this(
+        trackId,
+        sampleQueueIndex,
+        sampleTimeUs,
+        rtpTimestamp,
+        rtpTimestamp == C.TIME_UNSET
+            ? RtspSampleRtpTimestampMappingStatus.NOT_FOUND
+            : RtspSampleRtpTimestampMappingStatus.MAPPED,
+        readElapsedRealtimeMs,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs);
+  }
+
+  public RtspSampleReadStats(
+      int trackId,
+      int sampleQueueIndex,
+      long sampleTimeUs,
+      long rtpTimestamp,
+      @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus,
+      long readElapsedRealtimeMs,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs) {
     this.trackId = trackId;
     this.sampleQueueIndex = sampleQueueIndex;
     this.sampleTimeUs = sampleTimeUs;
     this.rtpTimestamp = rtpTimestamp;
+    this.rtpTimestampMappingStatus = rtpTimestampMappingStatus;
     this.readElapsedRealtimeMs = readElapsedRealtimeMs;
     this.sampleQueueBufferedAheadMs = sampleQueueBufferedAheadMs;
     this.mediaPeriodBufferedAheadMs = mediaPeriodBufferedAheadMs;
@@ -77,6 +102,7 @@ public final class RtspSampleReadStats {
         && sampleQueueIndex == other.sampleQueueIndex
         && sampleTimeUs == other.sampleTimeUs
         && rtpTimestamp == other.rtpTimestamp
+        && rtpTimestampMappingStatus == other.rtpTimestampMappingStatus
         && readElapsedRealtimeMs == other.readElapsedRealtimeMs
         && sampleQueueBufferedAheadMs == other.sampleQueueBufferedAheadMs
         && mediaPeriodBufferedAheadMs == other.mediaPeriodBufferedAheadMs;
@@ -88,6 +114,7 @@ public final class RtspSampleReadStats {
     result = 31 * result + sampleQueueIndex;
     result = 31 * result + (int) (sampleTimeUs ^ (sampleTimeUs >>> 32));
     result = 31 * result + (int) (rtpTimestamp ^ (rtpTimestamp >>> 32));
+    result = 31 * result + rtpTimestampMappingStatus;
     result = 31 * result + (int) (readElapsedRealtimeMs ^ (readElapsedRealtimeMs >>> 32));
     result = 31 * result + (int) (sampleQueueBufferedAheadMs ^ (sampleQueueBufferedAheadMs >>> 32));
     result = 31 * result + (int) (mediaPeriodBufferedAheadMs ^ (mediaPeriodBufferedAheadMs >>> 32));
@@ -98,12 +125,13 @@ public final class RtspSampleReadStats {
   public String toString() {
     return Util.formatInvariant(
         "RtspSampleReadStats(trackId=%d, sampleQueueIndex=%d, sampleTimeUs=%d, "
-            + "rtpTimestamp=%d, readElapsedRealtimeMs=%d, sampleQueueBufferedAheadMs=%d, "
-            + "mediaPeriodBufferedAheadMs=%d)",
+            + "rtpTimestamp=%d, rtpTimestampMappingStatus=%d, readElapsedRealtimeMs=%d, "
+            + "sampleQueueBufferedAheadMs=%d, mediaPeriodBufferedAheadMs=%d)",
         trackId,
         sampleQueueIndex,
         sampleTimeUs,
         rtpTimestamp,
+        rtpTimestampMappingStatus,
         readElapsedRealtimeMs,
         sampleQueueBufferedAheadMs,
         mediaPeriodBufferedAheadMs);

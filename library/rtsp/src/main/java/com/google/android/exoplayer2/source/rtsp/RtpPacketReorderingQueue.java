@@ -56,6 +56,7 @@ import java.util.TreeSet;
   private final int sequenceGapRequestThreshold;
   private final boolean requestKeyFrameOnQueueReset;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
+  private final boolean collectBacklogResetDiagnostics;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -79,6 +80,12 @@ import java.util.TreeSet;
 
   @GuardedBy("this")
   private long lastReceivedTimestampMs;
+
+  @GuardedBy("this")
+  private long recentPacketInterArrivalMaxMs;
+
+  @GuardedBy("this")
+  private long extractorReadStallMs;
 
   /** Creates an instance. */
   public RtpPacketReorderingQueue() {
@@ -126,6 +133,8 @@ import java.util.TreeSet;
     this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
     this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
+    collectBacklogResetDiagnostics =
+        rtspDiagnosticsListener != null && rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled();
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
@@ -144,6 +153,8 @@ import java.util.TreeSet;
     packetQueue.clear();
     lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
     lastReceivedTimestampMs = C.TIME_UNSET;
+    recentPacketInterArrivalMaxMs = 0;
+    extractorReadStallMs = 0;
     started = false;
     lastDequeuedSequenceNumber = C.INDEX_UNSET;
     lastReceivedSequenceNumber = C.INDEX_UNSET;
@@ -172,7 +183,16 @@ import java.util.TreeSet;
    *     returns {@code true}).
    */
   public synchronized boolean offer(RtpPacket packet, long receivedTimestampMs) {
+    return offer(packet, receivedTimestampMs, /* extractorReadStallMs= */ 0);
+  }
+
+  /** Offers one packet with a low-frequency extractor-read stall sample for reset diagnostics. */
+  public synchronized boolean offer(
+      RtpPacket packet, long receivedTimestampMs, long extractorReadStallMs) {
     lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
+    if (collectBacklogResetDiagnostics) {
+      this.extractorReadStallMs = Math.max(this.extractorReadStallMs, extractorReadStallMs);
+    }
     if (packetQueue.size() >= QUEUE_SIZE_THRESHOLD_FOR_RESET) {
       throw new IllegalStateException(
           "Queue size limit of " + QUEUE_SIZE_THRESHOLD_FOR_RESET + " reached.");
@@ -276,6 +296,12 @@ import java.util.TreeSet;
   }
 
   private synchronized void addToQueue(RtpPacketContainer packet) {
+    if (collectBacklogResetDiagnostics && lastReceivedTimestampMs != C.TIME_UNSET) {
+      recentPacketInterArrivalMaxMs =
+          Math.max(
+              recentPacketInterArrivalMaxMs,
+              Math.max(0, packet.receivedTimestampMs - lastReceivedTimestampMs));
+    }
     lastReceivedSequenceNumber = packet.packet.sequenceNumber;
     lastReceivedTimestampMs = packet.receivedTimestampMs;
     if (!packetQueue.add(packet)) {
@@ -295,6 +321,9 @@ import java.util.TreeSet;
     }
     resetCount++;
     int droppedPacketCount = Math.max(0, queueDepth - 1);
+    int expectedSequenceNumber = RtpPacket.getNextSequenceNumber(lastDequeuedSequenceNumber);
+    int lastDequeuedSequenceNumberAtReset = lastDequeuedSequenceNumber;
+    int lastQueuedSequenceNumberAtReset = lastReceivedSequenceNumber;
     packetQueue.clear();
     lastDequeuedSequenceNumber =
         RtpPacket.getPreviousSequenceNumber(latestPacket.packet.sequenceNumber);
@@ -313,8 +342,16 @@ import java.util.TreeSet;
               droppedPacketCount,
               oldestPacketAgeMs,
               queueSpanMs,
-              SystemClock.elapsedRealtime()));
+              SystemClock.elapsedRealtime(),
+              expectedSequenceNumber,
+              latestPacket.packet.sequenceNumber,
+              lastDequeuedSequenceNumberAtReset,
+              lastQueuedSequenceNumberAtReset,
+              recentPacketInterArrivalMaxMs,
+              extractorReadStallMs));
     }
+    recentPacketInterArrivalMaxMs = 0;
+    extractorReadStallMs = 0;
     if (requestKeyFrameOnQueueReset && rtcpFeedbackRequester != null) {
       rtcpFeedbackRequester.requestKeyFrame(RtcpFeedbackReason.QUEUE_RESET);
     }

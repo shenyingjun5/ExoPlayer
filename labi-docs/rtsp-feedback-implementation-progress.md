@@ -761,3 +761,44 @@ Performance/default-path review:
 - The runtime change is one integer constant in existing arithmetic. Comparator
   behavior becomes strictly correct at wrap boundaries and remains unchanged for
   non-wrap sequence comparisons.
+
+## TCP T30/T32 Recovery Observability
+
+Status: Implemented, tested, pending release.
+
+Scope:
+
+- Extend low-frequency `RtspBacklogRecoveryStats` with expected/actual/last
+  RTP sequence context, maximum packet inter-arrival, and extractor read stall.
+  TCP interleaved byte-queue resets report unavailable sequence fields as
+  `C.INDEX_UNSET`; queue age and span remain authoritative there.
+- Preserve the existing `rtpTimestamp -> sampleTimeUs -> presentationTimeUs`
+  join. `RtspSampleReadStats` and `RtspDecoderInputQueuedStats` now expose
+  `RtspSampleRtpTimestampMappingStatus` to distinguish mapped data, a missing
+  mapping, and mapping cleared for recovery.
+- Do not modify `library/core`: Cast-SDK's existing
+  `VideoFrameMetadataListener` is the render-side event. The source-side
+  decoder-input handoff is not represented as a MediaCodec callback.
+- A reorder/backlog reset clears only the affected track's explicit
+  packet-diagnostics mapping. It does not flush `SampleQueue`, loader,
+  MediaCodec, or renderer state.
+
+Tests:
+
+- Added reset-context coverage in `RtpPacketReorderingQueueTest`.
+- Added recovery-reset stale-mapping and next-access-unit mapping coverage in
+  `RtspFeedbackApiTest`.
+- Passed targeted RTSP tests:
+  `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`.
+- Passed full RTSP unit tests: `:library-rtsp:testDebugUnitTest`.
+- Passed release AAR build: `:library-rtsp:assembleRelease`.
+
+Performance/default-path review:
+
+- `RtspMediaPeriod` creates mapping state only when both a diagnostics listener
+  and packet diagnostics are enabled. Default RTSP creates neither mapping
+  list, lock nor status container.
+- RTP reset aggregation is enabled only when a listener and explicit reorder
+  backlog policy are both present. It uses primitive fields and the existing
+  queue synchronization; no new RTP hot-path logging, allocation, lock, JSON,
+  file IO, network IO, or blocking callback is introduced.

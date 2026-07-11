@@ -1,0 +1,74 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.zknowai.exoplayer",
+    "module": "exoplayer-container",
+    "version": "2.19.1-labi.17",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "7.4.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "exoplayer-container-2.19.1-labi.17.aar",
+          "url": "exoplayer-container-2.19.1-labi.17.aar",
+          "size": 22659,
+          "sha512": "6b9ad4e17059774cdcf1b1f74696eb74179e16233d3602e8b65dea4b2d42002bdc59b205c0bb6d8b63a89e5e490d98ffe946848b9491b0ad23421d40795ab58d",
+          "sha256": "0a1264dfd494ddc3db0c40b5187bcce7b7c2f959de97162a99a65123a6e679ea",
+          "sha1": "7d72f052e16d3e0caaa4bff570e86ade22c0e4ac",
+          "md5": "400b3c48689ce52d0940fbd126978553"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-common",
+          "version": {
+            "requires": "2.19.1-labi.17"
+          }
+        },
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.3.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-container-2.19.1-labi.17.aar",
+          "url": "exoplayer-container-2.19.1-labi.17.aar",
+          "size": 22659,
+          "sha512": "6b9ad4e17059774cdcf1b1f74696eb74179e16233d3602e8b65dea4b2d42002bdc59b205c0bb6d8b63a89e5e490d98ffe946848b9491b0ad23421d40795ab58d",
+          "sha256": "0a1264dfd494ddc3db0c40b5187bcce7b7c2f959de97162a99a65123a6e679ea",
+          "sha1": "7d72f052e16d3e0caaa4bff570e86ade22c0e4ac",
+          "md5": "400b3c48689ce52d0940fbd126978553"
+        }
+      ]
+    }
+  ]
+}

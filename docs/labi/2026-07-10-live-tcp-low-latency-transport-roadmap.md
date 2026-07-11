@@ -742,3 +742,5 @@ duration: 2min smoke / 10min trend / 30min stability
 
 - 新增 `tcpInterleavedChannelReset_forwardsMediaPeriodRecoverySignal`：复现 TCP queue reset 绕过路径，验证 `onRtspBacklogQueueReset -> ACTION_REBUILD_REQUIRED`；连续两次 reset generation 为 `1`、`2`。
 - 已通过定向 `RtspFeedbackApiTest`、`TransferRtpDataChannelTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。
+- 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.17`。source commit/tag 为 `2fa74c7679` / `exoplayer-rtsp-2.19.1-labi.17`，GitHub Pages commit 为 `837c900570`。
+- 远端 RTSP metadata 的 `latest/release` 均为 `2.19.1-labi.17`；AAR SHA256 为 `8ed198be164009f37ce552194fc205f3eab3e7ecd28de5c900c963a29c13083a`，POM SHA256 为 `8e09c14889fb8426beb06ca3b482c6d988ac0974c54c8b79c43c7f0503d52f30`。

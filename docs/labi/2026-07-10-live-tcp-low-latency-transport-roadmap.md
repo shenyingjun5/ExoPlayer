@@ -755,3 +755,13 @@ duration: 2min smoke / 10min trend / 30min stability
 - 新增低频 reset snapshot 字段：`dataChannelReadInProgress`、`dataChannelReadInProgressMs`、`dataChannelConsumerStallMs`、`dataChannelReaderThreadName`。仅当显式 TCP backlog recovery policy 已启用且 diagnostics listener 非空时维护原始状态；不增加逐包对象分配、日志、锁、IO、阻塞 callback 或普通 RTSP 开销。
 - Cast-SDK 后续应只在 `onRtspBacklogQueueReset` 时读取这四个字段：`readInProgress=true` 表示卡在 channel read；否则 `consumerStallMs` 指向 loader 已离开 channel read 后的 extractor/output/scheduling 停顿。拿到真机分类证据前，不改 reset/WAIT_IDR/no-packet 阈值。
 - 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.18`。source commit/tag 为 `4a9542150360cec0847ec2da2410afe15663c0b1` / `exoplayer-rtsp-2.19.1-labi.18`，GitHub Pages commit 为 `a1bd7b97cab0acd8df32476f59ffc1cb5e08312e`；RTSP AAR/POM SHA256 分别为 `e52105b0acb4599b0d2f20ebc487ff8335ca152962a7e7f5cf060dd5d8289070` / `228108e6c0dd5e55608b74ee993a59de7b40c9d8e6e6d6c5366c0747da7a66e6`。
+
+## T46 TCP Packet/Arrival 原子关联
+
+### 2026-07-12 实施复核
+
+- `.18` 小米真实视频 reset 的 `queueDepth=1` 与 `oldestAgeMs/queueSpanMs=406` 是逻辑不一致状态，不是 receiver loader 实际停顿：`dataChannelConsumerStallMs=0` 表明 consumer 刚完成 read。
+- 根因是 low-latency recovery 分支将 packet 和 arrival timestamp 分别写入两个 `LinkedBlockingQueue`。producer 的 `packetQueue.add(data)` 与 timestamp queue `add(arrival)` 之间，consumer 可以先取走 data，导致旧 timestamp 滞留并给下一 packet 错误计龄。
+- 修复将该显式 policy 分支改为单一 `PacketEnvelope(data, arrivalElapsedRealtimeMs)` queue；dequeue、oldest age、span 和 reset clear 均只处理同一 envelope，无法产生 orphan timestamp。普通 RTSP `DISABLED` 分支继续使用原始 `LinkedBlockingQueue<byte[]>`，不增加时钟、对象、锁或 callback。
+- low-latency recovery 分支原本每 packet 已分配两个 queue node 和一个装箱 `Long`；新实现为一个 queue node 和一个 envelope，不新增锁，并减少该显式实验路径的分配。
+- 测试覆盖旧竞态等价时序（首包 dequeue 后下一包入队）、FIFO、reset clear 后下一 packet、close 语义；不放宽 `300ms` reset 阈值。

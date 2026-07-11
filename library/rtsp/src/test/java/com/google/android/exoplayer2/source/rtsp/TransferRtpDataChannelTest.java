@@ -135,6 +135,94 @@ public class TransferRtpDataChannelTest {
   }
 
   @Test
+  public void backlogRecovery_dataAndArrivalRemainAtomicAcrossDequeueAndNextEnqueue() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetMs(300)
+                .build());
+    byte[] firstPacket = buildTestData(4);
+    byte[] secondPacket = buildTestData(4);
+    byte[] buffer = new byte[4];
+
+    // With the previous two-queue implementation, a consumer could dequeue this packet before its
+    // arrival timestamp was added, leaving the timestamp to age the next packet incorrectly.
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(firstPacket, /* arrivalMs= */ 0);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(secondPacket, /* arrivalMs= */ 1000);
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(0);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(secondPacket);
+  }
+
+  @Test
+  public void backlogRecovery_packetEnvelopesPreserveFifoOrder() {
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            /* rtspDiagnosticsListener= */ null,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(3)
+                .build());
+    byte[] firstPacket = buildTestData(4);
+    byte[] secondPacket = buildTestData(4);
+    byte[] buffer = new byte[4];
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(firstPacket, /* arrivalMs= */ 10);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(secondPacket, /* arrivalMs= */ 20);
+
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(firstPacket);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(secondPacket);
+  }
+
+  @Test
+  public void backlogRecovery_resetClearsPacketEnvelopesBeforeNextPacket() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(2)
+                .build());
+    byte[] packetAfterReset = buildTestData(4);
+    byte[] buffer = new byte[4];
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 10);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 20);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(packetAfterReset, /* arrivalMs= */ 30);
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(packetAfterReset);
+  }
+
+  @Test
+  public void close_keepsMessageChannelManagedTransportReadable() {
+    TransferRtpDataChannel transferRtpDataChannel = new TransferRtpDataChannel(POLL_TIMEOUT_MS);
+    byte[] packet = buildTestData(4);
+    byte[] buffer = new byte[4];
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(packet);
+    transferRtpDataChannel.close();
+
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(packet);
+  }
+
+  @Test
   public void read_withSmallBufferEnoughBuffer_readsThreeTimes() {
     byte[] randomBytes = buildTestData(20);
     byte[] buffer = new byte[8];

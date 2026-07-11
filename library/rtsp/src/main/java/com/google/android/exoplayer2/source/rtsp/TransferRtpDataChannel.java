@@ -23,6 +23,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import android.net.Uri;
 import android.os.SystemClock;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.source.rtsp.RtspMessageChannel.InterleavedBinaryDataListener;
 import com.google.android.exoplayer2.upstream.BaseDataSource;
@@ -46,8 +47,8 @@ import java.util.concurrent.LinkedBlockingQueue;
   private static final String DEFAULT_TCP_TRANSPORT_FORMAT =
       "RTP/AVP/TCP;unicast;interleaved=%d-%d";
 
-  private final LinkedBlockingQueue<byte[]> packetQueue;
-  @Nullable private final LinkedBlockingQueue<Long> packetArrivalElapsedRealtimeMsQueue;
+  @Nullable private final LinkedBlockingQueue<byte[]> packetQueue;
+  @Nullable private final LinkedBlockingQueue<PacketEnvelope> packetEnvelopeQueue;
   private final boolean collectReadStallSnapshot;
   private final int trackId;
   private final long pollTimeoutMs;
@@ -89,11 +90,13 @@ import java.util.concurrent.LinkedBlockingQueue;
     this.pollTimeoutMs = pollTimeoutMs;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
-    packetQueue = new LinkedBlockingQueue<>();
-    packetArrivalElapsedRealtimeMsQueue =
-        rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled()
-            ? new LinkedBlockingQueue<>()
-            : null;
+    if (rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled()) {
+      packetQueue = null;
+      packetEnvelopeQueue = new LinkedBlockingQueue<>();
+    } else {
+      packetQueue = new LinkedBlockingQueue<>();
+      packetEnvelopeQueue = null;
+    }
     collectReadStallSnapshot =
         rtspDiagnosticsListener != null
             && rtspBacklogRecoveryPolicy.isTcpInterleavedBacklogRecoveryEnabled();
@@ -188,12 +191,14 @@ import java.util.concurrent.LinkedBlockingQueue;
 
     @Nullable byte[] data;
     try {
-      data = packetQueue.poll(pollTimeoutMs, MILLISECONDS);
+      if (packetEnvelopeQueue == null) {
+        data = checkNotNull(packetQueue).poll(pollTimeoutMs, MILLISECONDS);
+      } else {
+        @Nullable PacketEnvelope packetEnvelope = packetEnvelopeQueue.poll(pollTimeoutMs, MILLISECONDS);
+        data = packetEnvelope == null ? null : packetEnvelope.data;
+      }
       if (data == null) {
         return C.RESULT_END_OF_INPUT;
-      }
-      if (packetArrivalElapsedRealtimeMsQueue != null) {
-        packetArrivalElapsedRealtimeMsQueue.poll();
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -210,13 +215,17 @@ import java.util.concurrent.LinkedBlockingQueue;
 
   @Override
   public void onInterleavedBinaryDataReceived(byte[] data) {
-    if (packetArrivalElapsedRealtimeMsQueue == null) {
-      packetQueue.add(data);
+    if (packetEnvelopeQueue == null) {
+      checkNotNull(packetQueue).add(data);
       return;
     }
-    long arrivalElapsedRealtimeMs = SystemClock.elapsedRealtime();
-    packetQueue.add(data);
-    packetArrivalElapsedRealtimeMsQueue.add(arrivalElapsedRealtimeMs);
+    onInterleavedBinaryDataReceived(data, SystemClock.elapsedRealtime());
+  }
+
+  @VisibleForTesting
+  /* package */ void onInterleavedBinaryDataReceived(byte[] data, long arrivalElapsedRealtimeMs) {
+    checkState(packetEnvelopeQueue != null);
+    packetEnvelopeQueue.add(new PacketEnvelope(data, arrivalElapsedRealtimeMs));
     lastPacketArrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
     maybeFlushBacklog(arrivalElapsedRealtimeMs);
   }
@@ -229,15 +238,15 @@ import java.util.concurrent.LinkedBlockingQueue;
   }
 
   private void maybeFlushBacklog(long nowElapsedRealtimeMs) {
-    int queueDepth = packetQueue.size();
+    LinkedBlockingQueue<PacketEnvelope> packetEnvelopeQueue = checkNotNull(this.packetEnvelopeQueue);
+    int queueDepth = packetEnvelopeQueue.size();
     long oldestPacketAgeMs = getOldestPacketAgeMs(nowElapsedRealtimeMs);
     long queueSpanMs = getQueueSpanMs();
     if (!shouldFlushBacklog(queueDepth, oldestPacketAgeMs)) {
       return;
     }
     int droppedPacketCount = queueDepth;
-    packetQueue.clear();
-    checkNotNull(packetArrivalElapsedRealtimeMsQueue).clear();
+    packetEnvelopeQueue.clear();
     clearUnreadDataOnNextRead = true;
     pendingDiscontinuityReason = RtcpFeedbackReason.QUEUE_RESET;
     if (rtspDiagnosticsListener != null) {
@@ -276,19 +285,26 @@ import java.util.concurrent.LinkedBlockingQueue;
   }
 
   private long getOldestPacketAgeMs(long nowElapsedRealtimeMs) {
-    @Nullable Long oldestPacketArrivalElapsedRealtimeMs =
-        checkNotNull(packetArrivalElapsedRealtimeMsQueue).peek();
-    return oldestPacketArrivalElapsedRealtimeMs == null
+    @Nullable PacketEnvelope oldestPacketEnvelope = checkNotNull(packetEnvelopeQueue).peek();
+    return oldestPacketEnvelope == null
         ? 0
-        : Math.max(0, nowElapsedRealtimeMs - oldestPacketArrivalElapsedRealtimeMs);
+        : Math.max(0, nowElapsedRealtimeMs - oldestPacketEnvelope.arrivalElapsedRealtimeMs);
   }
 
   private long getQueueSpanMs() {
-    @Nullable Long oldestPacketArrivalElapsedRealtimeMs =
-        checkNotNull(packetArrivalElapsedRealtimeMsQueue).peek();
-    return oldestPacketArrivalElapsedRealtimeMs == null
-            || lastPacketArrivalElapsedRealtimeMs == C.TIME_UNSET
+    @Nullable PacketEnvelope oldestPacketEnvelope = checkNotNull(packetEnvelopeQueue).peek();
+    return oldestPacketEnvelope == null || lastPacketArrivalElapsedRealtimeMs == C.TIME_UNSET
         ? 0
-        : Math.max(0, lastPacketArrivalElapsedRealtimeMs - oldestPacketArrivalElapsedRealtimeMs);
+        : Math.max(0, lastPacketArrivalElapsedRealtimeMs - oldestPacketEnvelope.arrivalElapsedRealtimeMs);
+  }
+
+  private static final class PacketEnvelope {
+    public final byte[] data;
+    public final long arrivalElapsedRealtimeMs;
+
+    public PacketEnvelope(byte[] data, long arrivalElapsedRealtimeMs) {
+      this.data = data;
+      this.arrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
+    }
   }
 }

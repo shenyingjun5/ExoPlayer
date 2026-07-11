@@ -718,5 +718,12 @@ duration: 2min smoke / 10min trend / 30min stability
 
 | ID | 状态 | ExoPlayer 侧范围 | 默认隔离 |
 | --- | --- | --- | --- |
-| T35 | ExoPlayer 已实现，待发布 | 标准 Android 11+ low-latency key、allowlist、configure/start 无 hint 自动重试；首帧超时 rebuild 由 Cast receiver 使用既有 video renderer 事件执行 | profile 默认 `DISABLED`；普通 renderer 不设置 key、不增加 callback 或 hot-path 分配 |
+| T35 | ExoPlayer 已发布 `2.19.1-labi.16` | 标准 Android 11+ low-latency key、allowlist、configure/start 无 hint 自动重试；首帧超时 rebuild 由 Cast receiver 使用既有 video renderer 事件执行 | profile 默认 `DISABLED`；普通 renderer 不设置 key、不增加 callback 或 hot-path 分配 |
 | T36 | 已完成设计复核，待 Cast-SDK A/B | 复用既有 `DefaultLoadControl.Builder` API，补 core 单测锁定默认/显式 floor 行为 | 不改默认 buffer 值，不做 SampleQueue 静默丢弃或 RTSP 专用加载分支 |
+
+### 2026-07-11 发布与验证
+
+- 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.16`。实现 source commit/tag 为 `d6a25424bc` / `exoplayer-rtsp-2.19.1-labi.16`，GitHub Pages commit 为 `44499822b1`。
+- 发布模块：`exoplayer-common`、`exoplayer-container`、`exoplayer-database`、`exoplayer-datasource`、`exoplayer-decoder`、`exoplayer-extractor`、`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。
+- 已通过：`MediaCodecLowLatencyProfileTest`、`DefaultLoadControlTest`、`MediaCodecVideoRendererTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。
+- 远端 `exoplayer-core` metadata 的 `latest/release` 均为 `2.19.1-labi.16`；AAR SHA256 为 `a48d0d62704e597a1221d4f7e02addbc1bf4ce32a8f7985c8b0b3afd7b6813b4`，POM SHA256 为 `62130c90dda51bf00f9b709a1a6ed587406dfd20f617509c5e05519a8a8ee9c8`。`javap` 已确认 `MediaCodecLowLatencyProfile`、`DefaultRenderersFactory#setMediaCodecLowLatencyProfile(...)` 和 builder setter 均在远端 AAR。

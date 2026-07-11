@@ -765,3 +765,4 @@ duration: 2min smoke / 10min trend / 30min stability
 - 修复将该显式 policy 分支改为单一 `PacketEnvelope(data, arrivalElapsedRealtimeMs)` queue；dequeue、oldest age、span 和 reset clear 均只处理同一 envelope，无法产生 orphan timestamp。普通 RTSP `DISABLED` 分支继续使用原始 `LinkedBlockingQueue<byte[]>`，不增加时钟、对象、锁或 callback。
 - low-latency recovery 分支原本每 packet 已分配两个 queue node 和一个装箱 `Long`；新实现为一个 queue node 和一个 envelope，不新增锁，并减少该显式实验路径的分配。
 - 测试覆盖旧竞态等价时序（首包 dequeue 后下一包入队）、FIFO、reset clear 后下一 packet、close 语义；不放宽 `300ms` reset 阈值。
+- 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.19`。source commit/tag 为 `e3509cd7fda358148d70de8079165f45bcdf2576` / `exoplayer-rtsp-2.19.1-labi.19`，GitHub Pages commit 为 `1bf60be928bc927c897003a7852dd07d647ca99f`；RTSP AAR/POM SHA256 分别为 `00f2fcdbf107980e5c32d5fe4c7f707359358f2b0d7ecacd6f34bf4f0170d219` / `64ae009a3511fd8a0012c46c6793ca6976ae1e62ec9144d672cc2aac22dc4648`。

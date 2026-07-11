@@ -68,6 +68,10 @@ public final class RtspBacklogRecoveryPolicy {
   public final long udpRtpReorderWaitMs;
   /** Whether TCP resets should tell the app that media-period rebuild recovery is required. */
   public final boolean mediaPeriodRecoverySignalEnabled;
+  /** Whether video SampleQueue backlog should request controlled media-period rebuild recovery. */
+  public final boolean sampleQueueBacklogRecoverySignalEnabled;
+  /** Video SampleQueue buffered-ahead threshold for controlled rebuild recovery. */
+  public final long sampleQueueBacklogRecoveryThresholdMs;
   /** Whether H.264 starts in WAIT_IDR until a complete decodable IDR access unit arrives. */
   public final boolean initialWaitForIdr;
   /** Whether H.264 re-enters WAIT_IDR after seek/reset. */
@@ -95,6 +99,8 @@ public final class RtspBacklogRecoveryPolicy {
     tcpInterleavedRtpReorderWaitMs = builder.tcpInterleavedRtpReorderWaitMs;
     udpRtpReorderWaitMs = builder.udpRtpReorderWaitMs;
     mediaPeriodRecoverySignalEnabled = builder.mediaPeriodRecoverySignalEnabled;
+    sampleQueueBacklogRecoverySignalEnabled = builder.sampleQueueBacklogRecoverySignalEnabled;
+    sampleQueueBacklogRecoveryThresholdMs = builder.sampleQueueBacklogRecoveryThresholdMs;
     initialWaitForIdr = builder.initialWaitForIdr;
     initialWaitForIdrAfterSeek = builder.initialWaitForIdrAfterSeek;
     maxTcpInterleavedQueueAgeMs = tcpInterleavedBacklogResetMs;
@@ -141,6 +147,13 @@ public final class RtspBacklogRecoveryPolicy {
     return enabled && mediaPeriodRecoverySignalEnabled;
   }
 
+  /** Returns whether video SampleQueue backlog should request controlled media-period recovery. */
+  public boolean isSampleQueueBacklogRecoverySignalEnabled() {
+    return enabled
+        && sampleQueueBacklogRecoverySignalEnabled
+        && sampleQueueBacklogRecoveryThresholdMs > 0;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (this == obj) {
@@ -161,6 +174,8 @@ public final class RtspBacklogRecoveryPolicy {
         && tcpInterleavedRtpReorderWaitMs == other.tcpInterleavedRtpReorderWaitMs
         && udpRtpReorderWaitMs == other.udpRtpReorderWaitMs
         && mediaPeriodRecoverySignalEnabled == other.mediaPeriodRecoverySignalEnabled
+        && sampleQueueBacklogRecoverySignalEnabled == other.sampleQueueBacklogRecoverySignalEnabled
+        && sampleQueueBacklogRecoveryThresholdMs == other.sampleQueueBacklogRecoveryThresholdMs
         && initialWaitForIdr == other.initialWaitForIdr
         && initialWaitForIdrAfterSeek == other.initialWaitForIdrAfterSeek;
   }
@@ -180,6 +195,12 @@ public final class RtspBacklogRecoveryPolicy {
             + (int) (tcpInterleavedRtpReorderWaitMs ^ (tcpInterleavedRtpReorderWaitMs >>> 32));
     result = 31 * result + (int) (udpRtpReorderWaitMs ^ (udpRtpReorderWaitMs >>> 32));
     result = 31 * result + (mediaPeriodRecoverySignalEnabled ? 1 : 0);
+    result = 31 * result + (sampleQueueBacklogRecoverySignalEnabled ? 1 : 0);
+    result =
+        31 * result
+            + (int)
+                (sampleQueueBacklogRecoveryThresholdMs
+                    ^ (sampleQueueBacklogRecoveryThresholdMs >>> 32));
     result = 31 * result + (initialWaitForIdr ? 1 : 0);
     result = 31 * result + (initialWaitForIdrAfterSeek ? 1 : 0);
     return result;
@@ -198,6 +219,8 @@ public final class RtspBacklogRecoveryPolicy {
     private long tcpInterleavedRtpReorderWaitMs;
     private long udpRtpReorderWaitMs;
     private boolean mediaPeriodRecoverySignalEnabled;
+    private boolean sampleQueueBacklogRecoverySignalEnabled;
+    private long sampleQueueBacklogRecoveryThresholdMs;
     private boolean initialWaitForIdr;
     private boolean initialWaitForIdrAfterSeek;
 
@@ -291,6 +314,23 @@ public final class RtspBacklogRecoveryPolicy {
     @CanIgnoreReturnValue
     public Builder setMediaPeriodRecoverySignalEnabled(boolean mediaPeriodRecoverySignalEnabled) {
       this.mediaPeriodRecoverySignalEnabled = mediaPeriodRecoverySignalEnabled;
+      return this;
+    }
+
+    /** Sets whether video SampleQueue backlog may request controlled media-period rebuild recovery. */
+    @CanIgnoreReturnValue
+    public Builder setSampleQueueBacklogRecoverySignalEnabled(
+        boolean sampleQueueBacklogRecoverySignalEnabled) {
+      this.sampleQueueBacklogRecoverySignalEnabled = sampleQueueBacklogRecoverySignalEnabled;
+      return this;
+    }
+
+    /** Sets the video SampleQueue buffered-ahead threshold for controlled rebuild recovery. */
+    @CanIgnoreReturnValue
+    public Builder setSampleQueueBacklogRecoveryThresholdMs(
+        long sampleQueueBacklogRecoveryThresholdMs) {
+      checkArgument(sampleQueueBacklogRecoveryThresholdMs >= 0);
+      this.sampleQueueBacklogRecoveryThresholdMs = sampleQueueBacklogRecoveryThresholdMs;
       return this;
     }
 

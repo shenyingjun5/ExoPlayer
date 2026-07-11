@@ -19,6 +19,7 @@ import static java.lang.annotation.ElementType.TYPE_USE;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
+import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.util.Util;
 import java.lang.annotation.Documented;
 import java.lang.annotation.Retention;
@@ -43,6 +44,12 @@ public final class RtspMediaPeriodRecoveryStats {
   public final @RtcpFeedbackReason.Reason int reason;
   public final @Action int action;
   public final long eventElapsedRealtimeMs;
+  /** Period-local recovery generation, incremented for each emitted controlled rebuild request. */
+  public final int recoveryGeneration;
+  /** Buffered-ahead duration that caused this request, or {@link C#TIME_UNSET}. */
+  public final long sampleQueueBufferedAheadMs;
+  /** Media-period buffered-ahead duration at this request, or {@link C#TIME_UNSET}. */
+  public final long mediaPeriodBufferedAheadMs;
   @Nullable public final String detail;
 
   public RtspMediaPeriodRecoveryStats(
@@ -52,11 +59,36 @@ public final class RtspMediaPeriodRecoveryStats {
       @Action int action,
       long eventElapsedRealtimeMs,
       @Nullable String detail) {
+    this(
+        trackId,
+        transportMode,
+        reason,
+        action,
+        eventElapsedRealtimeMs,
+        /* recoveryGeneration= */ 0,
+        /* sampleQueueBufferedAheadMs= */ C.TIME_UNSET,
+        /* mediaPeriodBufferedAheadMs= */ C.TIME_UNSET,
+        detail);
+  }
+
+  public RtspMediaPeriodRecoveryStats(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @RtcpFeedbackReason.Reason int reason,
+      @Action int action,
+      long eventElapsedRealtimeMs,
+      int recoveryGeneration,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs,
+      @Nullable String detail) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.reason = reason;
     this.action = action;
     this.eventElapsedRealtimeMs = eventElapsedRealtimeMs;
+    this.recoveryGeneration = recoveryGeneration;
+    this.sampleQueueBufferedAheadMs = sampleQueueBufferedAheadMs;
+    this.mediaPeriodBufferedAheadMs = mediaPeriodBufferedAheadMs;
     this.detail = detail;
   }
 
@@ -74,6 +106,9 @@ public final class RtspMediaPeriodRecoveryStats {
         && reason == other.reason
         && action == other.action
         && eventElapsedRealtimeMs == other.eventElapsedRealtimeMs
+        && recoveryGeneration == other.recoveryGeneration
+        && sampleQueueBufferedAheadMs == other.sampleQueueBufferedAheadMs
+        && mediaPeriodBufferedAheadMs == other.mediaPeriodBufferedAheadMs
         && Util.areEqual(detail, other.detail);
   }
 
@@ -84,6 +119,9 @@ public final class RtspMediaPeriodRecoveryStats {
     result = 31 * result + reason;
     result = 31 * result + action;
     result = 31 * result + (int) (eventElapsedRealtimeMs ^ (eventElapsedRealtimeMs >>> 32));
+    result = 31 * result + recoveryGeneration;
+    result = 31 * result + (int) (sampleQueueBufferedAheadMs ^ (sampleQueueBufferedAheadMs >>> 32));
+    result = 31 * result + (int) (mediaPeriodBufferedAheadMs ^ (mediaPeriodBufferedAheadMs >>> 32));
     result = 31 * result + (detail == null ? 0 : detail.hashCode());
     return result;
   }
@@ -92,7 +130,16 @@ public final class RtspMediaPeriodRecoveryStats {
   public String toString() {
     return Util.formatInvariant(
         "RtspMediaPeriodRecoveryStats(trackId=%d, transportMode=%d, reason=%d, action=%d, "
-            + "eventElapsedRealtimeMs=%d, detail=%s)",
-        trackId, transportMode, reason, action, eventElapsedRealtimeMs, detail);
+            + "recoveryGeneration=%d, sampleQueueBufferedAheadMs=%d, "
+            + "mediaPeriodBufferedAheadMs=%d, eventElapsedRealtimeMs=%d, detail=%s)",
+        trackId,
+        transportMode,
+        reason,
+        action,
+        recoveryGeneration,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs,
+        eventElapsedRealtimeMs,
+        detail);
   }
 }

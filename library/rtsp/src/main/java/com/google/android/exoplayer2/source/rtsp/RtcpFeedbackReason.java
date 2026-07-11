@@ -40,6 +40,8 @@ public final class RtcpFeedbackReason {
   public static final int ACCESS_UNIT_CORRUPTED = 5;
   /** The video reader is waiting for a complete IDR access unit to recover. */
   public static final int WAITING_FOR_IDR = 6;
+  /** A low-latency RTSP video sample queue has exceeded its permitted backlog. */
+  public static final int SAMPLE_QUEUE_BACKLOG = 7;
 
   /** One of this class's reason constants. */
   @Documented
@@ -52,7 +54,8 @@ public final class RtcpFeedbackReason {
     SEQUENCE_GAP,
     QUEUE_RESET,
     ACCESS_UNIT_CORRUPTED,
-    WAITING_FOR_IDR
+    WAITING_FOR_IDR,
+    SAMPLE_QUEUE_BACKLOG
   })
   public @interface Reason {}
 

@@ -55,6 +55,7 @@ import com.google.android.exoplayer2.upstream.DataSourceUtil;
 import com.google.android.exoplayer2.upstream.Loader;
 import com.google.android.exoplayer2.upstream.Loader.Loadable;
 import com.google.android.exoplayer2.upstream.UdpDataSource;
+import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
@@ -126,6 +127,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private boolean trackSelected;
   private int portBindingRetryCount;
   private boolean isUsingRtpTcp;
+  private boolean sampleQueueBacklogRecoverySignaled;
+  private int recoveryGeneration;
 
   /**
    * Creates an RTSP media period.
@@ -620,6 +623,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               mappingResult.rtpTimestamp,
               mappingResult.status,
               readElapsedRealtimeMs));
+      maybeNotifySampleQueueBacklogRecoveryRequired(
+          loaderWrapper.loadInfo.trackId,
+          loaderWrapper.loadInfo.transportMode,
+          loaderWrapper.loadInfo.mediaTrack.payloadFormat.format.sampleMimeType,
+          sampleQueueBufferedAheadMs,
+          mediaPeriodBufferedAheadMs);
     }
     return result;
   }
@@ -636,6 +645,38 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return C.TIME_UNSET;
     }
     return usToMs(Math.max(0, bufferedPositionUs - sampleTimeUs));
+  }
+
+  /* package */ void maybeNotifySampleQueueBacklogRecoveryRequired(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable String sampleMimeType,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs) {
+    if (sampleQueueBacklogRecoverySignaled
+        || rtspDiagnosticsListener == null
+        || !rtspPacketDiagnosticsEnabled
+        || !rtspBacklogRecoveryPolicy.isSampleQueueBacklogRecoverySignalEnabled()
+        || sampleQueueBufferedAheadMs == C.TIME_UNSET
+        || sampleQueueBufferedAheadMs < rtspBacklogRecoveryPolicy.sampleQueueBacklogRecoveryThresholdMs
+        || !MimeTypes.isVideo(sampleMimeType)) {
+      return;
+    }
+    sampleQueueBacklogRecoverySignaled = true;
+    recoveryGeneration++;
+    clearSampleRtpTimestampMappingsForRecovery(trackId);
+    checkNotNull(rtspDiagnosticsListener)
+        .onRtspMediaPeriodRecoveryRequired(
+            new RtspMediaPeriodRecoveryStats(
+                trackId,
+                transportMode,
+                RtcpFeedbackReason.SAMPLE_QUEUE_BACKLOG,
+                RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+                SystemClock.elapsedRealtime(),
+                recoveryGeneration,
+                sampleQueueBufferedAheadMs,
+                mediaPeriodBufferedAheadMs,
+                "sample_queue_backlog"));
   }
 
   /* package */ void onH264AccessUnitReadyForDiagnostics(

@@ -297,6 +297,122 @@ public final class RtspFeedbackApiTest {
   }
 
   @Test
+  public void sampleQueueBacklogRecoverySignal_emitsOnceAndClearsDiagnosticsMapping() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .setRtspPacketDiagnosticsEnabled(true)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.recordSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 10, 20);
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300);
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    RtspMediaPeriodRecoveryStats recoveryStats =
+        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
+    assertThat(recoveryStats.reason).isEqualTo(RtcpFeedbackReason.SAMPLE_QUEUE_BACKLOG);
+    assertThat(recoveryStats.action)
+        .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
+    assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
+    assertThat(recoveryStats.sampleQueueBufferedAheadMs).isEqualTo(1300);
+    assertThat(recoveryStats.mediaPeriodBufferedAheadMs).isEqualTo(1300);
+    assertThat(recoveryStats.detail).isEqualTo("sample_queue_backlog");
+    assertThat(mediaPeriod.lookupSampleRtpTimestampForDiagnostics(/* trackId= */ 1, 10).status)
+        .isEqualTo(RtspSampleRtpTimestampMappingStatus.CLEARED_FOR_RECOVERY);
+
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_requiresExplicitPolicyAndVideoTrack() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspPacketDiagnosticsEnabled(true)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300);
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 2,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "audio/mp4a-latm",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_packetDiagnosticsDisabledDoesNotTrigger() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
   public void factoryWithRtsptUri_forcesTcpAndUsesRtspUriInternally() {
     RtspMediaSource mediaSource =
         new RtspMediaSource.Factory()
@@ -427,6 +543,8 @@ public final class RtspFeedbackApiTest {
             .setTcpInterleavedRtpReorderWaitMs(2)
             .setUdpRtpReorderWaitMs(30)
             .setMediaPeriodRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
             .setWaitForIdrTimeoutMs(800)
             .setInitialWaitForIdr(true)
             .setInitialWaitForIdrAfterSeek(true)
@@ -442,6 +560,9 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.tcpInterleavedRtpReorderWaitMs).isEqualTo(2);
     assertThat(policy.udpRtpReorderWaitMs).isEqualTo(30);
     assertThat(policy.mediaPeriodRecoverySignalEnabled).isTrue();
+    assertThat(policy.sampleQueueBacklogRecoverySignalEnabled).isTrue();
+    assertThat(policy.sampleQueueBacklogRecoveryThresholdMs).isEqualTo(800);
+    assertThat(policy.isSampleQueueBacklogRecoverySignalEnabled()).isTrue();
     assertThat(policy.waitForIdrTimeoutMs).isEqualTo(800);
     assertThat(policy.initialWaitForIdr).isTrue();
     assertThat(policy.initialWaitForIdrAfterSeek).isTrue();
@@ -450,6 +571,8 @@ public final class RtspFeedbackApiTest {
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdr).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.initialWaitForIdrAfterSeek).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.isMediaPeriodRecoverySignalEnabled())
+        .isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.isSampleQueueBacklogRecoverySignalEnabled())
         .isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdr).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY_DEFAULT.initialWaitForIdrAfterSeek).isFalse();

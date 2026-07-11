@@ -503,6 +503,18 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
       @Nullable MediaCrypto crypto,
       float codecOperatingRate);
 
+  /**
+   * Returns whether initialization should be retried once for the same codec after its preferred
+   * configuration failed.
+   *
+   * <p>The default implementation returns {@code false}. Subclasses may use this hook to remove an
+   * optional configuration hint while preserving normal decoder fallback behavior.
+   */
+  protected boolean shouldRetryCodecInitializationWithoutPreferredConfiguration(
+      MediaCodecInfo codecInfo, Exception initializationException) {
+    return false;
+  }
+
   protected final void maybeInitCodecOrBypass() throws ExoPlaybackException {
     if (codec != null || bypassEnabled || inputFormat == null) {
       // We have a codec, are bypassing it, or don't have a format to decide how to render.
@@ -1053,6 +1065,14 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
           }
         }
       } catch (Exception e) {
+        if (shouldRetryCodecInitializationWithoutPreferredConfiguration(codecInfo, e)) {
+          try {
+            initCodec(codecInfo, crypto);
+            continue;
+          } catch (Exception retryException) {
+            e = retryException;
+          }
+        }
         Log.w(TAG, "Failed to initialize decoder: " + codecInfo, e);
         // This codec failed to initialize, so fall back to the next codec in the list (if any). We
         // won't try to use this codec again unless there's a format change or the renderer is

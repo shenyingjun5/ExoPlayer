@@ -38,6 +38,7 @@ import com.google.android.exoplayer2.text.TextRenderer;
 import com.google.android.exoplayer2.trackselection.TrackSelector;
 import com.google.android.exoplayer2.util.Log;
 import com.google.android.exoplayer2.video.MediaCodecVideoRenderer;
+import com.google.android.exoplayer2.video.MediaCodecLowLatencyProfile;
 import com.google.android.exoplayer2.video.VideoRendererEventListener;
 import com.google.android.exoplayer2.video.spherical.CameraMotionRenderer;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
@@ -108,6 +109,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
   private boolean enableFloatOutput;
   private boolean enableAudioTrackPlaybackParams;
   private boolean enableOffload;
+  private MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile;
 
   /**
    * @param context A {@link Context}.
@@ -118,6 +120,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
     extensionRendererMode = EXTENSION_RENDERER_MODE_OFF;
     allowedVideoJoiningTimeMs = DEFAULT_ALLOWED_VIDEO_JOINING_TIME_MS;
     mediaCodecSelector = MediaCodecSelector.DEFAULT;
+    mediaCodecLowLatencyProfile = MediaCodecLowLatencyProfile.DISABLED;
   }
 
   /**
@@ -290,6 +293,23 @@ public class DefaultRenderersFactory implements RenderersFactory {
     return this;
   }
 
+  /**
+   * Sets the explicit profile used to apply Android 11's standard low-latency decoder hint.
+   *
+   * <p>The default value is {@link MediaCodecLowLatencyProfile#DISABLED}. The profile only affects
+   * video codec configuration when its codec allowlist matches. It has no effect on RTSP transport,
+   * buffering, or decoders on Android 4.4 through Android 10.
+   *
+   * @param mediaCodecLowLatencyProfile The profile to use.
+   * @return This factory, for convenience.
+   */
+  @CanIgnoreReturnValue
+  public DefaultRenderersFactory setMediaCodecLowLatencyProfile(
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile) {
+    this.mediaCodecLowLatencyProfile = mediaCodecLowLatencyProfile;
+    return this;
+  }
+
   @Override
   public Renderer[] createRenderers(
       Handler eventHandler,
@@ -371,7 +391,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
             enableDecoderFallback,
             eventHandler,
             eventListener,
-            MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY);
+            MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
+            mediaCodecLowLatencyProfile);
     out.add(videoRenderer);
 
     if (extensionRendererMode == EXTENSION_RENDERER_MODE_OFF) {

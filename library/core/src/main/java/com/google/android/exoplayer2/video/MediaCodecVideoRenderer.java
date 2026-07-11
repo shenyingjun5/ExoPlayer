@@ -154,6 +154,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   private final long allowedJoiningTimeMs;
   private final int maxDroppedFramesToNotify;
   private final boolean deviceNeedsNoPostProcessWorkaround;
+  private final MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile;
 
   private CodecMaxValues codecMaxValues;
   private boolean codecNeedsSetOutputSurfaceWorkaround;
@@ -185,6 +186,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   private int tunnelingAudioSessionId;
   /* package */ @Nullable OnFrameRenderedListenerV23 tunnelingOnFrameRenderedListener;
   @Nullable private VideoFrameMetadataListener frameMetadataListener;
+  private boolean disableLowLatencyHintAfterInitializationFailure;
 
   /**
    * @param context A context.
@@ -238,7 +240,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         eventHandler,
         eventListener,
         maxDroppedFramesToNotify,
-        /* assumedMinimumCodecOperatingRate= */ 30);
+        /* assumedMinimumCodecOperatingRate= */ 30,
+        MediaCodecLowLatencyProfile.DISABLED);
   }
 
   /**
@@ -272,7 +275,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         eventHandler,
         eventListener,
         maxDroppedFramesToNotify,
-        /* assumedMinimumCodecOperatingRate= */ 30);
+        /* assumedMinimumCodecOperatingRate= */ 30,
+        MediaCodecLowLatencyProfile.DISABLED);
   }
 
   /**
@@ -310,7 +314,37 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         eventHandler,
         eventListener,
         maxDroppedFramesToNotify,
-        /* assumedMinimumCodecOperatingRate= */ 30);
+        /* assumedMinimumCodecOperatingRate= */ 30,
+        MediaCodecLowLatencyProfile.DISABLED);
+  }
+
+  /**
+   * Creates a new instance with an explicit Android 11+ low-latency decoder profile.
+   *
+   * <p>The profile is disabled by default. Its codec allowlist is checked only while configuring a
+   * decoder, not while processing RTP packets or codec buffers.
+   */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
+        /* assumedMinimumCodecOperatingRate= */ 30,
+        mediaCodecLowLatencyProfile);
   }
 
   /**
@@ -344,6 +378,36 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       @Nullable VideoRendererEventListener eventListener,
       int maxDroppedFramesToNotify,
       float assumedMinimumCodecOperatingRate) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
+        assumedMinimumCodecOperatingRate,
+        MediaCodecLowLatencyProfile.DISABLED);
+  }
+
+  /**
+   * Creates a new instance with an explicit Android 11+ low-latency decoder profile.
+   *
+   * <p>The profile is disabled by default. Its codec allowlist is checked only while configuring a
+   * decoder, not while processing RTP packets or codec buffers.
+   */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      float assumedMinimumCodecOperatingRate,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile) {
     super(
         C.TRACK_TYPE_VIDEO,
         codecAdapterFactory,
@@ -352,6 +416,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         assumedMinimumCodecOperatingRate);
     this.allowedJoiningTimeMs = allowedJoiningTimeMs;
     this.maxDroppedFramesToNotify = maxDroppedFramesToNotify;
+    this.mediaCodecLowLatencyProfile = mediaCodecLowLatencyProfile;
     this.context = context.getApplicationContext();
     frameReleaseHelper = new VideoFrameReleaseHelper(this.context);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
@@ -803,6 +868,10 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
             codecOperatingRate,
             deviceNeedsNoPostProcessWorkaround,
             tunneling ? tunnelingAudioSessionId : C.AUDIO_SESSION_ID_UNSET);
+    if (!disableLowLatencyHintAfterInitializationFailure
+        && mediaCodecLowLatencyProfile.shouldApply(codecInfo.name)) {
+      Api30.setLowLatency(mediaFormat);
+    }
     if (displaySurface == null) {
       if (!shouldUsePlaceholderSurface(codecInfo)) {
         throw new IllegalStateException();
@@ -846,6 +915,17 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         newFormat,
         discardReasons != 0 ? REUSE_RESULT_NO : evaluation.result,
         discardReasons);
+  }
+
+  @Override
+  protected boolean shouldRetryCodecInitializationWithoutPreferredConfiguration(
+      MediaCodecInfo codecInfo, Exception initializationException) {
+    if (disableLowLatencyHintAfterInitializationFailure
+        || !mediaCodecLowLatencyProfile.shouldApply(codecInfo.name)) {
+      return false;
+    }
+    disableLowLatencyHintAfterInitializationFailure = true;
+    return true;
   }
 
   @CallSuper
@@ -2753,6 +2833,16 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       }
     }
     return false;
+  }
+
+  @RequiresApi(30)
+  private static final class Api30 {
+
+    private Api30() {}
+
+    public static void setLowLatency(MediaFormat mediaFormat) {
+      mediaFormat.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+    }
   }
 
   @RequiresApi(23)

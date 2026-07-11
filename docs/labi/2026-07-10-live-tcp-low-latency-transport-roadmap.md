@@ -28,7 +28,7 @@ TCP interleaved 能隐藏网络丢包并保证 RTP 字节按序到达，但不�
 
 - 不修改普通第三方 RTSP 的默认 transport、buffer、feedback、diagnostics 或 fallback 行为。
 - 不把 RTSP rebuild 作为正常抖动时的第一恢复手段。
-- 不把 `0.5s GOP`、降码率、降分辨率作为 TCP 低延迟默认方案。
+- 不把 `0.5s GOP`、降码率、降分辨率作为正常网络下的 TCP 低延迟默认方案；真实持续拥堵下允许通过独立灰度策略临时降码率，但正常验收和恢复后的目标仍是 `1080p30/7Mbps`。
 - 不依赖无限增大 `SO_SNDBUF` 或应用 pending buffer 来换取“流畅”。
 - 不在 RTP packet hot path 增加逐包日志、JSON、文件 IO、网络 IO 或阻塞 callback。
 - 不在 Cast SDK App/Demo UI 层实现播放器队列恢复状态机。
@@ -54,7 +54,8 @@ TCP interleaved 能隐藏网络丢包并保证 RTP 字节按序到达，但不�
 
 - `cast-sender-live-rtsp` 已对 media socket 设置 `TCP_NODELAY` 和 non-blocking write。
 - 应用层 `pending_tcp_interleaved` 已有 `200ms` 存续时间硬门限。
-- 当前动态字节预算按 `IDR access unit bytes * 2` 计算，并限制在 `256KB-2MB`。
+- 动态字节预算已改为 bitrate/time 模型并限制在 `64KB-512KB`；`7Mbps/200ms` 为 `175000 bytes`，不再由 IDR 大小放大。
+- macOS/iOS 已接入 `TCP_NOTSENT_LOWAT` 和低频 `SO_NWRITE` 采样；`7Mbps/75ms` 为 `65625 bytes`，不支持平台静默降级。
 - pending 超过时间或字节门限时不清半个 interleaved frame，而是返回 `ConnectionReset`，让上层重建 RTSP client。
 - 发送失败、整帧跳过和参数集发送失败都会进入 `awaiting_keyframe`，丢 P 帧直到下一帧完整 IDR。
 - macOS VideoToolbox 已实现自适应 GOP：启动/恢复阶段约 `1s`，稳定阶段约 `2s`，收到恢复请求后回到约 `1s`。
@@ -69,22 +70,21 @@ TCP interleaved 能隐藏网络丢包并保证 RTP 字节按序到达，但不�
 
 ### 已确认缺口
 
-1. 动态 TCP 字节预算仍主要由 IDR 大小决定，不等价于延迟预算。按 `7Mbps` 计算，`256KB` 约等于 `300ms` 媒体，`1MB` 约等于 `1.2s`，`2MB` 约等于 `2.4s`。
-2. `SO_SNDBUF` 只能限制应用写入系统的空间，当前没有限制和观测 macOS kernel 中尚未发送的字节；应用 pending 为零不代表 media socket 没有旧数据。
-3. macOS raw frame channel 满时当前 `try_send` 丢的是新帧，旧帧仍留在队列，和低延迟“最新帧优先”目标相反。
-4. 本地 ExoPlayer `RtpExtractor` 对所有 transport 使用固定约 `30ms` reorder cutoff；TCP interleaved 本身按序，低延迟 TCP 没必要等待完整 UDP 乱序窗口。
-5. ExoPlayer 的 RTP queue reset 不能保证清掉已进入 SampleQueue 的旧 access unit；只请求 IDR 可能继续播放数秒旧样本。
-6. TCP low-latency 当前使用 `LOW_LATENCY_DEFAULT/BOTH`，ExoPlayer RTCP 和独立 live control channel 可能对同一恢复事件重复请求 IDR。
-7. `LiveFeedbackController.TcpJsonClient` 当前把 `scheduled` 和 `throttled` 都折叠成 boolean success，无法证明发送端实际安排了 IDR。
-8. live control client 当前同步读取 request response，等待 ACK 时可能读到并丢弃异步 `idr_emitted`，无法形成 `request -> ack -> idr_emitted -> receiver recovered` 关联。
-9. `LegacyExoPlayerAdapter`、`LiveFeedbackController` 和 `cast-sender-live-rtsp/src/lib.rs` 已分别达到约 `3521/1037/3616` 行；继续把策略塞入大文件会扩大 TCP、UDP 和普通 RTSP 的耦合面。
-10. 还没有完成 `1080p30/7Mbps` TCP 的动态视频、弱网、10/30 分钟延迟趋势验收，现有 720p TCP 数据不能替代产品规格验收。
+1. 正常网络的 bitrate/time pending 和 kernel not-sent 基线已实现，但还没有持续拥堵下的 runtime bitrate 调节和吞吐闭环。
+2. `.13` 10 分钟复测出现一次 `370ms` TCP reorder entry 滞留；发送端当时无 block/error，缺少 receiver loader stall、packet inter-arrival、GC/调度和 sender frame trace 的同时间轴证据。
+3. capture-to-render 依赖 live control clock sync freshness `<=10s`；本轮 heartbeat 在恢复后没有持续续约，导致样本数停在 594，长跑延迟趋势不可信。
+4. 稳定阶段还没有完整拆出 capture queue、publisher、decoder-input-to-render 和 Surface 的 P50/P95，不能确定剩余约 400ms 的主要归属。
+5. ExoPlayer queue reset 能清 RTP/AU，但已经进入 SampleQueue/MediaCodec 的旧数据仍只能通过受控 media source rebuild 清除；不能在普通路径静默删 sample。
+6. Android 11+ codec low-latency hint、ScreenCaptureKit queueDepth 1 和更小 LoadControl 尚未完成单变量 A/B。
+7. `LegacyExoPlayerAdapter` 和低延迟 diagnostics/recovery 仍需要继续拆分，避免 TCP、UDP 和普通 RTSP 策略重新耦合到大类。
+8. `1080p30/7Mbps` 已完成 `.13` 10 分钟传输复测，但 30 分钟、弱网矩阵、普通第三方 RTSP 隔离和 diagnostics 性能 A/B 尚未完成。
 
 ### 现有验证证据
 
 - `qa/reports/receiver/live-latency/20260706-232057/summary.md`：`1280x720@30 / 2500kbps / rtsp-tcp / low-latency` 的 20 秒基线，首 RTP 到首帧 `189ms`，但时长和规格不足以证明 TCP 长稳达标。
 - `qa/reports/receiver/functional/20260710-123442/summary.md`：`1920x1080@30 / 7000kbps` UDP 动态视频暴露 SampleQueue 可积压到约 4 秒。该报告证明“只请求 IDR 不清 SampleQueue”是跨 transport 的播放器队列缺口，但不能作为 TCP 性能结果。
-- 当前没有 `1920x1080@30 / 7000kbps / FORCE_TCP` 的 10/30 分钟动态视频报告；本文 T18 保持未开始。
+- `.13` 之前已完成小米真机 `1920x1080@30 / 7000kbps / FORCE_TCP` 的 120 秒 smoke 和网页高动态视频 10 分钟长跑；旧版每跨越 65,536 个 RTP packet 都会误触发恢复。该项作为修复前历史证据保留，当前结论以下一条 `.13` 复测为准。
+- `qa/reports/receiver/longrun/20260711-tcp-screen-1080p30-labi13-600s/summary.md`：`2.19.1-labi.13` 下完成同规格 10 分钟复测，`496465/496465` RTP receive/dequeue、0 gap/drop/duplicate，跨约 7 次 sequence wrap 无周期性误丢包，三个显式接收队列均为 0。发生 1 次非 wrap 的 `370ms` TCP reorder backlog reset，独立通道在 `68ms` 内完成 IDR 恢复；capture-to-render 窗口在 594 个样本后停止增长，延迟趋势验收仍未完成。
 
 ## 根因模型
 
@@ -283,7 +283,7 @@ runtime control timeout
   -> rebuild
 ```
 
-当前 ExoPlayer `BOTH` 是持续允许 RTCP，不是“独立通道失败后才发送”的条件 fallback，而且同时开启 PLI/FIR 时当前实现优先 PLI，不能自动完成 PLI 到 FIR 的升级。因此 ExoPlayer fork 需要增加 one-shot feedback API 或等价的动态 fallback controller；在该 API 可用前，不能直接把当前 TCP policy 从 `BOTH` 切成 `EXTERNAL_ONLY` 后宣称 fallback 已完整。
+`2.19.1-labi.12` 已补齐 one-shot PLI/FIR，Cast-SDK TCP low-latency policy 已从持续允许 RTCP 的 `BOTH` 切为 `EXTERNAL_ONLY`：独立通道一次重试仍失败才发一次 PLI，同周期后续 WAIT_IDR timeout 最多再发一次 FIR。普通 RTSP 仍使用 `DEFAULT`，不会进入这套 fallback controller。
 
 ## Cast-SDK 接收端方案
 
@@ -319,7 +319,7 @@ ExoPlayer fork 负责最接近内部队列、无法由 Cast-SDK 正确替代的�
 
 1. transport-aware reorder wait：显式 low-latency TCP 为 `0-2ms`，UDP 保持可配置 `20-30ms`，默认普通 RTSP 保持原值。
 2. TCP interleaved packet queue 的 age/depth warn/reset，reset 后进入 H.264 `WAIT_IDR`。
-3. 自家 low-latency policy 下的受控 SampleQueue catch-up：停止 loader、清 RTP/AU/SampleQueue 旧数据、重置 timestamp/decoder-facing state、等待完整 IDR 后恢复。
+3. 自家 low-latency policy 下，TCP queue reset 后发出 `ACTION_REBUILD_REQUIRED`；Cast-SDK 校验仍是同一 media source/session 后执行受控 RTSP rebuild，清掉旧 socket、RTP/AU/SampleQueue/decoder 状态。第一阶段不做 SampleQueue 按 age 静默丢弃，避免多轨、timestamp mapping 和已入 decoder 样本的边界风险。
 4. 暴露一次性 `requestRtcpPli/requestRtcpFir` 或等价 fallback API，让 Cast-SDK 在独立通道失败时触发，而不是长期启用 `BOTH`。
 5. 暴露低频累计指标：transport queue age/depth、RTP reorder age/depth、SampleQueue buffered ahead、reset reason/count、WAIT_IDR duration、one-shot RTCP result。
 6. 保持 `DISABLED/DEFAULT` 完全不进入上述分支，不增加普通 RTSP hot-path 日志和对象分配。
@@ -381,16 +381,110 @@ SampleQueue 是压缩 H.264、位于 MediaCodec 输入之前。清理它能去�
 - 所有新反射/API 探测只在 media source prepare 阶段执行一次并缓存结果。
 - 新增能力失败时回退现有播放行为，不因 diagnostics 缺失中断主业务。
 
+## 2026-07-11 下一阶段方案
+
+### 阶段结论
+
+当前 TCP 主链路已经从“会卡死、会周期性误恢复”收敛到“可持续传输且恢复闭环有效”，但还不能进入最终产品验收：
+
+- `labi.13` 已证明 sequence wrap 修复有效，正常 10 分钟内没有 socket pending、SampleQueue 积压或 session rebuild。
+- 首帧 capture-to-render 约 `255ms`，首 RTP 到渲染 `168ms`，说明首屏链路已经进入可用区间。
+- 稳定窗口记录到 P50/P95 `428/594ms`，P95 仍高于 `500ms` 目标；恢复后样本没有继续增长，当前不能判定后续延迟是否稳定。
+- 唯一一次 queue reset 发生时发送端仍保持 `28-30fps`、socket block/error 为 0，不能直接归因于发送端或网络拥堵。应先建立跨端事件关联，不能简单把 ExoPlayer reset 阈值从 `300ms` 放大来隐藏问题。
+
+下一阶段按“先稳定观测和恢复，再压固定延迟，最后做弱网自适应”推进。任何 A/B 参数只对自家显式 `LOW_LATENCY` 生效，普通 RTSP 保持 `EXOPLAYER_DEFAULT + policy disabled + listener null`。
+
+### P0：先修观测和偶发 reset
+
+1. 修复 live control heartbeat/clock sync 长跑续接。当前 capture-to-render 只有 clock sync 年龄 `<=10s` 才记样本，10 分钟复测在 594 个样本后停止增长。需要保证正常播放和 WAIT_IDR 恢复后仍低频续约 clock sync，并记录失效原因；不能通过无限放大 freshness 窗口掩盖时钟漂移。
+2. 补 queue reset 跨端关联。ExoPlayer 聚合上报 expected/actual sequence、queue oldest age/span、最近 packet inter-arrival max、loader read stall；Cast-SDK 关联 receiver GC/主线程 stall、live control generation；sender 关联 capture/encode/publisher/first-last RTP、`SO_NWRITE` 和 not-sent。默认只做固定窗口计数/最大值，不新增逐包日志或对象分配。
+3. 保留现有 `300ms` TCP queue reset 和 `WAIT_IDR -> independent request -> complete IDR` 恢复闭环，直到数据证明 reset 是阈值误判。一次 `68ms` 恢复优于放大队列后累积旧画面。
+4. 修复观测后重跑同规格 10 分钟，要求 capture-to-render sample count 持续增长到停止前，才能继续做参数 A/B。
+
+T29 代码进展（2026-07-11）：
+
+- `LiveFeedbackController` 已把心跳从“仅由 configure/diagnostics 顺带触发”改成 live control session 生命周期内独立的 `500ms` 周期任务；没有 live control channel 时不创建任务，普通第三方 RTSP 不受影响。
+- 每次有效 pong 都通过低频 listener 快照把新 clock offset/RTT/updatedAt 推到 `PlaybackSession`，不再依赖播放器 diagnostics 恰好触发通知。
+- session 切换、停用和 close 会取消周期任务；旧 session 的 ping、request、recovery ACK 和异步 `idr_emitted` 不能覆盖或关闭新 session client。
+- `LiveFeedbackControllerTest` 已覆盖无 playback diagnostics 持续心跳、clock sync 通知、恢复请求后续约、停用取消和旧 session 回执隔离；Gradle core 全量单测通过。真机 10 分钟样本持续性须在 ExoPlayer T30/T32 新版本集成后统一复测，因此 T29 暂不标记最终完成。
+
+### P1：正常网络固定延迟优化
+
+按收益/风险顺序进行，不能同时改多个参数：
+
+1. `ScreenCaptureKit queueDepth=2 -> 1` A/B。理论上可减少最多约一帧采集等待，风险是高动态内容 capture drop 增加；只有 P95 改善且 drop/encoder stall 不增加才允许灰度。
+2. 补稳定帧分段 P50/P95：capture queue age、capture-to-encode、encode、encode-to-publisher、publisher-to-send、network、receive-to-AU、AU-to-decoder-input、decoder-input-to-render。当前三个显式队列为 0，重点确认剩余约 `400ms` 是否在帧年龄或 MediaCodec/Surface。
+3. Android 11+ capability-gated codec low-latency hint A/B。只在命中已验证 codec profile 时启用，configure/start/首帧任一失败立即回退默认 decoder；Android 4.4-10 和普通 RTSP 不变。
+4. LoadControl `80-100/250-300/30-50/80-100ms` 只作为最后的单变量实验。本轮 SampleQueue/Exo buffer 为 0，预计收益有限，不把它作为主要优化手段。
+5. 大 IDR TCP pacing 仅在 packet/byte burst 达门限时启用，目标 `1.2x/1.5x target bitrate` A/B；正常 LAN 没有 not-sent/pending 时不得人为给所有 IDR增加 sleep。
+
+### P1：持续拥堵下自适应码率
+
+正常网络必须保持 `1080p30/7Mbps`。但当链路可持续吞吐低于 7Mbps 时，TCP 可靠传输无法同时保持 7Mbps 输入、低延迟和不丢旧数据；此时临时降低编码码率是必要的产品退化策略，不是降低正常验收标准。
+
+拥堵判断不能依赖单个瞬时指标，使用发送端主信号和接收端校验信号：
+
+```text
+sender primary:
+  pendingTcpAge/bytes slope
+  SO_NWRITE / notSentBytes slope
+  socket WouldBlock windows
+  measured media bytes / drain time
+
+receiver confirmation:
+  tcp interleaved / RTP / SampleQueue backlog
+  capture-to-render slope
+  WAIT_IDR / queue reset frequency
+```
+
+状态机：
+
+```text
+NORMAL_7000
+  -> PRESSURE: 两个以上信号持续 300-500ms
+  -> CONGESTED: pending age >=80ms、receiver backlog >=500ms，或 drain rate 持续低于 input rate
+  -> SEVERE: pending age 接近 200ms、backlog >=800ms 或连续恢复
+  -> RECOVERING: 连续健康 10s 后逐级恢复
+```
+
+首轮码率梯度：
+
+```text
+7000 -> 6000 -> 5000 -> 4000kbps
+```
+
+- 首先保持 `1920x1080@30fps`，每次只降一级；严重拥堵允许快速降两级。
+- `4000kbps` 是首轮实验 floor，不是永久常量。低于该吞吐持续 `10-15s` 时，再评估 `30 -> 24/20fps`；降分辨率放在最后，不在本阶段默认启用。
+- 恢复必须慢于降档：连续健康 `10s` 才进入 RECOVERING，每 `5-10s` 最多升一级；任一 backlog 回升立即停止升档。
+- bitrate-only runtime update 不应强制 IDR；如果平台 encoder 必须重建，必须走完整 `SPS/PPS + IDR` generation 切换，旧 session 不允许混用参数集。
+- VideoToolbox 增加受控 runtime `AverageBitRate` 和 `DataRateLimits` 更新，检查每次 `VTSessionSetProperty` 返回值；失败时保持当前稳定码率，不中断投屏。
+- 模式、当前目标码率、降档原因、估计吞吐、停留时间和升降档次数进入低频 diagnostics；不在每帧或每包上报。
+
+### I 帧低质量、P 帧逐步变清晰的结论
+
+该思路在编码理论上可行，但不推荐直接作为默认实现：提高 IDR QP 会让恢复帧更小、更模糊，后续 P 帧可以通过残差逐步补回细节；但 IDR 是后续 P 帧的参考，低质量参考会把修复码率转移到后续多个 P 帧，可能只是把一次 burst 延后，并造成明显的“先糊后清晰”。当前 macOS VideoToolbox 只设置 session 级 `AverageBitRate`，公开稳定路径没有项目已验证的 per-frame IDR QP 控制；异步编码期间临时切 session quality 还存在作用到错误帧的风险。
+
+推荐替代为“恢复窗口码率斜坡”实验：
+
+```text
+congestion target bitrate = B
+complete recovery IDR: 0.7B-0.85B 的受控窗口 + DataRateLimits
+next 300-800ms P frames: 逐级恢复到 B
+stable 10s: 再按拥堵状态机向 7000kbps 恢复
+```
+
+这里降低的是一个短恢复窗口的编码预算，不依赖单帧私有 QP API；仍要求完整 SPS/PPS + IDR、视觉不可花屏、恢复后画质可预测。该实验只有在普通 IDR pacing 和自适应码率完成后再做，验收必须同时满足：IDR burst 降低、WAIT_IDR 恢复 `<=800ms`、无新的恢复振荡、明显模糊不超过 `500ms`。不满足则关闭，不影响默认 7Mbps 路径。
+
 ## 模块责任和具体修改位置
 
 | 层面 | 主要位置 | 下一步职责 |
 | --- | --- | --- |
-| macOS capture/encoder | `sender/rust/crates/cast-sender-live-macos/src/macos.rs` 及新 backlog 模块 | latest-frame-wins、全局 IDR gate、自适应 GOP保持 |
-| RTSP publisher | `sender/rust/crates/cast-sender-live-rtsp/src/lib.rs` 及新 `tcp_backpressure.rs` | 时间预算、`TCP_NOTSENT_LOWAT`、IDR pacing、pending/rebuild diagnostics |
+| macOS capture/encoder | `sender/rust/crates/cast-sender-live-macos/src/macos.rs`、`macos_camera_native.m` 及新 rate controller | latest-frame-wins、runtime bitrate/DataRateLimits、queueDepth A/B、恢复窗口码率斜坡 |
+| RTSP publisher | `sender/rust/crates/cast-sender-live-rtsp/src/lib.rs`、`tcp_backpressure.rs` 及新 congestion policy | 时间预算、`TCP_NOTSENT_LOWAT`、吞吐/斜率判断、IDR pacing、码率建议、pending/rebuild diagnostics |
 | live control server | `sender/rust/crates/cast-sender-live-rtsp/src/live_control.rs` | 结构化 ACK、requestId/generation、`idr_emitted` 关联 |
-| receiver core | `receiver/android/sdk/core/.../LiveFeedbackController.java` 及新 `livefeedback` 包 | 异步 transport、recovery state machine、去重、fallback 编排 |
-| receiver legacy player | `receiver/android/sdk/player-exo-legacy/...` | policy 选择、fork API 反射桥接、queue reset/rebuild 委托 |
-| ExoPlayer fork | `library/rtsp`、必要时 `library/core` | transport-aware reorder、SampleQueue catch-up、one-shot PLI/FIR、累计指标 |
+| receiver core | `receiver/android/sdk/core/.../LiveFeedbackController.java` 及 `livefeedback` 包 | heartbeat/clock sync 续约、异步 transport、恢复状态、receiver backlog 反馈和去重 |
+| receiver legacy player | `receiver/android/sdk/player-exo-legacy/...` | policy 选择、timestamp mapping、codec profile、fork diagnostics、queue reset/rebuild 委托 |
+| ExoPlayer fork | `library/rtsp`、必要时 `library/core` | transport-aware reorder、loader/reset 聚合诊断、decoder-input-to-render、codec low-latency profile |
 | Demo/CLI | macOS Demo、sender CLI、receiver debug page | 只提供模式/实验开关和展示聚合指标，不承载恢复逻辑 |
 
 ## 实施 Roadmap
@@ -401,27 +495,46 @@ SampleQueue 是压缩 H.264、位于 MediaCodec 输入之前。清理它能去�
 | --- | --- | --- | --- | --- | --- |
 | T0 | P0 | 建立 TCP 专项 Roadmap 和文档权威边界 | Docs | 已完成 | 文档链接和普通 RTSP 边界人工检查 |
 | T1 | P0 | 保留 `TCP_NODELAY`、non-blocking write、pending `200ms`、动态 `SO_SNDBUF` 基线 | Cast sender | 已完成（基线） | 现有 Rust 单测和代码复核 |
-| T2 | P0 | raw frame queue 改为 low-latency latest-frame-wins | Cast sender | 未开始 | 单测覆盖满队列淘汰旧帧、smooth/default 不变 |
-| T3 | P0 | 抽出 `tcp_backpressure` 模块，按 bitrate/time 计算应用 pending 预算 | Cast sender | 未开始 | 7Mbps 下 100/150/200ms 换算、单 RTP 原子写边界和大 IDR pacing 分流单测 |
-| T4 | P0 | macOS 接入 `TCP_NOTSENT_LOWAT` 和低频 not-sent diagnostics | Cast sender | 未开始 | 64/128KB A/B；不支持平台降级测试 |
-| T5 | P0 | 建立 session 级全局 IDR gate，统一 live control/RTCP/backpressure | Cast sender | 未开始 | 同一 recovery generation 只 schedule 一次；IDR emitted 关联 |
-| T6 | P0 | live control ACK 改为结构化状态并关联 requestId/generation | 两端 Cast SDK | 未开始 | scheduled/throttled/rejected/timeout 单测 |
-| T7 | P0 | receiver live control 改为异步 reader/dispatcher，不丢 `idr_emitted` | Cast receiver | 未开始 | ACK 和异步事件乱序、并发、断线重连单测 |
-| T8 | P0 | recovery state machine 改为边沿/周期去重 | Cast receiver | 未开始 | 持续 WAIT_IDR/backlog 只触发一个 recovery cycle |
-| T9 | P0 | transport-aware reorder wait，TCP low-latency `0-2ms` | ExoPlayer fork | 未开始 | TCP/UDP/default 三组 RTSP 单测和性能对比 |
-| T10 | P0 | low-latency TCP 受控清 RTP/AU/SampleQueue 并进入 WAIT_IDR | ExoPlayer fork | 未开始 | 旧 sample 不再送 decoder；完整 IDR 恢复；default 不变 |
-| T11 | P0 | Cast-SDK 接入 queue reset/recovered 和 media rebuild 编排 | Cast receiver | 未开始 | 轻恢复、800ms timeout、强恢复状态机 JVM 测试 |
-| T12 | P0 | 增加 one-shot RTCP PLI fallback API | ExoPlayer fork | 未开始 | EXTERNAL_ONLY 下按命令发送一次 PLI；普通 RTSP 不发送 |
-| T13 | P0 | TCP feedback 从 always-on BOTH 迁移为 external primary + conditional PLI | Cast receiver | 阻塞于 T12 | 控制通道正常时无重复 RTCP；超时后仅一次 PLI |
-| T14 | P1 | one-shot FIR escalation 和发送端跨通道去重 | ExoPlayer + Cast sender/receiver | 未开始 | PLI 无恢复后一次 FIR；成功后不重复 |
-| T15 | P1 | 大 IDR bitrate-aware TCP pacing | Cast sender | 未开始 | 1.2x/1.5x A/B，不降低 1080p/7Mbps 输出 |
-| T16 | P1 | 拆分 `LegacyExoPlayerAdapter` 和 `LiveFeedbackController` 低延迟模块 | Cast receiver | 未开始 | 行为等价回归、依赖方向检查、文件职责 README |
-| T17 | P1 | 补齐固定窗口聚合 diagnostics 和 debug page | 两端 Cast SDK | 未开始 | basic/off 性能对比；无逐包日志 |
-| T18 | P1 | 1080p30/7Mbps TCP 正常网络、动态视频和 10/30 分钟长稳 | QA | 未开始 | 真机报告，不允许用 720p 代替 |
+| T2 | P0 | encoded AU queue 改为 low-latency latest-frame-wins | Cast sender | 已完成（单元级） | `cast-sender-live-rtsp` 单测覆盖按完整 AU 淘汰、claimed AU 不被拆散、等待新 IDR；smooth 继续 bounded channel |
+| T3 | P0 | 抽出 `tcp_backpressure` 模块，按 bitrate/time 计算应用 pending 预算 | Cast sender | 已完成（单元级） | 7Mbps 下 100/150/200ms 换算和 clamp 单测；大 IDR 不再抬高 backlog budget |
+| T4 | P0 | macOS 接入 `TCP_NOTSENT_LOWAT` 和低频 not-sent diagnostics | Cast sender | 已完成（单元级） | macOS 配置 `TCP_NOTSENT_LOWAT`，100ms 周期用 `SO_NWRITE` 采样；不支持平台静默降级；真机 A/B 待 T18 |
+| T5 | P0 | 建立 session 级全局 IDR gate，统一 live control/RTCP/backpressure | Cast sender | 已完成（单元级） | 同一 pending generation 只 schedule 一次；ACK/`idr_emitted` 带 requestId/generation；Rust 相关 111 tests 通过 |
+| T6 | P0 | live control ACK 改为结构化状态并关联 requestId/generation | 两端 Cast SDK | 已完成（单元/构建） | scheduled/throttled/rejected/timeout；同一 requestId 重试；sender/receiver 自动测试通过 |
+| T7 | P0 | receiver live control 改为异步 reader/dispatcher，不丢 `idr_emitted` | Cast receiver | 已完成（单元/构建） | `idr_emitted` 先于 ACK 仍正确分发；eventCount/debug snapshot 可见；断线后 controller 重建 client |
+| T8 | P0 | recovery state machine 改为边沿/周期去重 | Cast receiver | 已完成（单元/构建） | 持续 WAIT_IDR/backlog 每周期只请求一次，timeout 才升级 |
+| T9 | P0 | transport-aware reorder wait，TCP low-latency `0-2ms` | ExoPlayer fork | 已完成（`2.19.1-labi.12`） | LOW_LATENCY TCP `2ms`、UDP `30ms`、DISABLED `30ms`；fork RTSP tests 通过 |
+| T10 | P0 | TCP queue reset 后发 media-period rebuild signal；不静默丢 SampleQueue | ExoPlayer fork | 已完成（第一阶段，`2.19.1-labi.12`） | 仅 explicit low-latency policy + TCP reset 上报 `ACTION_REBUILD_REQUIRED`；default 不变 |
+| T11 | P0 | Cast-SDK 接入 queue reset/recovered 和 media rebuild 编排 | Cast receiver | 已完成（单元/构建） | callback 只接受 LOW_LATENCY TCP rebuild action，并校验同一 media source/URI 后受控 rebuild |
+| T12 | P0 | 增加 one-shot RTCP PLI fallback API | ExoPlayer fork | 已完成（`2.19.1-labi.12`） | EXTERNAL_ONLY 下显式 one-shot PLI；普通 RTSP 不自动发送 |
+| T13 | P0 | TCP feedback 从 always-on BOTH 迁移为 external primary + conditional PLI | Cast receiver | 已完成（单元/构建） | 独立通道一次重试失败后才 one-shot PLI；LOW_LATENCY 以外返回 unavailable |
+| T14 | P1 | one-shot FIR escalation 和发送端跨通道去重 | ExoPlayer + Cast sender/receiver | 已完成（单元级） | 同周期 PLI 后仅 timeout 可升级一次 FIR；session gate 跨 live control/RTCP/backpressure 去重；真机待 T18/T19 |
+| T15 | P1 | 大 IDR bitrate-aware TCP pacing | Cast sender | 已完成（A/B 否决） | 小米 1080p30/7Mbps 同屏源：1.2x/1.5x 均引入 publisher 同步阻塞、raw frame drop 和 queue reset；off 控制组稳定，生产实现已撤回，不降低规格也不保留热路径负担 |
+| T16 | P1 | 拆分 `LegacyExoPlayerAdapter` 和 `LiveFeedbackController` 低延迟模块 | Cast receiver | 部分完成 | 已拆 `TcpLiveFeedbackClient`、sender `access_unit_queue/tcp_backpressure`；legacy policy/diagnostics/recovery controller 仍待拆 |
+| T17 | P1 | 补齐固定窗口聚合 diagnostics 和 debug page | 两端 Cast SDK | 部分完成 | 已有 TCP send/not-sent、requestId/generation、`idr_emitted` snapshot；debug page 和性能 A/B 待完成 |
+| T18 | P1 | 1080p30/7Mbps TCP 正常网络、动态视频和 10/30 分钟长稳 | QA | 已完成 | `.15` 30 分钟 P50/P95/max 509/533/546ms、SampleQueue/Exo/RTP queue=0、1170849/1170849 RTP、0 drop/gap；1 no-packet rebuild 后稳定恢复 |
 | T19 | P1 | TCP 弱网矩阵：限速、延迟、抖动、丢包、短断流 | QA | 未开始 | Linux gateway `tc netem` + 两端联合指标 |
-| T20 | P1 | 普通第三方 RTSP smoke 和性能隔离回归 | QA | 未开始 | EXOPLAYER_DEFAULT、listener null、无额外 recovery/log |
-| T21 | P2 | Android 11+ capability-gated codec low-latency hint 评估 | ExoPlayer/Cast receiver | 未开始 | 支持设备 A/B；Android 4.4 和 default 路径不启用 |
-| T22 | P2 | LoadControl `80-100/250-300/30-50/80-100ms` 实验档 | ExoPlayer/Cast receiver | 未开始 | 只在 T2-T13 稳定后 A/B，不提前用于掩盖积压 |
+| T20 | P1 | 普通第三方 RTSP smoke 和性能隔离回归 | QA | 已完成 | 小米独立 1080p30 RTSP 源经通用 `cast rtsp`：PLAYING/首帧、EXOPLAYER_DEFAULT、default mode、packet diagnostics false、recovery normal |
+| T21 | P0 | 将 low-latency TCP publisher 改为完整 AU transaction；同一连接内禁止 partial AU 后继续 RTP sequence | Cast sender | 已完成 | complete-AU deadline、invalid pending、SPS/PPS + multi-NAL IDR 连续序列和缓存只发最新恢复 AU 单测；`cast-sender-live-rtsp` 60 tests 通过 |
+| T22 | P0 | recovery IDR 在完整 SPS/PPS/IDR 写完后才退出 awaiting-keyframe 并发送 `idr_emitted` | Cast sender | 已完成 | 完整恢复 AU 成功后才清 `awaiting_keyframe`；缓存 P AU 不重放；60 秒和 10 分钟真机首帧均来自 `recovery_au_cache` |
+| T23 | P0 | 修复 screen/camera 停止顺序和 publisher join 卡死 | Cast sender | 已完成 | stop 改为先停 capture、后停 publisher；60 秒和 600 秒真机命令均正常退出 |
+| T24 | P1 | 真机脚本补超时 finally 清理、周期采样和失败现场保存 | QA tooling | 已完成 | sender stdout/stderr 直写文件，避免 PIPE 堵塞；10 秒采样、超时现场、子进程清理和稳定 device-id fallback 已接入 |
+| T25 | P2 | Android 11+ codec low-latency API/capability 研究和 profile 设计 | ExoPlayer/Cast receiver | 未开始 | 输出标准/厂商 key、codec allowlist、失败回退和普通路径隔离方案；实现与 A/B 归 T35 |
+| T26 | P2 | LoadControl `80-100/250-300/30-50/80-100ms` 实验 profile 和隔离设计 | ExoPlayer/Cast receiver | 未开始 | 明确只对自家 LOW_LATENCY 启用及旧 core 降级；实际单变量 A/B 归 T36 |
+| T27 | P0 | 修复 ExoPlayer RTP 16-bit sequence 在 `65535 -> 0` 临界回绕时误丢包 | ExoPlayer fork + Cast receiver | 已完成 | fork `2.19.1-labi.13` 已发布；10 分钟高动态屏幕跨约 7 次 wrap，496465/496465 receive/dequeue、0 gap/drop/duplicate，无周期性误恢复 |
+| T28 | P0 | 固化 `.13` 10 分钟复测报告和新阶段边界 | Docs/QA | 已完成 | `20260711-tcp-screen-1080p30-labi13-600s/summary.md` 包含 wrap、reset、SampleQueue、延迟和终态证据 |
+| T29 | P0 | 修复 live control heartbeat/clock sync 在正常播放和 WAIT_IDR 后持续续约 | Cast receiver | 已完成 | Gradle core 全量通过；`.14` 真机 10 分钟 ping/pong 1285/1272，capture-to-render 窗口达到 900 并持续滚动到 Stop，未复现 594 后停止 |
+| T30 | P0 | 增加 TCP reorder reset 跨端聚合关联，不加逐包日志 | ExoPlayer fork + 两端 Cast SDK | 已完成 | `.14` API、Cast DTO/反射/debug JSON 和单测完成；400ms 真机暂停得到 queueDepth=2、oldestAge/queueSpan=474ms 的真实 reset 事件；普通路径默认关闭 |
+| T31 | P0 | 定位并复现正常 LAN 单 packet `370ms` 滞留 | QA/ExoPlayer | 已完成 | debug `run-as` 400ms receiver pause 复现 queue reset，WAIT_IDR 丢 6 帧并在 21ms 恢复；600ms 样本未新增 reset，说明触发还取决于恢复瞬间 burst/帧边界；无需新增 Exo fault hook |
+| T32 | P0 | 补稳定帧全链路分段 P50/P95 和 recovery 后 timestamp mapping | 两端 Cast SDK + ExoPlayer | 已完成 | `.14` mapping 持续 mapped；Cast 固定窗口按 rendered RTP timestamp 精确关联 AU/decoder/render；小米 60 秒 900 样本：capture-to-render 397/423ms、AU-to-decoder 5/9ms、decoder-to-render 383/397ms |
+| T33 | P0 | 清理已进入 SampleQueue/decoder 的低延迟旧时间线 | ExoPlayer fork + Cast receiver | 已完成 | `.15` 新增 explicit sample backlog one-shot generation signal；Cast 800ms 阈值、generation 幂等、`setMediaSource(source,true)`、TCP initial WAIT_IDR；30 分钟未累积且未产生额外 backlog rebuild |
+| T34 | P1 | ScreenCaptureKit `queueDepth=2/1` 单变量 A/B | Cast sender/QA | 已完成（保留 2） | depth=2 三轮正式样本加一轮 warmup 均 0 raw drop/restart/reset/gap/rebuild；depth=1 首轮仅 1 个新 capture frame、5 次 restart、45 次恢复请求，按 fail-fast 停止；release/default=2、Smooth=3 |
+| T35 | P1 | Android 11+ codec low-latency capability profile A/B | ExoPlayer/Cast receiver | 未开始 | CONTROL/候选 profile 对比 decoder-input-to-render；configure/start/首帧失败自动回退；default 路径不变 |
+| T36 | P2 | 更小 LoadControl 单变量实验 | ExoPlayer/Cast receiver | 未开始 | `150/500` 对比 `80-100/250-300`；只接受延迟改善且 rebuffer/CPU/内存不回归 |
+| T37 | P1 | VideoToolbox runtime bitrate/DataRateLimits API 和安全回退 | Cast sender | 未开始 | 属性返回值、异步线程安全、7000/6000/5000/4000 切换、失败保持旧配置单测/真机验证 |
+| T38 | P1 | TCP 拥堵状态机和码率梯度 | Cast sender + receiver feedback | 未开始 | 8/10/6/5/4Mbps、抖动/丢包/短断流矩阵；降档快、恢复慢、正常 LAN 始终 7000 |
+| T39 | P2 | 恢复窗口码率斜坡实验，替代默认 per-frame 低质量 IDR | Cast sender/QA | 未开始 | IDR burst、恢复耗时、500ms 内主观清晰度、恢复振荡 A/B；默认关闭，可独立回滚 |
+| T40 | P1 | 完成 30 分钟正常网、弱网矩阵和普通 RTSP 隔离回归 | QA | 未开始 | T18-T20 全量标准；crash/ANR/OOM、内存趋势、SampleQueue、延迟趋势和用户可见画面 |
+| T41 | P0 | 下一阶段模块 code review 和性能边界审计 | Cast SDK + ExoPlayer | 未开始 | 检查 default 隔离、hot path 分配/日志/锁、文件/函数边界、回滚开关和测试覆盖 |
 
 ## 测试方案
 
@@ -434,6 +547,9 @@ SampleQueue 是压缩 H.264、位于 MediaCodec 输入之前。清理它能去�
 - pending age、bytes、not-sent 三类超限原因。
 - 全局 IDR gate 对 PLAY/live control/PLI/FIR/backpressure 的去重。
 - pacing 总期限和连接重建分支。
+- runtime bitrate 7000/6000/5000/4000 属性更新成功、失败保持旧值和线程安全。
+- congestion state machine 的 300-500ms 去抖、快速降档、10s 健康门槛、5-10s 逐级恢复和反振荡。
+- recovery bitrate ramp 默认关闭；开启时 IDR/后续 P 窗口和恢复到稳定码率的时序可重复。
 
 Cast-SDK 接收端：
 
@@ -442,15 +558,20 @@ Cast-SDK 接收端：
 - WAIT_IDR/backlog level 连续上报不形成请求风暴。
 - one-shot PLI、FIR 和 rebuild 只按状态机升级一次。
 - `DEFAULT`、`SMOOTH`、`LOW_LATENCY TCP`、`LOW_LATENCY UDP` policy 隔离。
+- heartbeat 正常播放持续运行；request/ACK/异步 `idr_emitted` 与 ping 并发不饿死 heartbeat。
+- WAIT_IDR、client 重连和 source generation 切换后 clock sync 能重新建立，旧 generation 不续写新会话。
+- clock sync 过期时停止记延迟样本并上报 reason，恢复后样本继续增长，不复用过期 offset。
 
 ExoPlayer fork：
 
 - TCP low-latency reorder wait `0-2ms`；UDP 和 default 保持各自值。
 - TCP packet queue age/depth reset 后进入 WAIT_IDR。
-- SampleQueue catch-up 不把旧 P 帧送入 decoder。
+- TCP queue reset 的 media-period signal 只在 explicit low-latency TCP policy 下产生，Cast-SDK rebuild 后旧 SampleQueue 不再沿用。
 - 完整 `SPS/PPS + IDR` 后恢复。
 - one-shot PLI/FIR 的实际发送和失败上报。
-- policy disabled 时无额外 callback、日志、reset 和 hot-path 分配。
+- TCP reset 聚合诊断包含 expected/actual sequence、oldest age、queue span、inter-arrival max 和 loader stall，不增加默认逐包日志。
+- recovery 前后 sample-to-RTP timestamp mapping 和 decoder-input-to-render 事件连续。
+- policy disabled 时无额外 callback、日志、reset 和 hot-path 分配；第一阶段不做普通路径 SampleQueue age drop。
 
 ### 集成和真机矩阵
 
@@ -477,10 +598,18 @@ duration: 2min smoke / 10min trend / 30min stability
 | control failure | 独立通道断开/ACK timeout | one-shot PLI/FIR fallback |
 | 息屏/锁屏/后台 | sender 或 receiver 状态变化 | capture restart、session generation、恢复 |
 
+弱网自适应附加断言：
+
+- 无整形、10Mbps 和 8Mbps 场景始终保持 `7000kbps`，不允许误降档。
+- 6/5/4Mbps 持续拥堵时按梯度降档，pending age 不越过 `200ms` 后继续增长，SampleQueue 不进入秒级积压。
+- 限速解除后至少健康 10 秒才升档，不出现每秒上下振荡；最终恢复 `7000kbps`。
+- 每次码率切换保持 H.264 可解码连续、无黑屏/花屏；不因 bitrate-only update 额外请求 IDR。
+- recovery ramp A/B 记录 IDR bytes/packets、first-last packet send duration、WAIT_IDR recover、500ms 清晰度和后续 P 帧总字节，防止只把 burst 延后。
+
 ### 普通业务回归
 
 - 第三方 RTSP camera/live：`EXOPLAYER_DEFAULT`，不强制 TCP，不启用 aggressive reset。
-- 自家 `SMOOTH + FORCE_TCP`：缓冲稳定，不应用 low-latency SampleQueue catch-up。
+- 自家 `SMOOTH + FORCE_TCP`：缓冲稳定，不启用 low-latency queue reset/rebuild signal。
 - HLS、MP4、音乐、图片：播放器路由、首屏、控制和错误 UI 不变。
 - Android 4.4/5.x：反射 API 缺失时降级，不崩溃、不改变默认 RTSP。
 - diagnostics `off` 对 CPU、内存、线程、日志量和 APK 包体无可见回归。
@@ -490,6 +619,7 @@ duration: 2min smoke / 10min trend / 30min stability
 以下是下一阶段目标，不代表当前已经达成：
 
 - `1920x1080 @ 30fps / 7000kbps` 全程保持，不因 TCP/UDP 模式降低产品指标。
+- 正常 LAN 和可用带宽 `>=8Mbps` 时自适应码率不得误触发，稳定目标始终为 `7000kbps`。
 - 正常 LAN 首 RTP 到首帧 P95 `<=500ms`。
 - 时钟同步可用时，稳定 `captureToRender P95 <=500ms`、P99 `<=800ms`。
 - sender application pending age P95 `<=100ms`，hard limit `<=200ms`。
@@ -499,101 +629,94 @@ duration: 2min smoke / 10min trend / 30min stability
 - rebuild 后恢复播放目标 `<=2s`，并清除旧 media connection 的积压。
 - 10/30 分钟高运动视频无持续累积延迟、无无限 loading、无长期卡死。
 - 可见花屏为 0；允许有统计明确、时间受控的短暂冻结。
+- 持续带宽低于目标时允许临时降码率，但不得通过无限 TCP 排队维持虚假的 7Mbps；降档后 pending/SampleQueue 必须收敛，网络恢复后回到 7Mbps。
+- 码率状态 60 秒内无持续上下振荡；恢复窗口实验的明显模糊时间 `<=500ms`，否则关闭实验。
 - 独立反馈通道健康时，同一 recovery cycle 不重复发送 RTCP PLI/FIR。
 - 普通第三方 RTSP 的 transport、buffer、日志量、CPU 和错误行为无回归。
 
 ## 灰度和回滚
 
 - 所有新策略放在版本化 `TcpLowLatencyPolicy` 后，默认只对自家 `LOW_LATENCY` 开启。
-- 分项灰度：`latestFrameWins`、`tcpNotSentLowat`、`transportAwareReorder`、`sampleQueueCatchUp`、`conditionalRtcpFallback`、`idrPacing` 可独立关闭。
+- 分项灰度：`latestFrameWins`、`tcpNotSentLowat`、`transportAwareReorder`、`mediaPeriodRecoverySignal`、`conditionalRtcpFallback`、`idrPacing`、`adaptiveBitrate`、`recoveryBitrateRamp`、`codecLowLatencyProfile` 可独立关闭。
+- `adaptiveBitrate` 初始默认关闭，仅实验设备开启；灰度稳定后也只在自家 `LOW_LATENCY + TCP` 且 sender/receiver capability 都支持时启用。
+- `recoveryBitrateRamp` 始终独立于 `adaptiveBitrate`，首轮默认关闭；出现模糊、恢复变慢或振荡时只关闭该项。
 - 接收端 capability 中声明支持的 policy version；发送端不认识时继续使用现有稳定 TCP 路径。
-- SampleQueue catch-up 或 one-shot RTCP API 不可用时，Cast-SDK 回退到现有 backlog policy + RTSP rebuild，不影响普通业务。
+- media-period recovery signal 或 one-shot RTCP API 不可用时，Cast-SDK 回退到既有 backlog diagnostics + 受控 RTSP rebuild，不影响普通业务。
 - 任一灰度项导致黑屏、恢复时间上升、CPU/内存明显回归或第三方 RTSP 变化，单独关闭该项，不需要回滚全部 fork。
 
 ## 下一步执行顺序
 
-### 第一批：先消除确定性结构问题
+### 第一批：先恢复可信观测
 
-1. T2-T5：发送端 latest-frame-wins、时间预算、not-sent 和全局 IDR gate。
-2. T6-T8：独立反馈 ACK/异步事件/恢复周期去重。
-3. T9-T12：ExoPlayer transport-aware reorder、SampleQueue catch-up 和 one-shot PLI。
-4. T11/T13：Cast-SDK 集成新的 fork artifact，完成 external primary + conditional fallback。
+1. T29：修复 clock sync heartbeat 和恢复后采样续接。
+2. T30-T31：补 reset 事件关联并复现 370ms 滞留，根因明确前不改 300ms 阈值。
+3. T32：补稳定帧逐段 P50/P95 和 decoder-input-to-render。
+4. 按原规格重跑 10 分钟，确认样本持续到测试结束。
 
-### 第二批：完整恢复和性能收敛
+### 第二批：正常网络延迟 A/B
 
-1. T14-T15：FIR 升级和大 IDR TCP pacing。
-2. T16-T17：模块拆分、聚合 diagnostics 和 debug page。
-3. T18-T20：1080p/7Mbps 真机、弱网、长稳和普通 RTSP 隔离回归。
+1. T15：仅对大 IDR 做 bitrate-aware pacing，先解决正常网络仍出现的 TCP AU deadline。
+2. T34：ScreenCaptureKit queueDepth 2/1。
+3. T35：capability-gated codec low-latency profile。
+4. T36：最后才评估更小 LoadControl；每次只改一个变量。
 
-### 第三批：数据驱动参数优化
+### 第三批：自适应能力开发（先完成本地能力和自动测试）
 
-1. 根据 T18/T19 数据调整 not-sent、queue 和 rebuild 阈值。
-2. 再评估 codec low-latency hint 和更小 LoadControl。
-3. 不在 P0 闭环完成前调整默认 GOP 到 `500ms`，也不通过降低码率/分辨率通过验收。
+1. T37：先提供可验证、可回退的 runtime bitrate/DataRateLimits 能力。
+2. T38：实现 7000/6000/5000/4000 梯度和快降慢升状态机，先完成状态机单测和正常 LAN 不降码率验证。
+3. T39：在默认关闭的实验档验证恢复窗口码率斜坡，不直接做 per-frame 模糊 IDR。
+
+### 第四批：最后执行弱网与总验收
+
+1. T19：Linux gateway / `tc netem` 环境就绪后执行限速、延迟、抖动、丢包和短断流矩阵。
+2. T40：汇总 T18-T20 的正常网、弱网和普通 RTSP 结果。
+3. T41：完成全模块 code review 和性能边界审计后才能灰度。
 
 ## 当前进展摘要
 
 - 2026-07-10：完成现有 Cast-SDK、ExoPlayer 本地源码和真机报告复核，建立本文。
+- 2026-07-10：小米 `M2010J19SC` 完成 release-key debug APK 覆盖安装。`1920x1080@30 / 7000kbps / FORCE_TCP` 120 秒 smoke 通过，首 RTP 到渲染约 `175ms`，该轮无丢包、gap 或 reset。
+- 2026-07-10：同设备 10 分钟长跑失败。卡死前 `captureToRender P50/P95=421/427ms`、49 个样本；随后发生 17 次 queue reset、2 次 session rebuild，最终 `source_unreachable/no-packet-timeout`，末次采样已 604 秒无 RTP。发送端超过 `hold-secs=600` 后仍未退出，测试脚本在 690 秒超时。证据见 `qa/reports/receiver/functional/20260710-185707/tcp-screen-dynamic-600s/summary.md`。
+- 2026-07-10：代码复核确认新的完整 AU queue 只覆盖入队边界，publisher 仍逐 `EncodedNal` 写 socket；非阻塞写中断会预先推进 RTP sequence 并丢弃同 NAL 后续 packet，recovery IDR 后续 NAL 也可能回到非可靠写路径。另有 screen session 先 join publisher、后停 capture 的退出顺序风险。上述问题修复前 T18 不得完成。
+- 2026-07-10：完成 T21-T24。low-latency TCP 改为完整 AU transaction；重连缓存只发送最新完整 `SPS/PPS + IDR`，不再在 200ms deadline 内重放整个短 GOP；screen/camera stop 改为先停 capture；真机脚本改为 sender 日志直写文件并周期采样。`cast-sender-live-rtsp` 60 tests、receiver JVM 977 tests、Gradle player/app 构建和 60 秒真机 smoke 通过。
+- 2026-07-10：小米 `M2010J19SC` 使用网页真实视频完成 `1920x1080@30 / 7000kbps / FORCE_TCP` 600 秒长跑。发送端 481,751 RTP packets、19,486 frames，socket block/error/pending 均为 0；接收端 481,856/481,849 receive/dequeue、18,803 rendered frames，`exoBufferedDurationMs/rtpQueueMs/sampleQueueMs=0`、queue reset/rebuild=0。P50/P95 从动态段早期约 `401/425ms` 变为末段 `436/555ms`，队列为 0，不能归因于 TCP backlog。
+- 2026-07-10：同轮发现 7 次严格周期性的 `access-unit-corrupted -> WAIT_IDR -> recovered`，间隔约 87-89 秒并对应每 65,536 个 RTP packet 回绕；request/ACK/recovered 均为 7，等待 40-331ms，累计丢 7 个旧包和 24 个 WAIT_IDR AU。代码确认 `RtpPacketReorderingQueue.calculateSequenceNumberShift()` 使用 `MAX_SEQUENCE_NUMBER` 而不是 65,536 序列空间，导致 `65535 -> 0` 比较返回 0。证据见 `qa/reports/receiver/longrun/20260710-tcp-screen-webvideo-600s-retry/summary.md`，T27 已交 ExoPlayer 会话处理。
+- 2026-07-10：ExoPlayer fork 发布 `2.19.1-labi.13`（source fix `944cc32560`），使用 65,536 序列空间修复 `65535 -> 0`，并补连续边界、跨 wrap 乱序和 wrap 后迟到旧包测试。Cast-SDK 默认依赖已切 `.13`，`dependencyInsight` 确认线上 Maven 生效；Legacy Exo 单测、receiver JVM `977` tests 和 release-key debug APK 构建通过，新包 buildID `20260710-205503-0d39cf58` 已安装小米。
+- 2026-07-10：Mac 锁屏期间 ScreenCaptureKit 无可用显示源，先完成 `MacBook Air相机 / 1920x1080@30 / 7000kbps / FORCE_TCP` 30 秒 smoke。接收端确认 `1920x1080`、首 RTP 到渲染 `208ms`、sender 首 RTP 到渲染 `237.5ms`，2044/2044 packets、0 drop/gap/reset/rebuild、三个接收队列均为 0。摄像头约 60-70 RTP packets/s，无法在 10 分钟内覆盖 65,536 包回绕，不替代 T18 高动态屏幕长跑。证据见 `qa/reports/receiver/functional/20260710-camera-1080p-labi13-30s/summary.md`。
+- 2026-07-11：使用 `.13` release-key debug APK完成 `1920x1080@30 / 7000kbps / FORCE_TCP` 600 秒屏幕复测。496465/496465 RTP packets、0 gap/drop/duplicate，跨约 7 次 wrap 无周期性恢复，SampleQueue/RTP/Exo buffer 均为 0；首帧 capture-to-render `255ms`。发生一次非 wrap 的 370ms reorder backlog reset，独立通道在 68ms 内恢复，未 rebuild。稳定延迟窗口 P50/P95 为 428/594ms，但 sample count 在 594 后停止增长，T18 仍保持进行中。证据见 `qa/reports/receiver/longrun/20260711-tcp-screen-1080p30-labi13-600s/summary.md`。
+- 2026-07-11：ExoPlayer fork T30/T32 发布 `2.19.1-labi.14`（source `86731dbe1050877fd511c1626e260be812d6bf78`）。Cast-SDK 默认线上依赖已统一切 `.14`，反射聚合 expected/actual/last sequence、inter-arrival、extractor stall 和 sample/decoder mapping status；普通 RTSP 仍不启用 packet diagnostics/mapping 状态。
+- 2026-07-11：小米完成 `.14` 同规格 600 秒复测。receiver 480656/480656 RTP、0 drop/gap/reset/rebuild，sender socket block/error/queued bytes 均为 0；capture-to-render P50/P95/max 434/459/488ms，窗口达到 900 后持续滚动，live-control ping/pong 1285/1272。T29 完成，T18 还需 30 分钟，T31 需受控触发 reset，T32 需启用 sender trace 补 decoder-input-to-render。证据见 `qa/reports/receiver/longrun/20260711-tcp-screen-1080p30-labi14-600s/summary.md`。
+- 2026-07-11：T31 通过 debug `run-as` 接收端 400ms 调度暂停复现 TCP reorder reset：queueDepth=2、oldestAge/queueSpan=474ms，随后 WAIT_IDR 丢 6 帧并在 21ms 恢复，未 rebuild；600ms 样本未新增 reset，确认触发还与恢复瞬间 RTP burst/帧边界相关，不需要 ExoPlayer 新增 fault hook。证据见 `qa/reports/receiver/functional/20260711-tcp-receiver-pause-matrix-labi14/summary.md`。
+- 2026-07-11：T32 完成精确 rendered RTP timestamp join 和两个 900 样本固定窗口。小米 60 秒 1080p30/7Mbps FORCE_TCP：capture-to-render P50/P95/max 397/423/441ms，AU-to-decoder 5/9/11ms，decoder-to-render 383/397/406ms；47980/47980 RTP、0 drop/gap/reset，sender 0 socket block/error/queued。当前主要延迟明确位于 decoder input 到 Surface render。证据见 `qa/reports/receiver/functional/20260711-tcp-stage-percentiles-labi14-60s/summary.md`。
+- 2026-07-11：T18 `.14` 30 分钟同规格长稳 FAIL。最终 capture-to-render P50/P95/max 1912/1939/1953ms，SampleQueue/Exo buffered ahead 1300ms，AU-to-decoder 1294/1330ms，decoder-to-render 585/648ms；RTP 0 drop/gap，但 4 reset、1 rebuild。独立控制通道 request/ack/idrEmitted=7/7/7、ping/pong=3841/3841，证明反馈链路正常，根因是已入 SampleQueue/decoder 的旧时间线无法被 WAIT_IDR 清理。新增 T33 并已派发 ExoPlayer 会话。证据见 `qa/reports/receiver/longrun/20260711-tcp-screen-1080p30-labi14-stage-windows-1800s/summary.md`。
+- 2026-07-11：ExoPlayer T33 发布 `.15`（source `8346a0c086e28945376f73599c344ee835bb2a72`，tag `exoplayer-rtsp-2.19.1-labi.15`，gh-pages `1b6c22e213`）。Cast 默认线上依赖切 `.15`，显式 low-latency policy 设置 SampleQueue backlog signal=on、threshold=800ms、TCP initial WAIT_IDR=on；按 recovery generation 幂等处理并优先 `setMediaSource(source,true)`。
+- 2026-07-11：`.15` 30 分钟同规格复测 PASS：capture-to-render P50/P95/max 509/533/546ms，SampleQueue/Exo/RTP queue 均 0，1170849/1170849 RTP、0 drop/gap、1 reset；仅 1 次发送端 TCP deadline 后 no-packet rebuild，无 SampleQueue backlog rebuild signal，未复现 `.14` 的 1.9s 累积。证据见 `qa/reports/receiver/longrun/20260711-tcp-screen-1080p30-labi15-1800s/summary.md`。
+- 2026-07-11：T20 普通 RTSP 默认隔离 smoke 通过。独立 1920x1080@30 RTSP publisher 经通用 `cast rtsp` 投送，小米为 PLAYING、首帧已呈现；`default + exoplayer_default + packetDiagnostics=false + recovery normal`，`.15` 新 policy 未进入普通业务路径。证据见 `qa/reports/receiver/functional/20260711-third-party-rtsp-default-labi15/summary.md`。
+- 2026-07-11：Cast-SDK code review 将 mapping status 的健康帧路径改为由直接 RTP timestamp 推断 `mapped`，仅缺映射时反射新字段，避免每帧新增一次 `Class.getField`。最终 buildID `20260711-101241-12ceff1f` 覆盖安装后，同规格 30 秒 smoke 通过：2506/2506 RTP、0 drop/gap/reset、ping/pong 27/27、P50/P95/max 363/391/406ms。
+- 2026-07-11：清理 Roadmap 重复任务号：SampleQueue backlog 恢复保留为唯一 T33，后续正常网 A/B、自适应能力、总验收和 review 顺延为 T34-T41；弱网矩阵固定放在本地能力、正常网 A/B 和普通 RTSP 隔离完成之后。
+- 2026-07-11：T15 在小米 1080p30/7Mbps FORCE_TCP 完成 `1.2x / 1.5x / off` 单变量真机验证。1.2x pacing 84 个 IDR、累计 sleep 9720ms、raw drop 600、queue reset 8；1.5x pacing 109 个 IDR、累计 sleep 8902ms、raw drop 116、queue reset 5；off 控制组 raw drop 1、reset/keyframe request/rebuild 均 0。结论：publisher 线程内同步 sleep 会形成反馈放大，生产实现已撤回。输入播放器没有全程循环，因此该轮用于否决同步 sleep，不作为高动态画质/吞吐验收。证据见 `qa/reports/receiver/functional/20260711-tcp-idr-pacing-ab/summary.md`。
+- 2026-07-11：T34 使用真正循环的 1920x1080 动态视频完成 ScreenCaptureKit queueDepth A/B。depth=2 的 3 轮正式样本和 1 轮 warmup 均无 raw drop、capture restart、RTP reset/gap 或 rebuild；depth=1 首轮只有 1 个新 capture frame、5 次 capture restart，发送端进入 `capture_stalled`，接收端产生 45 次恢复请求，按 fail-fast 停止后续重复。默认继续 2，Debug-only A/B 入口保留，普通/release 路径不读环境变量。该批次暴露 clock sync 未续约，capture-to-render 分位数不可用，单列为观测回归，不影响 depth=1 的稳定性否决。证据见 `qa/reports/receiver/functional/20260711-screen-queue-depth-ab/summary.md`。
+- 2026-07-11：下一阶段确定按“观测续接 -> reset 根因 -> 稳定分段 -> 正常网单变量 A/B -> 弱网自适应码率”推进。正常网络继续固定 1080p30/7Mbps；持续拥堵允许 7000/6000/5000/4000 临时降档并快降慢升。单独降低 IDR质量不作为默认方案，只保留短恢复窗口码率斜坡实验。
 - 已确认 TCP 基线具备 non-blocking write、`TCP_NODELAY`、pending age/cap、动态 `SO_SNDBUF`、WAIT_IDR、backlog policy、独立反馈通道和自适应 GOP。
-- 已确认下一阶段关键工作不是继续缩短 IDR 间隔，而是控制 sender kernel backlog、清 receiver SampleQueue、消除重复 IDR 请求并建立可关联的恢复状态机。
-- 尚未执行本文 T2-T22 的新增代码和真机验证；不能把方案状态表述为已完成。
+- 2026-07-10：ExoPlayer fork 完成并发布 `2.19.1-labi.12`（source `b1d53e9e9faf3310f006c2cf00de778a816e33e1`），提供 transport-aware reorder、media-period rebuild signal、one-shot PLI/FIR；fork targeted/full RTSP tests 和 release AAR 通过。
+- 2026-07-10：Cast sender 完成 complete-AU latest queue、bitrate/time TCP budget、Darwin `TCP_NOTSENT_LOWAT/SO_NWRITE`、session IDR gate 和 requestId/generation 关联；相关五个 crate 共 `112` tests 通过。
+- 2026-07-10：Cast receiver 完成异步 live-control reader/dispatcher、恢复周期去重、external primary + PLI/FIR fallback、media-period signal 到受控 rebuild、`.12` Maven 集成；receiver JVM `975` tests（无 Exo classpath 的 fork integration case skip）通过，Gradle `player-exo-legacy/core` tests 和 debug APK assemble 通过。
+- Gradle `dependencyInsight` 已确认最终 App runtime 使用 `com.zknowai.exoplayer:exoplayer-rtsp:2.19.1-labi.13`，不是本地源码包。
+- Code review 已修复：不完整 AU 后误接收 P 帧、throttled 请求覆盖原 scheduled requestId、`idr_emitted` 未进入 eventCount、Windows gate 永不解除、旧 media-period signal 误重建新 session 等边界。
+- T27 sequence wrap、T18 30 分钟正常网、T20 普通 RTSP隔离和 T33 SampleQueue backlog 恢复边界已完成；T19 弱网矩阵尚未执行，当前不能宣称全部弱网产品验收完成。
 
-## ExoPlayer 实施复核/进展
+## ExoPlayer T35/T36 实施复核/进展
 
-### 执行边界
+### 2026-07-11 方案复核
 
-- 本 fork 只实现 ExoPlayer `library/rtsp` 内部可正确控制的能力：RTP reorder 等待策略、TCP interleaved/reorder backlog 到 H.264 `WAIT_IDR` 的恢复衔接、受控 catch-up/rebuild signal、one-shot RTCP PLI/FIR API、低频 diagnostics。
-- 普通 RTSP default 必须继续保持 `EXOPLAYER_DEFAULT + RtcpFeedbackPolicy.DEFAULT + RtspBacklogRecoveryPolicy.DISABLED + listener null + packet diagnostics false`，不得因本专项改变 transport、buffer、retry/error、decoder 或 SampleQueue 行为。
-- 自家 TCP low-latency 必须由显式 policy/API 开启，不能通过全局静态常量、URI scheme 或 transport 是 TCP 的事实影响第三方 RTSP。
-- SampleQueue 处理风险最高；第一实现只允许在显式 low-latency recovery policy 下走受控恢复，不做普通路径按 sample age 静默丢弃。若无法在 ExoPlayer 内部证明状态正确，必须提供明确 recovery signal/API 让 Cast-SDK rebuild，而不是伪装为已清理。
-- diagnostics 只做低频聚合或状态变化事件；RTP hot path 禁止逐包 `Log`、JSON、文件 IO、网络 IO、阻塞 callback 和无界对象分配。
+- 已从 Cast-SDK 工作树同步本 roadmap；以 `2.19.1-labi.15` 为基线，T15 同步 IDR pacing 已被真机 A/B 否决，T34 `queueDepth=1` 首轮 capture stalled，二者均不进入本轮 fork 改动。
+- T35 仅新增通用、默认禁用的 Android 11+ `MediaFormat.KEY_LOW_LATENCY` capability profile。profile 必须显式启用且命中调用方提供的 codec allowlist 才设置标准 key；不使用反射和厂商私有 key，Android 4.4-10 不执行该分支。
+- T35 的 configure/start 失败由 renderer 对同一 codec 自动以无 hint 配置重试一次，再继续既有 decoder fallback。首帧超时不能由 renderer 擅自重建播放器或清媒体时间线：Cast receiver 持有 session generation、Surface 和 RTSP rebuild 权限，应基于既有 `onVideoDecoderInitialized`、`onVideoCodecError`、`onRenderedFirstFrame` 限流地重建为未启用 profile 的播放器；fork 不新增 decoder hot-path callback。
+- T36 不增加新的 fork LoadControl policy：`DefaultLoadControl.Builder#setBufferDurationsMs(...)` 已完整表达候选 `80-100/250-300/30-50/80-100ms`，fork `setMinBufferFloorMs(...)` 已允许显式下调 loading floor。参数选择、单变量 A/B、首帧/rebuffer/seek 多轨评估归 Cast receiver；fork 保持默认值和 `DEFAULT_MIN_BUFFER_FLOOR_MS=500` 不变。
 
-### 当前代码复核结论
+### 本轮任务状态
 
-- `RtspBacklogRecoveryPolicy` 已存在并默认 `DISABLED`，适合作为 TCP low-latency 专项的显式开关承载；但现有字段还不能表达 transport-aware reorder wait 和 media-period catch-up/rebuild action。
-- `TransferRtpDataChannel` / `RtspMessageChannel` 已有 TCP interleaved 数据入口和 backlog reset 基础，可继续沿用低频 queue reset diagnostics；不能在此处新增逐包日志或复杂对象分配。
-- `RtpPacketReorderingQueue` 当前 cutoff 仍是 RTP extractor 侧统一策略，需要改成由 session/policy 传入，满足 TCP low-latency `0-2ms`、UDP 可配置 `20-30ms`、default 原值不变。
-- `RtpH264Reader` 已有 `WAIT_IDR`、drop-until-IDR、完整 `SPS/PPS + IDR` 恢复和 initial WAIT_IDR 能力，可复用作为 packet/reorder reset 后恢复边界。
-- `RtspMediaPeriod` / SampleQueue catch-up 仍未实现；这里涉及 loader、sample timestamp mapping、多轨同步、decoder 已入队边界，必须先做代码路径复核和最小测试，再决定是原地 reset 还是只暴露 rebuild signal。
-- `RtcpFeedbackPolicy.EXTERNAL_ONLY` 下现有自动 requester 不应长期发送 RTCP；T12/T14 需要新增 one-shot PLI/FIR controller/API，使 Cast-SDK 在 live control timeout 后显式请求一次并获得真实 `scheduled/throttled/failed` 结果。
-
-### ExoPlayer 任务进展
-
-| ID | 状态 | ExoPlayer 侧拆解 | 验证 |
+| ID | 状态 | ExoPlayer 侧范围 | 默认隔离 |
 | --- | --- | --- | --- |
-| T9 | ExoPlayer 已实现，待发布 | `RtspBacklogRecoveryPolicy` 新增 `setTcpInterleavedRtpReorderWaitMs(long)`、`setUdpRtpReorderWaitMs(long)` 和 `getRtpReorderWaitMs(int)`；`RtpExtractor` 构造时按本 session/policy 固化 wait。`DISABLED` 仍保持 ExoPlayer 2.19.1 原值 `30ms`；`LOW_LATENCY` preset TCP 为 `2ms`，UDP 为 `30ms`。 | `RtspFeedbackApiTest`、`RtpExtractorTest` 已覆盖 default/TCP/UDP 隔离 |
-| T10 | ExoPlayer 第一阶段已实现，待发布 | 未做普通路径或通用 SampleQueue 按 age 静默丢弃。`RtspBacklogRecoveryPolicy` 新增 `setMediaPeriodRecoverySignalEnabled(boolean)`，默认 false；仅当 policy enabled + signal enabled + TCP interleaved reset 时，通过 `RtspDiagnosticsListener#onRtspMediaPeriodRecoveryRequired(...)` 上报 `ACTION_REBUILD_REQUIRED`，由 Cast-SDK 执行受控 rebuild。原因：ExoPlayer 内部无法在不影响多轨、timestamp mapping 和 decoder 已入队边界的情况下证明原地清理 SampleQueue 一定正确。 | `RtspFeedbackApiTest` 已覆盖 TCP reset 触发 recovery signal、UDP reset 不触发 |
-| T12 | ExoPlayer 已实现，待发布 | `RtspMediaSource` 新增 `requestRtcpPli(int)` / `requestOneShotRtcpPli(int)`；`RtspMediaPeriod` 在播放线程返回 `RtcpFeedbackResult`，支持 `SCHEDULED`、`THROTTLED`、`FAILED`。显式 one-shot PLI 可在 `EXTERNAL_ONLY` 且 `pliEnabled=true` 下发送，不改变自动 feedback 策略。 | `RtspFeedbackApiTest` 已覆盖无 active period 的 failed 结果和 result value object；发送路径复用既有 RTCP packet/channel 单元测试，后续由 Cast-SDK 真机验证 |
-| T14 | ExoPlayer 已实现，待发布 | `RtspMediaSource` 新增 `requestRtcpFir(int)` / `requestOneShotRtcpFir(int)`；显式 one-shot FIR 可在 `EXTERNAL_ONLY` 且 `firEnabled=true` 下发送，PLI 后是否升级 FIR 由 Cast-SDK 决定。 | 同 T12 |
-| T30 | ExoPlayer 已发布 `2.19.1-labi.14` | 对显式 `RtspBacklogRecoveryPolicy` 且 listener 非空的 RTP reorder reset，扩展 `RtspBacklogRecoveryStats`：`expectedSequenceNumber`、`actualSequenceNumber`、`lastDequeuedSequenceNumber`、`lastQueuedSequenceNumber`、`oldestPacketAgeMs`、`queueSpanMs`、`recentPacketInterArrivalMaxMs`、`extractorReadStallMs`。TCP interleaved 入口没有 RTP sequence，相关字段为 `C.INDEX_UNSET`，仍报告 queue age/span；这是能证明 `370ms` 滞留来源的最小低开销集合。 | targeted、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease` 通过；待 Cast-SDK 真机复测 |
-| T32 | ExoPlayer 已发布 `2.19.1-labi.14` | 不改 `library/core`。现有 `RtspH264AccessUnitReadyStats(sampleTimeUs, rtpTimestamp)`、`RtspSampleReadStats`/`RtspDecoderInputQueuedStats` 和应用侧既有 `VideoFrameMetadataListener(presentationTimeUs)` 以 `sampleTimeUs == presentationTimeUs` join。reorder/backlog reset 时仅清理该 track 的显式 packet-diagnostics mapping，新增 `RtspSampleRtpTimestampMappingStatus` 区分 `MAPPED`、`NOT_FOUND`、`CLEARED_FOR_RECOVERY`；下一完整 AU 会重新建立 mapping。 | reset 清理 stale mapping、完整 AU 恢复 mapping、默认 packet diagnostics disabled 均已覆盖；不把 source-side handoff 冒充成 MediaCodec queue callback |
-| T33 | ExoPlayer 已实现，待发布 | 30 分钟 FORCE_TCP 证据表明 `sampleQueueMs/exoBufferedDurationMs=1300ms`、AU-to-decoder 约 `1.3s` 是已入 SampleQueue/decoder 时间线问题；独立反馈通道 `keyframe request/ack/idrEmitted=7/7/7` 正常，不能归因到反馈失败。新增默认关闭的 SampleQueue backlog rebuild signal：仅 `RtspBacklogRecoveryPolicy enabled + sampleQueue signal enabled + packet diagnostics enabled + listener` 时，在视频 SampleStream read 边界检测 backlog，达到阈值后每个 period 只发一次 `ACTION_REBUILD_REQUIRED`，带 recovery generation 和 queue 指标。 | 不在 ExoPlayer 内部按 age 丢 SampleQueue、不 seek、不直接 flush decoder。Cast-SDK 收到信号后在应用播放线程幂等且限流地创建新的 `RtspMediaSource`、`setMediaSource(..., true)`、`prepare()`；标准 release/reprepare 路径负责取消 loader、释放 SampleQueue、flush/recreate MediaCodec，Surface 保持。新 source 使用 `initialWaitForIdr=true`，只在完整 SPS/PPS+IDR 后恢复。 |
-
-### 当前执行日志
-
-- 2026-07-10：已将 Cast-SDK TCP low-latency roadmap 同步到 ExoPlayer `docs/labi/2026-07-10-live-tcp-low-latency-transport-roadmap.md`，并新增本章节作为 ExoPlayer fork 执行 ledger。
-- 2026-07-10：已确认本轮开发必须保持默认业务隔离：普通 RTSP default 不启用 transport-aware reorder、SampleQueue catch-up 或 one-shot feedback；所有新增行为必须受显式 low-latency policy/API 控制。
-- 2026-07-10：完成 ExoPlayer 实现：transport-aware RTP reorder wait、TCP reset media-period rebuild signal、one-shot PLI/FIR result API、低频 diagnostics value object；没有新增 RTP hot path 日志、JSON、文件/网络 IO 或阻塞 callback。
-- 2026-07-10：targeted 测试通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtspFeedbackApiTest --tests com.google.android.exoplayer2.source.rtsp.RtpExtractorTest`。
-- 2026-07-10：完整 RTSP 单测通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`。
-- 2026-07-10：release AAR 构建通过：`JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:assembleRelease`。
-- 2026-07-10：已发布 `2.19.1-labi.12` 到 GitHub Pages Maven repo。source commit `b1d53e9e9faf3310f006c2cf00de778a816e33e1`，tag `exoplayer-rtsp-2.19.1-labi.12`，gh-pages commit `e0540862a9`。
-- 2026-07-10：发布模块：`exoplayer-common`、`exoplayer-container`、`exoplayer-database`、`exoplayer-datasource`、`exoplayer-decoder`、`exoplayer-extractor`、`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。三组关键 metadata 均为 `latest/release=2.19.1-labi.12`：`exoplayer-core`、`exoplayer-hls`、`exoplayer-rtsp`。
-- 2026-07-10：远端 HTTP/SHA256 校验通过：
-  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.12/exoplayer-rtsp-2.19.1-labi.12.pom`：`6663453340b16820515ceeeb977958f3fe10282d25fd24d6bdb6097a702ea50c`
-  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/2.19.1-labi.12/exoplayer-rtsp-2.19.1-labi.12.aar`：`e0914be6b3b06b2eaf48532c58b765321b5c88c15cbf497145356581724cc14f`
-  - `https://shenyingjun5.github.io/ExoPlayer/com/zknowai/exoplayer/exoplayer-rtsp/maven-metadata.xml`：`23e4366868754752bb0e4e530c9fb413d57c1d9ca9aa4aa6c88a32812d493ecb`
-- 2026-07-10：远端 RTSP AAR `classes.jar` 经 `javap` 确认包含：
-  - `RtspBacklogRecoveryPolicy.Builder#setTcpInterleavedRtpReorderWaitMs(long)`
-  - `RtspBacklogRecoveryPolicy.Builder#setUdpRtpReorderWaitMs(long)`
-  - `RtspBacklogRecoveryPolicy.Builder#setMediaPeriodRecoverySignalEnabled(boolean)`
-  - `RtspMediaSource#requestRtcpPli(int)`、`requestOneShotRtcpPli(int)`、`requestRtcpFir(int)`、`requestOneShotRtcpFir(int)`
-  - `RtspDiagnosticsListener#onRtspMediaPeriodRecoveryRequired(RtspMediaPeriodRecoveryStats)`
-  - `RtcpFeedbackResult`、`RtspMediaPeriodRecoveryStats`
-- 2026-07-10：远端 RTSP AAR class list 未包含 Cast-SDK 类型。首次全量 publish 未跳过测试时触发既有非 RTSP `:library-core:testDebugUnitTest` async/fixture 失败：`ExoPlayerTest.onEvents_correspondToListenerCalls` timeout、`DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` timeout、`PlaylistPlaybackTest.test_subtitle` comparison failure；随后按既有发布策略使用 `-x lint -x test -x testDebugUnitTest -x testReleaseUnitTest` 完成 Maven 发布。RTSP targeted/full 单测和 release AAR 构建均已单独通过。
-- 2026-07-10：根据 Cast-SDK 小米真机 1080p/30fps/7Mbps FORCE_TCP 10 分钟长跑定位，修复 `RtpPacketReorderingQueue.calculateSequenceNumberShift()` 在 `65535 -> 0` 连续 wrap 边界把相邻 sequence 误判为相等的问题。RTP 16-bit sequence 空间大小为 `RtpPacket.MAX_SEQUENCE_NUMBER + 1`，不能使用最大值本身作为 wrap 距离。该修复属于通用 RTP 序列语义修正，不依赖 low-latency 开关，不新增 RTP hot path 日志、对象分配、锁、IO 或 callback。
-- 2026-07-10：新增 `RtpPacketReorderingQueueTest` 覆盖连续 `65534,65535,0,1`、跨 wrap 乱序、wrap 后迟到旧包。验证通过：targeted `:library-rtsp:testDebugUnitTest --tests com.google.android.exoplayer2.source.rtsp.RtpPacketReorderingQueueTest`、完整 `:library-rtsp:testDebugUnitTest`、`:library-rtsp:assembleRelease`。已发布 Maven artifact `2.19.1-labi.13`：source commit/tag `944cc32560` / `exoplayer-rtsp-2.19.1-labi.13`，gh-pages commit `a152784ee8`，RTSP AAR SHA256 `f85bc6ec28e6adee4e9ff99d20b407ad4514d6635fd1f29b3b0e060dd55cfd27`。
-- 2026-07-11：开始 T30/T32 P0 观测闭环。确定不新增 core decoder/render listener：Cast-SDK 已接入的 `VideoFrameMetadataListener` 用 `presentationTimeUs` 与 RTSP `sampleTimeUs` join，避免普通媒体 renderer 的任何行为或性能变化。新增 mapping status 的状态容器仅在 `listener != null && packet diagnostics enabled` 时创建；默认 RTSP 不创建映射表、锁或 status 容器。
-- 2026-07-11：T30/T32 code review 通过。reset 统计仅在显式 recovery policy 与 listener 同时存在时更新，复用既有 RTP queue 同步边界，不新增锁、日志、JSON、IO 或 callback；recovery 仅清理 diagnostics mapping，未改动 SampleQueue、loader、decoder 或 renderer 行为。targeted、完整 RTSP 单测和 release AAR 均通过，待递增 Maven 发布与 Cast-SDK 真机复测。
-- 2026-07-11：发布 `2.19.1-labi.14`。source commit/tag `86731dbe10` / `exoplayer-rtsp-2.19.1-labi.14`，GitHub Pages commit `2ad553165a`。发布完整模块集合：common、container、database、datasource、decoder、extractor、core、hls、rtsp；Cast-SDK 应把 RTSP/core/HLS 统一切到 `.14`。
-- 2026-07-11：启动 T33。小米 1080p30/7Mbps/FORCE_TCP 30 分钟最终数据：capture-to-render P50/P95/max `1912/1939/1953ms`，`sampleQueueMs/exoBufferedDurationMs=1300ms`，AU-to-decoder P95 `1330ms`，decoder-input-to-render P95 `648ms`。控制通道 `keyframe request/ack/idrEmitted=7/7/7`、ping/pong `3841/3841` 正常；发送端仅一次 socket block/deadline error，最终 pending `36809 bytes`，不足以解释接收端 backlog。实施目标是显式、低频的 controlled rebuild signal，不做内部静默 sample drop。
+| T35 | ExoPlayer 已实现，待发布 | 标准 Android 11+ low-latency key、allowlist、configure/start 无 hint 自动重试；首帧超时 rebuild 由 Cast receiver 使用既有 video renderer 事件执行 | profile 默认 `DISABLED`；普通 renderer 不设置 key、不增加 callback 或 hot-path 分配 |
+| T36 | 已完成设计复核，待 Cast-SDK A/B | 复用既有 `DefaultLoadControl.Builder` API，补 core 单测锁定默认/显式 floor 行为 | 不改默认 buffer 值，不做 SampleQueue 静默丢弃或 RTSP 专用加载分支 |

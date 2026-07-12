@@ -1,0 +1,88 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.zknowai.exoplayer",
+    "module": "exoplayer-extractor",
+    "version": "2.19.1-labi.20",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "7.4.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "files": [
+        {
+          "name": "exoplayer-extractor-2.19.1-labi.20.aar",
+          "url": "exoplayer-extractor-2.19.1-labi.20.aar",
+          "size": 716234,
+          "sha512": "7e01374d43f21af995dd9bbc9fc66f2ab6cfe29531f3b4f2b65e60ce73300f9f7e56ea13c88daa55584d04c989e2faa70b21476b509284d39806df73ca2874aa",
+          "sha256": "a2d344aad193cb4ecdaf2f94e23797d2cca794ead559290729891b0512b0a659",
+          "sha1": "7188b1fd1f1f3e4ffe01d758b50779db3ef244fe",
+          "md5": "8043c9301ccffae14285d29ad399c35b"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.3.0"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-common",
+          "version": {
+            "requires": "2.19.1-labi.20"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-container",
+          "version": {
+            "requires": "2.19.1-labi.20"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-decoder",
+          "version": {
+            "requires": "2.19.1-labi.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-extractor-2.19.1-labi.20.aar",
+          "url": "exoplayer-extractor-2.19.1-labi.20.aar",
+          "size": 716234,
+          "sha512": "7e01374d43f21af995dd9bbc9fc66f2ab6cfe29531f3b4f2b65e60ce73300f9f7e56ea13c88daa55584d04c989e2faa70b21476b509284d39806df73ca2874aa",
+          "sha256": "a2d344aad193cb4ecdaf2f94e23797d2cca794ead559290729891b0512b0a659",
+          "sha1": "7188b1fd1f1f3e4ffe01d758b50779db3ef244fe",
+          "md5": "8043c9301ccffae14285d29ad399c35b"
+        }
+      ]
+    }
+  ]
+}

@@ -766,3 +766,13 @@ duration: 2min smoke / 10min trend / 30min stability
 - low-latency recovery 分支原本每 packet 已分配两个 queue node 和一个装箱 `Long`；新实现为一个 queue node 和一个 envelope，不新增锁，并减少该显式实验路径的分配。
 - 测试覆盖旧竞态等价时序（首包 dequeue 后下一包入队）、FIFO、reset clear 后下一 packet、close 语义；不放宽 `300ms` reset 阈值。
 - 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.19`。source commit/tag 为 `e3509cd7fda358148d70de8079165f45bcdf2576` / `exoplayer-rtsp-2.19.1-labi.19`，GitHub Pages commit 为 `1bf60be928bc927c897003a7852dd07d647ca99f`；RTSP AAR/POM SHA256 分别为 `00f2fcdbf107980e5c32d5fe4c7f707359358f2b0d7ecacd6f34bf4f0170d219` / `64ae009a3511fd8a0012c46c6793ca6976ae1e62ec9144d672cc2aac22dc4648`。
+
+## 双轨音频恢复隔离
+
+### 2026-07-13 实施复核
+
+- `.23` 已让 AAC/audio track 不发送 PLI/FIR，并为 `RtspSampleReadStats` 增加 `sampleMimeType`，但 code review 发现未知或已替换 track 的 recovery lookup 默认返回 video，stale audio reset 仍可能误触发 rebuild，因此 `.23` 不作为最终集成版本。
+- `.24` 将 recovery 判定改为 fail-closed：只有显式 policy enabled、TCP interleaved、且当前 track MIME 明确为 video 时，queue/backlog reset 才能触发 `ACTION_REBUILD_REQUIRED`。audio、unknown/stale track、UDP 和 policy disabled 均不触发。
+- `RtpLoadInfo.requestKeyFrame()` 与 media-period recovery 共用 MIME 判定；audio/unknown 不发送 PLI/FIR。视频 SampleQueue backlog 与视频 TCP reset 的既有低延迟行为保持不变。
+- 默认普通 RTSP 不启用 recovery policy；新增判断只在低频 feedback/reset 边界执行。没有 RTP/sample hot-path 日志、JSON、IO、锁、阻塞 callback 或逐包对象分配。
+- 测试覆盖 video/audio/unknown MIME、policy/transport gate、unknown TCP channel reset、audio SampleQueue backlog、`sampleMimeType` value object；定向 `RtspFeedbackApiTest`、完整 `:library-rtsp:testDebugUnitTest` 和 `:library-rtsp:assembleRelease` 均通过。

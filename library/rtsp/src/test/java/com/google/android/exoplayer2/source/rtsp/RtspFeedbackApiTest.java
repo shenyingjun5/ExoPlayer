@@ -242,7 +242,7 @@ public final class RtspFeedbackApiTest {
   }
 
   @Test
-  public void mediaPeriodRecoverySignal_onlyEmittedForEnabledTcpReset() {
+  public void mediaPeriodRecoverySignal_unknownTrackDoesNotEmit() {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
     RtspBacklogRecoveryPolicy policy =
         new RtspBacklogRecoveryPolicy.Builder()
@@ -285,20 +285,13 @@ public final class RtspFeedbackApiTest {
             301,
             999));
 
-    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
-    RtspMediaPeriodRecoveryStats recoveryStats =
-        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
-    assertThat(recoveryStats.trackId).isEqualTo(1);
-    assertThat(recoveryStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
-    assertThat(recoveryStats.action)
-        .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
-    assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
 
     mediaSource.releasePeriod(mediaPeriod);
   }
 
   @Test
-  public void tcpInterleavedChannelReset_forwardsMediaPeriodRecoverySignal() {
+  public void tcpInterleavedChannelReset_unknownTrackDoesNotForwardRecoverySignal() {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
     RtspBacklogRecoveryPolicy policy =
         new RtspBacklogRecoveryPolicy.Builder()
@@ -328,16 +321,7 @@ public final class RtspFeedbackApiTest {
     dataChannel.onInterleavedBinaryDataReceived(new byte[] {3});
     dataChannel.onInterleavedBinaryDataReceived(new byte[] {4});
 
-    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(2);
-    RtspMediaPeriodRecoveryStats recoveryStats =
-        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
-    assertThat(recoveryStats.trackId).isEqualTo(1);
-    assertThat(recoveryStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
-    assertThat(recoveryStats.reason).isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
-    assertThat(recoveryStats.action)
-        .isEqualTo(RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED);
-    assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
-    assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(1).recoveryGeneration).isEqualTo(2);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
 
     mediaSource.releasePeriod(mediaPeriod);
   }
@@ -425,6 +409,45 @@ public final class RtspFeedbackApiTest {
 
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
     mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void videoMimeTypeGate_acceptsVideoAndRejectsAudioOrUnknown() {
+    assertThat(RtspMediaPeriod.isVideoMimeType("video/avc")).isTrue();
+    assertThat(RtspMediaPeriod.isVideoMimeType("audio/mp4a-latm")).isFalse();
+    assertThat(RtspMediaPeriod.isVideoMimeType(null)).isFalse();
+  }
+
+  @Test
+  public void mediaPeriodRecoveryGate_requiresEnabledTcpVideoTrack() {
+    RtspBacklogRecoveryPolicy enabledPolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setMediaPeriodRecoverySignalEnabled(true)
+            .build();
+
+    assertThat(
+            RtspMediaPeriod.shouldSignalMediaPeriodRecovery(
+                enabledPolicy, RtspTransportMode.TCP_INTERLEAVED, "video/avc"))
+        .isTrue();
+    assertThat(
+            RtspMediaPeriod.shouldSignalMediaPeriodRecovery(
+                enabledPolicy, RtspTransportMode.TCP_INTERLEAVED, "audio/mp4a-latm"))
+        .isFalse();
+    assertThat(
+            RtspMediaPeriod.shouldSignalMediaPeriodRecovery(
+                enabledPolicy, RtspTransportMode.TCP_INTERLEAVED, null))
+        .isFalse();
+    assertThat(
+            RtspMediaPeriod.shouldSignalMediaPeriodRecovery(
+                enabledPolicy, RtspTransportMode.UDP, "video/avc"))
+        .isFalse();
+    assertThat(
+            RtspMediaPeriod.shouldSignalMediaPeriodRecovery(
+                RtspBacklogRecoveryPolicy.DISABLED,
+                RtspTransportMode.TCP_INTERLEAVED,
+                "video/avc"))
+        .isFalse();
   }
 
   @Test
@@ -694,8 +717,10 @@ public final class RtspFeedbackApiTest {
         new RtspSampleReadStats(
             /* trackId= */ 1,
             /* sampleQueueIndex= */ 0,
+            /* sampleMimeType= */ "video/avc",
             /* sampleTimeUs= */ 4567,
             /* rtpTimestamp= */ 1234,
+            RtspSampleRtpTimestampMappingStatus.MAPPED,
             /* readElapsedRealtimeMs= */ 888,
             /* sampleQueueBufferedAheadMs= */ 120,
             /* mediaPeriodBufferedAheadMs= */ 180);
@@ -757,7 +782,18 @@ public final class RtspFeedbackApiTest {
     assertThat(accessUnitReadyStats)
         .isEqualTo(new RtspH264AccessUnitReadyStats(1, 12, 1234, 4567, true, 777));
     assertThat(sampleReadStats)
-        .isEqualTo(new RtspSampleReadStats(1, 0, 4567, 1234, 888, 120, 180));
+        .isEqualTo(
+            new RtspSampleReadStats(
+                1,
+                0,
+                "video/avc",
+                4567,
+                1234,
+                RtspSampleRtpTimestampMappingStatus.MAPPED,
+                888,
+                120,
+                180));
+    assertThat(sampleReadStats.sampleMimeType).isEqualTo("video/avc");
     assertThat(new RtspSampleReadStats(1, 0, 4567, 888, 120, 180).rtpTimestamp)
         .isEqualTo(C.TIME_UNSET);
     assertThat(decoderInputQueuedStats)

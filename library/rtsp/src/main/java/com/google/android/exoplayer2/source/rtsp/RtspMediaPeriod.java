@@ -828,16 +828,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
   }
 
-  private boolean isVideoTrack(int trackId) {
+  @Nullable
+  private String getTrackSampleMimeType(int trackId) {
     for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
       RtpLoadInfo loadInfo = rtspLoaderWrappers.get(i).loadInfo;
       if (loadInfo.trackId == trackId) {
-        return MimeTypes.isVideo(loadInfo.mediaTrack.payloadFormat.format.sampleMimeType);
+        return loadInfo.mediaTrack.payloadFormat.format.sampleMimeType;
       }
     }
-    // Diagnostics callbacks are only emitted by configured load infos in production. Preserve the
-    // existing fallback for tests and any callback delivered while a wrapper is being replaced.
-    return true;
+    return null;
+  }
+
+  /* package */ static boolean isVideoMimeType(@Nullable String sampleMimeType) {
+    return MimeTypes.isVideo(sampleMimeType);
+  }
+
+  /* package */ static boolean shouldSignalMediaPeriodRecovery(
+      RtspBacklogRecoveryPolicy policy,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable String sampleMimeType) {
+    return policy.isMediaPeriodRecoverySignalEnabled()
+        && transportMode == RtspTransportMode.TCP_INTERLEAVED
+        && isVideoMimeType(sampleMimeType);
   }
 
   private static ImmutableList<TrackGroup> buildTrackGroups(
@@ -957,9 +969,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         @RtspTransportMode.Mode int transportMode,
         @RtcpFeedbackReason.Reason int reason,
         String detail) {
-      if (!rtspBacklogRecoveryPolicy.isMediaPeriodRecoverySignalEnabled()
-          || transportMode != RtspTransportMode.TCP_INTERLEAVED
-          || !isVideoTrack(trackId)) {
+      if (!shouldSignalMediaPeriodRecovery(
+          rtspBacklogRecoveryPolicy, transportMode, getTrackSampleMimeType(trackId))) {
         return;
       }
       checkNotNull(rtspDiagnosticsListener)
@@ -1531,7 +1542,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     public boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
-      if (!MimeTypes.isVideo(mediaTrack.payloadFormat.format.sampleMimeType)) {
+      if (!isVideoMimeType(mediaTrack.payloadFormat.format.sampleMimeType)) {
         return false;
       }
       if (Looper.myLooper() != handler.getLooper()) {

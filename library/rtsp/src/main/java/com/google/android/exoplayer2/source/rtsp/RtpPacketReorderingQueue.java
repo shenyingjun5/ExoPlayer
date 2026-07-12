@@ -57,6 +57,7 @@ import java.util.TreeSet;
   private final boolean requestKeyFrameOnQueueReset;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean collectBacklogResetDiagnostics;
+  private final boolean collectSessionPacketDiagnostics;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -87,6 +88,15 @@ import java.util.TreeSet;
   @GuardedBy("this")
   private long extractorReadStallMs;
 
+  @GuardedBy("this") private long expectedPacketCount;
+  @GuardedBy("this") private long receivedPacketCount;
+  @GuardedBy("this") private long missingPacketCount;
+  @GuardedBy("this") private long latePacketCount;
+  @GuardedBy("this") private long sequenceGapEventCount;
+  @GuardedBy("this") private int maxGapSize;
+  @GuardedBy("this") private int lastGapExpectedSequence;
+  @GuardedBy("this") private int lastGapActualSequence;
+
   /** Creates an instance. */
   public RtpPacketReorderingQueue() {
     this(
@@ -96,7 +106,8 @@ import java.util.TreeSet;
         /* rtcpFeedbackRequester= */ null,
         /* sequenceGapRequestThreshold= */ 0,
         /* requestKeyFrameOnQueueReset= */ false,
-        RtspBacklogRecoveryPolicy.DISABLED);
+        RtspBacklogRecoveryPolicy.DISABLED,
+        /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
   /** Creates an instance. */
@@ -114,7 +125,8 @@ import java.util.TreeSet;
         rtcpFeedbackRequester,
         sequenceGapRequestThreshold,
         requestKeyFrameOnQueueReset,
-        RtspBacklogRecoveryPolicy.DISABLED);
+        RtspBacklogRecoveryPolicy.DISABLED,
+        /* rtspPacketDiagnosticsEnabled= */ false);
   }
 
   /** Creates an instance. */
@@ -126,6 +138,27 @@ import java.util.TreeSet;
       int sequenceGapRequestThreshold,
       boolean requestKeyFrameOnQueueReset,
       RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy) {
+    this(
+        trackId,
+        transportMode,
+        rtspDiagnosticsListener,
+        rtcpFeedbackRequester,
+        sequenceGapRequestThreshold,
+        requestKeyFrameOnQueueReset,
+        rtspBacklogRecoveryPolicy,
+        /* rtspPacketDiagnosticsEnabled= */ false);
+  }
+
+  /** Creates an instance with optional session-lifetime packet diagnostics. */
+  public RtpPacketReorderingQueue(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      int sequenceGapRequestThreshold,
+      boolean requestKeyFrameOnQueueReset,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
+      boolean rtspPacketDiagnosticsEnabled) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
@@ -135,12 +168,19 @@ import java.util.TreeSet;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     collectBacklogResetDiagnostics =
         rtspDiagnosticsListener != null && rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled();
+    collectSessionPacketDiagnostics =
+        transportMode == RtspTransportMode.UDP
+            && rtspDiagnosticsListener != null
+            && rtspPacketDiagnosticsEnabled
+            && rtspBacklogRecoveryPolicy.isEnabled();
     packetQueue =
         new TreeSet<>(
             (packetContainer1, packetContainer2) ->
                 calculateSequenceNumberShift(
                     packetContainer1.packet.sequenceNumber,
                     packetContainer2.packet.sequenceNumber));
+    lastGapExpectedSequence = C.INDEX_UNSET;
+    lastGapActualSequence = C.INDEX_UNSET;
 
     reset(/* notifyDiagnostics= */ false);
   }
@@ -190,6 +230,9 @@ import java.util.TreeSet;
   public synchronized boolean offer(
       RtpPacket packet, long receivedTimestampMs, long extractorReadStallMs) {
     lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
+    if (collectSessionPacketDiagnostics) {
+      receivedPacketCount++;
+    }
     if (collectBacklogResetDiagnostics) {
       this.extractorReadStallMs = Math.max(this.extractorReadStallMs, extractorReadStallMs);
     }
@@ -243,6 +286,9 @@ import java.util.TreeSet;
       return true;
     }
     droppedBeforeEnqueueCount++;
+    if (collectSessionPacketDiagnostics) {
+      latePacketCount++;
+    }
     return false;
   }
 
@@ -268,9 +314,21 @@ import java.util.TreeSet;
     RtpPacketContainer packetContainer = packetQueue.first();
     int packetSequenceNumber = packetContainer.packet.sequenceNumber;
 
-    if (packetSequenceNumber == RtpPacket.getNextSequenceNumber(lastDequeuedSequenceNumber)
+    int expectedSequenceNumber = RtpPacket.getNextSequenceNumber(lastDequeuedSequenceNumber);
+    if (packetSequenceNumber == expectedSequenceNumber
         || cutoffTimestampMs >= packetContainer.receivedTimestampMs) {
       packetQueue.pollFirst();
+      if (collectSessionPacketDiagnostics) {
+        int sequenceGap = calculateSequenceNumberShift(packetSequenceNumber, expectedSequenceNumber);
+        if (sequenceGap > 0) {
+          missingPacketCount += sequenceGap;
+          sequenceGapEventCount++;
+          maxGapSize = Math.max(maxGapSize, sequenceGap);
+          lastGapExpectedSequence = expectedSequenceNumber;
+          lastGapActualSequence = packetSequenceNumber;
+        }
+        expectedPacketCount += sequenceGap + 1;
+      }
       lastDequeuedSequenceNumber = packetSequenceNumber;
       return packetContainer.packet;
     }
@@ -292,7 +350,15 @@ import java.util.TreeSet;
         duplicatePacketCount,
         resetCount,
         getOldestPacketAgeMs(),
-        getQueueSpanMs());
+        getQueueSpanMs(),
+        expectedPacketCount,
+        receivedPacketCount,
+        missingPacketCount,
+        latePacketCount,
+        sequenceGapEventCount,
+        maxGapSize,
+        lastGapExpectedSequence,
+        lastGapActualSequence);
   }
 
   private synchronized void addToQueue(RtpPacketContainer packet) {

@@ -489,6 +489,165 @@ public class RtpPacketReorderingQueueTest {
         .isEqualTo(1);
   }
 
+  @Test
+  public void sessionDiagnostics_singlePacketGap_isConfirmedAtDeadline() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    queue.offer(makePacket(/* sequenceNumber= */ 3), /* receivedTimestampMs= */ 2);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 2).sequenceNumber).isEqualTo(3);
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.expectedPacketCount).isEqualTo(3);
+    assertThat(stats.receivedPacketCount).isEqualTo(2);
+    assertThat(stats.missingPacketCount).isEqualTo(1);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(1);
+    assertThat(stats.maxGapSize).isEqualTo(1);
+    assertThat(stats.lastGapExpectedSequence).isEqualTo(2);
+    assertThat(stats.lastGapActualSequence).isEqualTo(3);
+  }
+
+  @Test
+  public void sessionDiagnostics_burstGaps_accumulateMaximumAndTotal() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+    queue.offer(makePacket(/* sequenceNumber= */ 5), /* receivedTimestampMs= */ 2);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 2).sequenceNumber).isEqualTo(5);
+    queue.offer(makePacket(/* sequenceNumber= */ 11), /* receivedTimestampMs= */ 3);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 3).sequenceNumber).isEqualTo(11);
+    queue.offer(makePacket(/* sequenceNumber= */ 22), /* receivedTimestampMs= */ 4);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 4).sequenceNumber).isEqualTo(22);
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.missingPacketCount).isEqualTo(18);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(3);
+    assertThat(stats.maxGapSize).isEqualTo(10);
+    assertThat(stats.lastGapExpectedSequence).isEqualTo(12);
+    assertThat(stats.lastGapActualSequence).isEqualTo(22);
+  }
+
+  @Test
+  public void sessionDiagnostics_adjacentOutOfOrderPacketBeforeDeadline_isNotMissing() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    queue.offer(makePacket(/* sequenceNumber= */ 3), /* receivedTimestampMs= */ 2);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+    queue.offer(makePacket(/* sequenceNumber= */ 2), /* receivedTimestampMs= */ 3);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(2);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(3);
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.missingPacketCount).isEqualTo(0);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(0);
+  }
+
+  @Test
+  public void sessionDiagnostics_lateAndDuplicatePackets_areCountedSeparately() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    queue.offer(makePacket(/* sequenceNumber= */ 3), /* receivedTimestampMs= */ 2);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 2).sequenceNumber).isEqualTo(3);
+    assertThat(queue.offer(makePacket(/* sequenceNumber= */ 2), /* receivedTimestampMs= */ 3))
+        .isFalse();
+    assertThat(queue.offer(makePacket(/* sequenceNumber= */ 4), /* receivedTimestampMs= */ 4))
+        .isTrue();
+    assertThat(queue.offer(makePacket(/* sequenceNumber= */ 4), /* receivedTimestampMs= */ 5))
+        .isTrue();
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.latePacketCount).isEqualTo(1);
+    assertThat(stats.duplicatePacketCount).isEqualTo(1);
+  }
+
+  @Test
+  public void sessionDiagnostics_sequenceWrapDoesNotCreateMissingPacket() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 65534), /* receivedTimestampMs= */ 1);
+    queue.offer(makePacket(/* sequenceNumber= */ 65535), /* receivedTimestampMs= */ 2);
+    queue.offer(makePacket(/* sequenceNumber= */ 0), /* receivedTimestampMs= */ 3);
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 4);
+    while (queue.poll(/* cutoffTimestampMs= */ 0) != null) {}
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.expectedPacketCount).isEqualTo(4);
+    assertThat(stats.missingPacketCount).isEqualTo(0);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(0);
+  }
+
+  @Test
+  public void sessionDiagnostics_queueResetRetainsCumulativeCounters() {
+    RtpPacketReorderingQueue queue = newSessionDiagnosticsQueue();
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+    queue.reset();
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.expectedPacketCount).isEqualTo(1);
+    assertThat(stats.receivedPacketCount).isEqualTo(1);
+  }
+
+  @Test
+  public void sessionDiagnostics_disabledPolicy_doesNotCollectCumulativeCounters() {
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 1,
+            RtspTransportMode.UDP,
+            new CapturingDiagnosticsListener(),
+            /* rtcpFeedbackRequester= */ null,
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ false,
+            RtspBacklogRecoveryPolicy.DISABLED,
+            /* rtspPacketDiagnosticsEnabled= */ true);
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.expectedPacketCount).isEqualTo(0);
+    assertThat(stats.receivedPacketCount).isEqualTo(0);
+  }
+
+  @Test
+  public void sessionDiagnostics_disabledPacketDiagnostics_doesNotCollectCumulativeCounters() {
+    RtpPacketReorderingQueue queue =
+        new RtpPacketReorderingQueue(
+            /* trackId= */ 1,
+            RtspTransportMode.UDP,
+            new CapturingDiagnosticsListener(),
+            /* rtcpFeedbackRequester= */ null,
+            /* sequenceGapRequestThreshold= */ 0,
+            /* requestKeyFrameOnQueueReset= */ false,
+            new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    queue.offer(makePacket(/* sequenceNumber= */ 1), /* receivedTimestampMs= */ 1);
+    assertThat(queue.poll(/* cutoffTimestampMs= */ 0).sequenceNumber).isEqualTo(1);
+
+    RtpReorderingStats stats = queue.createStats(/* sequenceGap= */ 0);
+    assertThat(stats.expectedPacketCount).isEqualTo(0);
+    assertThat(stats.receivedPacketCount).isEqualTo(0);
+  }
+
+  private static RtpPacketReorderingQueue newSessionDiagnosticsQueue() {
+    return new RtpPacketReorderingQueue(
+        /* trackId= */ 1,
+        RtspTransportMode.UDP,
+        new CapturingDiagnosticsListener(),
+        /* rtcpFeedbackRequester= */ null,
+        /* sequenceGapRequestThreshold= */ 0,
+        /* requestKeyFrameOnQueueReset= */ false,
+        new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(),
+        /* rtspPacketDiagnosticsEnabled= */ true);
+  }
+
   private static RtpPacket makePacket(int sequenceNumber) {
     return new RtpPacket.Builder().setSequenceNumber(sequenceNumber).build();
   }

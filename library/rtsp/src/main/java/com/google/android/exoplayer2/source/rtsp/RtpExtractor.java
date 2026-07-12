@@ -129,7 +129,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             this.rtcpFeedbackRequester,
             rtcpFeedbackPolicy.sequenceGapRequestThreshold,
             rtcpFeedbackPolicy.requestKeyFrameOnQueueReset,
-            rtspBacklogRecoveryPolicy);
+            rtspBacklogRecoveryPolicy,
+            rtspPacketDiagnosticsEnabled);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;

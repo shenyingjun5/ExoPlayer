@@ -1027,6 +1027,14 @@ Review 结论必须分成：
 - 单元测试必须覆盖 `EXOPLAYER_DEFAULT` 下不会调用 `setForceUseRtpTcp(true)`、不会开启 low-latency feedback policy、不会开启 packet diagnostics。
 - release gate：关闭 diagnostics 后，普通 RTSP 的 transport、buffer、decoder input、error/retry 行为必须与未改造前一致；打开低频 diagnostics 后不得出现可测的主链路性能回退；packet diagnostics 只能在 debug/实验开关下开启。
 
+### U31c UDP Session-Lifetime Loss Counters
+
+- `RtpReorderingStats` 在 `UDP + RtspBacklogRecoveryPolicy.enabled + listener != null + packetDiagnosticsEnabled` 下追加 session-lifetime 原始计数：`expectedPacketCount`、`receivedPacketCount`、`missingPacketCount`、`latePacketCount`、`sequenceGapEventCount`、`maxGapSize`、`lastGapExpectedSequence`、`lastGapActualSequence`；既有 `duplicatePacketCount` 同样保持 session-lifetime 累计。
+- `receivedPacketCount` 计每个已解析并 offer 的 RTP 包。`expectedPacketCount` 只在 packet 被 dequeue 提交到 RTP 时间线时增加；若 reorder deadline 迫使非连续包出队，则以 `gap + 1` 增加。
+- `missingPacketCount/sequenceGapEventCount/maxGapSize/lastGap*` 只在上述 deadline 确认 gap 时更新。deadline 内到达的相邻乱序不计 missing；`65535 -> 0` 的相邻 wrap 不计 missing；已出队边界后的旧包计 `latePacketCount`，仍在队列内的相同 sequence 计既有 `duplicatePacketCount`。
+- queue reset、seek/reset 不清除累计值；新的 extractor/media period/session 新建时从零开始。既有 queueDepth、queue span、即时 dropped/duplicate/reset 字段继续保留，不能与累计 loss 混用。
+- 默认普通 RTSP 和 packet diagnostics disabled 不维护上述计数，不新增 RTP hot-path 对象、日志、JSON、IO、锁或 callback；本轮不改 RTCP、reorder wait、GOP、buffer 或 SampleQueue。
+
 ## 风险和待确认
 
 - UDP 在家庭网络、老电视和盒子上可能被路由器、防火墙或系统策略影响，必须通过真机矩阵验证。

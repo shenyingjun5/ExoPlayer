@@ -32,12 +32,14 @@ public final class RtcpFeedbackType {
   public static final int PLI = 1;
   /** Full Intra Request, RFC5104 Section 4.3.1.2. */
   public static final int FIR = 2;
+  /** Generic NACK, RFC4585 Section 6.2.1. */
+  public static final int NACK = 3;
 
-  /** One of {@link #UNKNOWN}, {@link #PLI}, or {@link #FIR}. */
+  /** One of {@link #UNKNOWN}, {@link #PLI}, {@link #FIR}, or {@link #NACK}. */
   @Documented
   @Retention(RetentionPolicy.SOURCE)
   @Target(TYPE_USE)
-  @IntDef({UNKNOWN, PLI, FIR})
+  @IntDef({UNKNOWN, PLI, FIR, NACK})
   public @interface Type {}
 
   private RtcpFeedbackType() {}

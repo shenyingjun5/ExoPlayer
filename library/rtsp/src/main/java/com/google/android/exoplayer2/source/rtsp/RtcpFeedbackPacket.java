@@ -22,6 +22,7 @@ import java.nio.ByteBuffer;
 
   private static final int VERSION = 2;
   private static final int PAYLOAD_TYPE_PSFB = 206;
+  private static final int PAYLOAD_TYPE_RTPFB = 205;
   private static final int FMT_PLI = 1;
   private static final int FMT_FIR = 4;
   private static final int PLI_LENGTH_WORDS_MINUS_ONE = 2;
@@ -46,6 +47,19 @@ import java.nio.ByteBuffer;
     packet.put((byte) 0);
     packet.put((byte) 0);
     packet.put((byte) 0);
+    return packet.array();
+  }
+
+  /** Builds one RFC4585 Generic NACK RTPFB/FMT=1 packet. */
+  public static byte[] buildGenericNack(int senderSsrc, int mediaSsrc, int pid, int blp) {
+    ByteBuffer packet = ByteBuffer.allocate(16);
+    packet.put((byte) ((VERSION << 6) | 1));
+    packet.put((byte) PAYLOAD_TYPE_RTPFB);
+    packet.putShort((short) 3);
+    packet.putInt(senderSsrc);
+    packet.putInt(mediaSsrc);
+    packet.putShort((short) pid);
+    packet.putShort((short) blp);
     return packet.array();
   }
 

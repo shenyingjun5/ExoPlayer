@@ -99,7 +99,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
-    this.rtcpFeedbackRequester = rtcpFeedbackPolicy.canSendRtcpFeedback() ? rtcpFeedbackRequester : null;
+    this.rtcpFeedbackRequester =
+        rtcpFeedbackPolicy.canSendRtcpFeedback() || rtcpFeedbackPolicy.canSendGenericNack()
+            ? rtcpFeedbackRequester
+            : null;
     this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     rtpReorderWaitMs = rtspBacklogRecoveryPolicy.getRtpReorderWaitMs(transportMode);
@@ -130,7 +133,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             rtcpFeedbackPolicy.sequenceGapRequestThreshold,
             rtcpFeedbackPolicy.requestKeyFrameOnQueueReset,
             rtspBacklogRecoveryPolicy,
-            rtspPacketDiagnosticsEnabled);
+            rtspPacketDiagnosticsEnabled,
+            rtcpFeedbackPolicy);
     firstTimestamp = C.TIME_UNSET;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;

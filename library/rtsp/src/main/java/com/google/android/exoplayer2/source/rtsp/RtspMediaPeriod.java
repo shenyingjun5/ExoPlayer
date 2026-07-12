@@ -1400,7 +1400,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   }
 
   /** Groups the info needed for loading one RTSP track in RTP. */
-  /* package */ final class RtpLoadInfo {
+  /* package */ final class RtpLoadInfo implements RtcpFeedbackRequester {
     /** The {@link RtspMediaTrack}. */
     public final RtspMediaTrack mediaTrack;
 
@@ -1470,7 +1470,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               /* output= */ internalListener,
               rtpDataChannelFactory,
               forwardingRtspDiagnosticsListener,
-              this::requestKeyFrame,
+              this,
               rtcpFeedbackPolicy,
               rtspBacklogRecoveryPolicy,
               rtspPacketDiagnosticsEnabled);
@@ -1521,6 +1521,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         return handler.post(() -> requestKeyFrameInternal(reason));
       }
       return requestKeyFrameInternal(reason);
+    }
+
+    @Override
+    public boolean requestGenericNack(int mediaSsrc, int pid, int blp) {
+      if (Looper.myLooper() != handler.getLooper()) {
+        return handler.post(() -> requestGenericNackInternal(mediaSsrc, pid, blp));
+      }
+      return requestGenericNackInternal(mediaSsrc, pid, blp);
+    }
+
+    private boolean requestGenericNackInternal(int mediaSsrc, int pid, int blp) {
+      if (transportMode != RtspTransportMode.UDP || !rtcpFeedbackPolicy.canSendGenericNack()) {
+        return false;
+      }
+      try {
+        return rtpDataChannel != null
+            && rtpDataChannel.sendRtcpPacket(
+                RtcpFeedbackPacket.buildGenericNack(
+                    rtcpFeedbackPolicy.senderSsrc, mediaSsrc, pid, blp));
+      } catch (IOException | RuntimeException e) {
+        return false;
+      }
     }
 
     private boolean requestKeyFrameInternal(@RtcpFeedbackReason.Reason int reason) {

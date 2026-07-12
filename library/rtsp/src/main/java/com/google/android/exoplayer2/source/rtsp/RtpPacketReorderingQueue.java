@@ -56,8 +56,10 @@ import java.util.TreeSet;
   private final int sequenceGapRequestThreshold;
   private final boolean requestKeyFrameOnQueueReset;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
+  private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final boolean collectBacklogResetDiagnostics;
   private final boolean collectSessionPacketDiagnostics;
+  private final boolean rtspPacketDiagnosticsEnabled;
 
   @GuardedBy("this")
   private int lastReceivedSequenceNumber;
@@ -96,6 +98,17 @@ import java.util.TreeSet;
   @GuardedBy("this") private int maxGapSize;
   @GuardedBy("this") private int lastGapExpectedSequence;
   @GuardedBy("this") private int lastGapActualSequence;
+  @GuardedBy("this") private int pendingNackPid = C.INDEX_UNSET;
+  @GuardedBy("this") private int pendingNackBlp;
+  @GuardedBy("this") private int pendingNackMediaSsrc;
+  @GuardedBy("this") private long pendingNackDeadlineMs = C.TIME_UNSET;
+  @GuardedBy("this") private long pendingNackNextRetryMs = C.TIME_UNSET;
+  @GuardedBy("this") private int pendingNackSendCount;
+  @GuardedBy("this") private long nackRequestCount;
+  @GuardedBy("this") private long nackPacketCount;
+  @GuardedBy("this") private long nackRetryCount;
+  @GuardedBy("this") private long nackExpiredCount;
+  @GuardedBy("this") private long nackTooLargeCount;
 
   /** Creates an instance. */
   public RtpPacketReorderingQueue() {
@@ -159,6 +172,29 @@ import java.util.TreeSet;
       boolean requestKeyFrameOnQueueReset,
       RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
       boolean rtspPacketDiagnosticsEnabled) {
+    this(
+        trackId,
+        transportMode,
+        rtspDiagnosticsListener,
+        rtcpFeedbackRequester,
+        sequenceGapRequestThreshold,
+        requestKeyFrameOnQueueReset,
+        rtspBacklogRecoveryPolicy,
+        rtspPacketDiagnosticsEnabled,
+        RtcpFeedbackPolicy.DEFAULT);
+  }
+
+  /** Creates an instance with optional deadline-bound Generic NACK. */
+  public RtpPacketReorderingQueue(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @Nullable RtspDiagnosticsListener rtspDiagnosticsListener,
+      @Nullable RtcpFeedbackRequester rtcpFeedbackRequester,
+      int sequenceGapRequestThreshold,
+      boolean requestKeyFrameOnQueueReset,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
+      boolean rtspPacketDiagnosticsEnabled,
+      RtcpFeedbackPolicy rtcpFeedbackPolicy) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.rtspDiagnosticsListener = rtspDiagnosticsListener;
@@ -166,6 +202,8 @@ import java.util.TreeSet;
     this.sequenceGapRequestThreshold = sequenceGapRequestThreshold;
     this.requestKeyFrameOnQueueReset = requestKeyFrameOnQueueReset;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
+    this.rtcpFeedbackPolicy = rtcpFeedbackPolicy;
+    this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
     collectBacklogResetDiagnostics =
         rtspDiagnosticsListener != null && rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled();
     collectSessionPacketDiagnostics =
@@ -191,6 +229,7 @@ import java.util.TreeSet;
 
   private synchronized void reset(boolean notifyDiagnostics) {
     packetQueue.clear();
+    clearPendingNack();
     lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
     lastReceivedTimestampMs = C.TIME_UNSET;
     recentPacketInterArrivalMaxMs = 0;
@@ -229,6 +268,7 @@ import java.util.TreeSet;
   /** Offers one packet with a low-frequency extractor-read stall sample for reset diagnostics. */
   public synchronized boolean offer(
       RtpPacket packet, long receivedTimestampMs, long extractorReadStallMs) {
+    maybeRetryPendingNack(receivedTimestampMs);
     lastOfferDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
     if (collectSessionPacketDiagnostics) {
       receivedPacketCount++;
@@ -317,7 +357,6 @@ import java.util.TreeSet;
     int expectedSequenceNumber = RtpPacket.getNextSequenceNumber(lastDequeuedSequenceNumber);
     if (packetSequenceNumber == expectedSequenceNumber
         || cutoffTimestampMs >= packetContainer.receivedTimestampMs) {
-      packetQueue.pollFirst();
       if (collectSessionPacketDiagnostics) {
         int sequenceGap = calculateSequenceNumberShift(packetSequenceNumber, expectedSequenceNumber);
         if (sequenceGap > 0) {
@@ -326,9 +365,19 @@ import java.util.TreeSet;
           maxGapSize = Math.max(maxGapSize, sequenceGap);
           lastGapExpectedSequence = expectedSequenceNumber;
           lastGapActualSequence = packetSequenceNumber;
+          if (pendingNackPid != C.INDEX_UNSET && cutoffTimestampMs < pendingNackDeadlineMs) {
+            return null;
+          }
+          if (pendingNackPid != C.INDEX_UNSET) {
+            clearPendingNack();
+          }
+          if (maybeStartGenericNack(packetContainer, expectedSequenceNumber, sequenceGap)) {
+            return null;
+          }
         }
         expectedPacketCount += sequenceGap + 1;
       }
+      packetQueue.pollFirst();
       lastDequeuedSequenceNumber = packetSequenceNumber;
       return packetContainer.packet;
     }
@@ -358,7 +407,12 @@ import java.util.TreeSet;
         sequenceGapEventCount,
         maxGapSize,
         lastGapExpectedSequence,
-        lastGapActualSequence);
+        lastGapActualSequence,
+        nackRequestCount,
+        nackPacketCount,
+        nackRetryCount,
+        nackExpiredCount,
+        nackTooLargeCount);
   }
 
   private synchronized void addToQueue(RtpPacketContainer packet) {
@@ -443,6 +497,70 @@ import java.util.TreeSet;
     return packetQueue.isEmpty() || lastReceivedTimestampMs == C.TIME_UNSET
         ? 0
         : Math.max(0, lastReceivedTimestampMs - packetQueue.first().receivedTimestampMs);
+  }
+
+  private boolean maybeStartGenericNack(
+      RtpPacketContainer packetContainer,
+      int expectedSequenceNumber,
+      int sequenceGap) {
+    if (!isGenericNackEnabled()
+        || rtcpFeedbackRequester == null
+        || packetContainer.packet.marker
+        || sequenceGap > rtcpFeedbackPolicy.genericNackMaxGapSize) {
+      if (isGenericNackEnabled() && sequenceGap > rtcpFeedbackPolicy.genericNackMaxGapSize) {
+        nackTooLargeCount++;
+      }
+      return false;
+    }
+    int blp = sequenceGap == 1 ? 0 : (1 << (sequenceGap - 1)) - 1;
+    if (!rtcpFeedbackRequester.requestGenericNack(
+        packetContainer.packet.ssrc, expectedSequenceNumber, blp)) {
+      return false;
+    }
+    pendingNackPid = expectedSequenceNumber;
+    pendingNackBlp = blp;
+    pendingNackMediaSsrc = packetContainer.packet.ssrc;
+    pendingNackDeadlineMs = packetContainer.receivedTimestampMs + rtcpFeedbackPolicy.genericNackDeadlineMs;
+    pendingNackNextRetryMs =
+        packetContainer.receivedTimestampMs + rtcpFeedbackPolicy.genericNackDeadlineMs / 2;
+    pendingNackSendCount = 1;
+    nackRequestCount++;
+    nackPacketCount += sequenceGap;
+    return true;
+  }
+
+  private void maybeRetryPendingNack(long nowMs) {
+    if (!isGenericNackEnabled() || pendingNackPid == C.INDEX_UNSET) {
+      return;
+    }
+    if (nowMs >= pendingNackDeadlineMs) {
+      nackExpiredCount++;
+      clearPendingNack();
+      return;
+    }
+    if (pendingNackSendCount < rtcpFeedbackPolicy.genericNackMaxRetries
+        && nowMs >= pendingNackNextRetryMs
+        && rtcpFeedbackRequester != null
+        && rtcpFeedbackRequester.requestGenericNack(pendingNackMediaSsrc, pendingNackPid, pendingNackBlp)) {
+      pendingNackSendCount++;
+      nackRetryCount++;
+      pendingNackNextRetryMs = pendingNackDeadlineMs;
+    }
+  }
+
+  private boolean isGenericNackEnabled() {
+    return transportMode == RtspTransportMode.UDP
+        && rtspBacklogRecoveryPolicy.isEnabled()
+        && rtcpFeedbackPolicy.canSendGenericNack()
+        && rtspDiagnosticsListener != null
+        && rtspPacketDiagnosticsEnabled;
+  }
+
+  private void clearPendingNack() {
+    pendingNackPid = C.INDEX_UNSET;
+    pendingNackDeadlineMs = C.TIME_UNSET;
+    pendingNackNextRetryMs = C.TIME_UNSET;
+    pendingNackSendCount = 0;
   }
 
   private static final class RtpPacketContainer {

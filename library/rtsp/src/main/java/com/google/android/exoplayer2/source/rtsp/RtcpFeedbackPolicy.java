@@ -60,6 +60,14 @@ public final class RtcpFeedbackPolicy {
   public final boolean pliEnabled;
   /** Whether Full Intra Request feedback may be used as a fallback. */
   public final boolean firEnabled;
+  /** Whether deadline-bound RTCP Generic NACK may be sent for UDP low-latency recovery. */
+  public final boolean genericNackEnabled;
+  /** Maximum age of a confirmed gap that remains eligible for Generic NACK. */
+  public final long genericNackDeadlineMs;
+  /** Maximum missing packets represented by one Generic NACK PID/BLP request. */
+  public final int genericNackMaxGapSize;
+  /** Maximum Generic NACK sends for one confirmed gap. */
+  public final int genericNackMaxRetries;
   /** Sender SSRC used in generated RTCP feedback packets. */
   public final int senderSsrc;
   /** Sequence gap threshold at which the RTP queue requests a key frame. */
@@ -75,6 +83,10 @@ public final class RtcpFeedbackPolicy {
     this.minRequestIntervalMs = builder.minRequestIntervalMs;
     this.pliEnabled = builder.pliEnabled;
     this.firEnabled = builder.firEnabled;
+    this.genericNackEnabled = builder.genericNackEnabled;
+    this.genericNackDeadlineMs = builder.genericNackDeadlineMs;
+    this.genericNackMaxGapSize = builder.genericNackMaxGapSize;
+    this.genericNackMaxRetries = builder.genericNackMaxRetries;
     this.senderSsrc = builder.senderSsrc;
     this.sequenceGapRequestThreshold = builder.sequenceGapRequestThreshold;
     this.requestKeyFrameOnQueueReset = builder.requestKeyFrameOnQueueReset;
@@ -94,6 +106,10 @@ public final class RtcpFeedbackPolicy {
     return minRequestIntervalMs == other.minRequestIntervalMs
         && pliEnabled == other.pliEnabled
         && firEnabled == other.firEnabled
+        && genericNackEnabled == other.genericNackEnabled
+        && genericNackDeadlineMs == other.genericNackDeadlineMs
+        && genericNackMaxGapSize == other.genericNackMaxGapSize
+        && genericNackMaxRetries == other.genericNackMaxRetries
         && senderSsrc == other.senderSsrc
         && sequenceGapRequestThreshold == other.sequenceGapRequestThreshold
         && requestKeyFrameOnQueueReset == other.requestKeyFrameOnQueueReset
@@ -106,6 +122,10 @@ public final class RtcpFeedbackPolicy {
     int result = (int) (minRequestIntervalMs ^ (minRequestIntervalMs >>> 32));
     result = 31 * result + (pliEnabled ? 1 : 0);
     result = 31 * result + (firEnabled ? 1 : 0);
+    result = 31 * result + (genericNackEnabled ? 1 : 0);
+    result = 31 * result + (int) (genericNackDeadlineMs ^ (genericNackDeadlineMs >>> 32));
+    result = 31 * result + genericNackMaxGapSize;
+    result = 31 * result + genericNackMaxRetries;
     result = 31 * result + senderSsrc;
     result = 31 * result + sequenceGapRequestThreshold;
     result = 31 * result + (requestKeyFrameOnQueueReset ? 1 : 0);
@@ -117,13 +137,16 @@ public final class RtcpFeedbackPolicy {
   @Override
   public String toString() {
     return Util.formatInvariant(
-        "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b, "
+        "RtcpFeedbackPolicy(minRequestIntervalMs=%d, pliEnabled=%b, firEnabled=%b, genericNackEnabled=%b, genericNackDeadlineMs=%d, genericNackMaxGapSize=%d, "
             + "senderSsrc=%x, sequenceGapRequestThreshold=%d, "
             + "requestKeyFrameOnQueueReset=%b, feedbackStrategy=%d, "
             + "waitingForIdrTimeoutMs=%d)",
         minRequestIntervalMs,
         pliEnabled,
         firEnabled,
+        genericNackEnabled,
+        genericNackDeadlineMs,
+        genericNackMaxGapSize,
         senderSsrc,
         sequenceGapRequestThreshold,
         requestKeyFrameOnQueueReset,
@@ -146,11 +169,20 @@ public final class RtcpFeedbackPolicy {
     return feedbackStrategy != EXTERNAL_ONLY && (pliEnabled || firEnabled);
   }
 
+  /** Returns whether automatic Generic NACK may be sent. */
+  public boolean canSendGenericNack() {
+    return feedbackStrategy != EXTERNAL_ONLY && genericNackEnabled;
+  }
+
   /** Builder for {@link RtcpFeedbackPolicy}. */
   public static final class Builder {
     private long minRequestIntervalMs;
     private boolean pliEnabled;
     private boolean firEnabled;
+    private boolean genericNackEnabled;
+    private long genericNackDeadlineMs;
+    private int genericNackMaxGapSize;
+    private int genericNackMaxRetries;
     private int senderSsrc;
     private int sequenceGapRequestThreshold;
     private boolean requestKeyFrameOnQueueReset;
@@ -162,6 +194,10 @@ public final class RtcpFeedbackPolicy {
       minRequestIntervalMs = DEFAULT_MIN_REQUEST_INTERVAL_MS;
       pliEnabled = false;
       firEnabled = false;
+      genericNackEnabled = false;
+      genericNackDeadlineMs = 80;
+      genericNackMaxGapSize = 17;
+      genericNackMaxRetries = 1;
       senderSsrc = 0;
       sequenceGapRequestThreshold = 0;
       requestKeyFrameOnQueueReset = false;
@@ -201,6 +237,37 @@ public final class RtcpFeedbackPolicy {
     @CanIgnoreReturnValue
     public Builder setFirEnabled(boolean firEnabled) {
       this.firEnabled = firEnabled;
+      return this;
+    }
+
+    /** Enables deadline-bound UDP Generic NACK. Disabled by default. */
+    @CanIgnoreReturnValue
+    public Builder setGenericNackEnabled(boolean genericNackEnabled) {
+      this.genericNackEnabled = genericNackEnabled;
+      return this;
+    }
+
+    /** Sets the bounded Generic NACK deadline in the supported 60-100ms range. */
+    @CanIgnoreReturnValue
+    public Builder setGenericNackDeadlineMs(long genericNackDeadlineMs) {
+      checkArgument(genericNackDeadlineMs >= 60 && genericNackDeadlineMs <= 100);
+      this.genericNackDeadlineMs = genericNackDeadlineMs;
+      return this;
+    }
+
+    /** Sets the maximum missing packets represented by one PID/BLP request (1-17). */
+    @CanIgnoreReturnValue
+    public Builder setGenericNackMaxGapSize(int genericNackMaxGapSize) {
+      checkArgument(genericNackMaxGapSize >= 1 && genericNackMaxGapSize <= 17);
+      this.genericNackMaxGapSize = genericNackMaxGapSize;
+      return this;
+    }
+
+    /** Sets the maximum sends for one Generic NACK PID/BLP request (1-2). */
+    @CanIgnoreReturnValue
+    public Builder setGenericNackMaxRetries(int genericNackMaxRetries) {
+      checkArgument(genericNackMaxRetries >= 1 && genericNackMaxRetries <= 2);
+      this.genericNackMaxRetries = genericNackMaxRetries;
       return this;
     }
 

@@ -20,4 +20,9 @@ public interface RtcpFeedbackRequester {
 
   /** Requests a key frame. */
   boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason);
+
+  /** Requests one RTCP Generic NACK packet for a bounded RTP sequence range. */
+  default boolean requestGenericNack(int mediaSsrc, int pid, int blp) {
+    return false;
+  }
 }

@@ -46,4 +46,16 @@ public final class RtcpFeedbackPacketTest {
     assertThat(packet)
         .isEqualTo(Util.getBytesFromHexString("84CE00040102030400000000112233447F000000"));
   }
+
+  @Test
+  public void buildGenericNack_returnsRtpFeedbackFmtOnePacket() {
+    byte[] packet =
+        RtcpFeedbackPacket.buildGenericNack(
+            /* senderSsrc= */ 0x01020304,
+            /* mediaSsrc= */ 0x11223344,
+            /* pid= */ 0xFFFE,
+            /* blp= */ 0x0005);
+
+    assertThat(packet).isEqualTo(Util.getBytesFromHexString("81CD00030102030411223344FFFE0005"));
+  }
 }

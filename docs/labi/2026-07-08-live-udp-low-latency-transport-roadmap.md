@@ -1036,6 +1036,11 @@ Review 结论必须分成：
 - 默认普通 RTSP 和 packet diagnostics disabled 不维护上述计数，不新增 RTP hot-path 对象、日志、JSON、IO、锁或 callback；本轮不改 RTCP、reorder wait、GOP、buffer 或 SampleQueue。
 - 已发布 `com.zknowai.exoplayer:*:2.19.1-labi.20`。source commit/tag 为 `8b1d227b5d8c63a083b4d89c32f4735c323a3ab5` / `exoplayer-rtsp-2.19.1-labi.20`，GitHub Pages commit 为 `5208d0adf99889510e8f637f97b997d06db86da2`；RTSP AAR/POM SHA256 分别为 `1644f4760d14e9ba5209cfff9e1c4a33c6f5a6857e1822e63248a13f80485b43` / `ef10a4c46c994f838e9fa19233bb21fd5137985d90848e24c41ad1eebe36be61`。
 
+### U33a Deadline-Bound Generic NACK
+
+- 默认关闭；仅 `UDP + explicit low-latency recovery + listener + packet diagnostics + Generic NACK policy` 生效。RTPFB/FMT=1 使用 PID/BLP，最大 17 个缺包、60-100ms deadline、每 gap 最多 1-2 次发送。
+- `RtpReorderingStats` 增加 `nackRequestCount`、`nackPacketCount`、`nackRetryCount`、`nackExpiredCount`、`nackTooLargeCount`。TCP/default/diagnostics off 不维护 NACK 状态或计数。
+
 ## 风险和待确认
 
 - UDP 在家庭网络、老电视和盒子上可能被路由器、防火墙或系统策略影响，必须通过真机矩阵验证。

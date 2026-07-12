@@ -47,6 +47,11 @@ public final class RtpReorderingStats {
   public final int lastGapExpectedSequence;
   /** Actual sequence number for the most recent confirmed sequence gap. */
   public final int lastGapActualSequence;
+  public final long nackRequestCount;
+  public final long nackPacketCount;
+  public final long nackRetryCount;
+  public final long nackExpiredCount;
+  public final long nackTooLargeCount;
 
   public RtpReorderingStats(
       int trackId,
@@ -77,7 +82,9 @@ public final class RtpReorderingStats {
         /* sequenceGapEventCount= */ 0,
         /* maxGapSize= */ 0,
         /* lastGapExpectedSequence= */ -1,
-        /* lastGapActualSequence= */ -1);
+        /* lastGapActualSequence= */ -1,
+        /* nackRequestCount= */ 0, /* nackPacketCount= */ 0, /* nackRetryCount= */ 0,
+        /* nackExpiredCount= */ 0, /* nackTooLargeCount= */ 0);
   }
 
   public RtpReorderingStats(
@@ -111,7 +118,9 @@ public final class RtpReorderingStats {
         /* sequenceGapEventCount= */ 0,
         /* maxGapSize= */ 0,
         /* lastGapExpectedSequence= */ -1,
-        /* lastGapActualSequence= */ -1);
+        /* lastGapActualSequence= */ -1,
+        /* nackRequestCount= */ 0, /* nackPacketCount= */ 0, /* nackRetryCount= */ 0,
+        /* nackExpiredCount= */ 0, /* nackTooLargeCount= */ 0);
   }
 
   public RtpReorderingStats(
@@ -133,7 +142,12 @@ public final class RtpReorderingStats {
       long sequenceGapEventCount,
       int maxGapSize,
       int lastGapExpectedSequence,
-      int lastGapActualSequence) {
+      int lastGapActualSequence,
+      long nackRequestCount,
+      long nackPacketCount,
+      long nackRetryCount,
+      long nackExpiredCount,
+      long nackTooLargeCount) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.queueDepth = queueDepth;
@@ -153,6 +167,11 @@ public final class RtpReorderingStats {
     this.maxGapSize = maxGapSize;
     this.lastGapExpectedSequence = lastGapExpectedSequence;
     this.lastGapActualSequence = lastGapActualSequence;
+    this.nackRequestCount = nackRequestCount;
+    this.nackPacketCount = nackPacketCount;
+    this.nackRetryCount = nackRetryCount;
+    this.nackExpiredCount = nackExpiredCount;
+    this.nackTooLargeCount = nackTooLargeCount;
   }
 
   @Override
@@ -182,7 +201,12 @@ public final class RtpReorderingStats {
         && sequenceGapEventCount == other.sequenceGapEventCount
         && maxGapSize == other.maxGapSize
         && lastGapExpectedSequence == other.lastGapExpectedSequence
-        && lastGapActualSequence == other.lastGapActualSequence;
+        && lastGapActualSequence == other.lastGapActualSequence
+        && nackRequestCount == other.nackRequestCount
+        && nackPacketCount == other.nackPacketCount
+        && nackRetryCount == other.nackRetryCount
+        && nackExpiredCount == other.nackExpiredCount
+        && nackTooLargeCount == other.nackTooLargeCount;
   }
 
   @Override
@@ -206,6 +230,11 @@ public final class RtpReorderingStats {
     result = 31 * result + maxGapSize;
     result = 31 * result + lastGapExpectedSequence;
     result = 31 * result + lastGapActualSequence;
+    result = 31 * result + (int) (nackRequestCount ^ (nackRequestCount >>> 32));
+    result = 31 * result + (int) (nackPacketCount ^ (nackPacketCount >>> 32));
+    result = 31 * result + (int) (nackRetryCount ^ (nackRetryCount >>> 32));
+    result = 31 * result + (int) (nackExpiredCount ^ (nackExpiredCount >>> 32));
+    result = 31 * result + (int) (nackTooLargeCount ^ (nackTooLargeCount >>> 32));
     return result;
   }
 
@@ -218,7 +247,7 @@ public final class RtpReorderingStats {
             + "oldestPacketAgeMs=%d, queueSpanMs=%d, expectedPacketCount=%d, "
             + "receivedPacketCount=%d, missingPacketCount=%d, latePacketCount=%d, "
             + "sequenceGapEventCount=%d, maxGapSize=%d, "
-            + "lastGapExpectedSequence=%d, lastGapActualSequence=%d)",
+            + "lastGapExpectedSequence=%d, lastGapActualSequence=%d, nackRequestCount=%d, nackPacketCount=%d, nackRetryCount=%d, nackExpiredCount=%d, nackTooLargeCount=%d)",
         trackId,
         transportMode,
         queueDepth,
@@ -237,6 +266,7 @@ public final class RtpReorderingStats {
         sequenceGapEventCount,
         maxGapSize,
         lastGapExpectedSequence,
-        lastGapActualSequence);
+        lastGapActualSequence, nackRequestCount, nackPacketCount, nackRetryCount,
+        nackExpiredCount, nackTooLargeCount);
   }
 }

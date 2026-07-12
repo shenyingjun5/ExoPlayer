@@ -240,7 +240,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return RESULT_CONTINUE;
     }
     if (payloadReaderDiscontinuityNotificationsEnabled) {
-      int discontinuityReason = reorderingQueue.getLastOfferDiscontinuityReason();
+      int discontinuityReason = reorderingQueue.getAndClearPendingDiscontinuityReason();
       if (discontinuityReason != RtcpFeedbackReason.UNKNOWN) {
         onRtpStreamDiscontinuity(discontinuityReason);
       }
@@ -249,6 +249,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     if (dequeuedPacket == null) {
       // No packet is available for reading.
       return RESULT_CONTINUE;
+    }
+    if (payloadReaderDiscontinuityNotificationsEnabled) {
+      int discontinuityReason = reorderingQueue.getAndClearPendingDiscontinuityReason();
+      if (discontinuityReason != RtcpFeedbackReason.UNKNOWN) {
+        onRtpStreamDiscontinuity(discontinuityReason);
+      }
     }
     packet = dequeuedPacket;
 

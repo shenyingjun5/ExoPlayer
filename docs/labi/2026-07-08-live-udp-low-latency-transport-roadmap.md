@@ -1038,8 +1038,11 @@ Review 结论必须分成：
 
 ### U33a Deadline-Bound Generic NACK
 
-- 默认关闭；仅 `UDP + explicit low-latency recovery + listener + packet diagnostics + Generic NACK policy` 生效。RTPFB/FMT=1 使用 PID/BLP，最大 17 个缺包、60-100ms deadline、每 gap 最多 1-2 次发送。
-- `RtpReorderingStats` 增加 `nackRequestCount`、`nackPacketCount`、`nackRetryCount`、`nackExpiredCount`、`nackTooLargeCount`。TCP/default/diagnostics off 不维护 NACK 状态或计数。
+- 默认关闭。功能发送只在 `UDP + explicit low-latency recovery + listener + Generic NACK feedback policy` 下启用；它不依赖 packet diagnostics，避免生产低延迟路径因为仅关闭观测而改变恢复行为。TCP、普通 RTSP、policy disabled、listener null 不进入 NACK 状态机。
+- 状态机必须是“确认小 gap -> NACK deadline window -> 补包完整则继续当前 AU”，不能在 `offer()` 发现 gap 时先 PLI/WAIT_IDR。补齐 pending PID/BLP 覆盖的全部 sequence 后清除 pending，不发 discontinuity/PLI、不进入 WAIT_IDR；deadline、marker、过大 gap 或 NACK 发送失败才一次性走既有 `SEQUENCE_GAP -> keyframe feedback -> H264 WAIT_IDR` 恢复。
+- RTPFB/FMT=1 使用 PID/BLP，最大 17 个缺包、60-100ms deadline、每 gap 最多 1-2 次发送。queue reset 和 seek/reset 必须清 pending NACK，避免旧 window 阻塞新 RTP 时间线。
+- `RtpReorderingStats` 的累计 NACK stats 只在上述功能路径再加 `packetDiagnosticsEnabled` 时维护：`nackRequestCount`、`nackPacketCount`、`nackRetryCount`、`nackExpiredCount`、`nackTooLargeCount`、`nackRecoveredCount`、`lastNackRecoveredPacketCount`、`lastNackRecoveryMs`、`lastNackPid`。`lastNackRecoveryMs` 复用 RTP arrival timestamp，不新增时钟读取。Cast-SDK 只能低频聚合读取，不能逐包日志。
+- `.21` 的初版实现存在“先 discontinuity/PLI，后 NACK”的恢复顺序错误，禁止 Cast-SDK 集成；修正版本以 `.22` 正式发布校验为准。
 
 ## 风险和待确认
 

@@ -651,19 +651,91 @@ public class RtpPacketReorderingQueueTest {
   @Test
   public void genericNack_confirmedGapRequestsPidAndBlp() {
     CapturingNackRequester requester = new CapturingNackRequester();
-    RtpPacketReorderingQueue queue =
-        new RtpPacketReorderingQueue(
-            1, RtspTransportMode.UDP, new CapturingDiagnosticsListener(), requester, 0, false,
-            new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(), true,
-            new RtcpFeedbackPolicy.Builder()
-                .setGenericNackEnabled(true).setFeedbackStrategy(RtcpFeedbackPolicy.RTCP_ONLY)
-                .setGenericNackMaxGapSize(3).build());
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 3, 1);
     queue.offer(makePacket(1), 1);
     queue.offer(makePacket(4), 2);
     assertThat(queue.poll(0).sequenceNumber).isEqualTo(1);
     assertThat(queue.poll(2)).isNull();
     assertThat(requester.pid).isEqualTo(2);
     assertThat(requester.blp).isEqualTo(1);
+  }
+
+  @Test
+  public void genericNack_recoveredGapDoesNotRequestKeyFrameAndRecordsRecovery() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 3, 1);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(4), 2);
+    assertThat(queue.poll(0).sequenceNumber).isEqualTo(1);
+    assertThat(queue.poll(2)).isNull();
+
+    queue.offer(makePacket(2), 10);
+    queue.offer(makePacket(3), 11);
+    assertThat(queue.poll(10).sequenceNumber).isEqualTo(2);
+    assertThat(queue.poll(11).sequenceNumber).isEqualTo(3);
+    assertThat(queue.poll(11).sequenceNumber).isEqualTo(4);
+
+    RtpReorderingStats stats = queue.createStats(0);
+    assertThat(requester.keyFrameRequestCount).isEqualTo(0);
+    assertThat(queue.getAndClearPendingDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(stats.missingPacketCount).isEqualTo(0);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(0);
+    assertThat(stats.nackRecoveredCount).isEqualTo(1);
+    assertThat(stats.lastNackRecoveredPacketCount).isEqualTo(2);
+    assertThat(stats.lastNackRecoveryMs).isEqualTo(9);
+    assertThat(stats.lastNackPid).isEqualTo(2);
+    assertThat(stats.nackExpiredCount).isEqualTo(0);
+  }
+
+  @Test
+  public void genericNack_pendingGapDoesNotDuplicateMissingCounters() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 3, 1);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(4), 2);
+    queue.poll(0);
+    assertThat(queue.poll(2)).isNull();
+    assertThat(queue.poll(50)).isNull();
+
+    RtpReorderingStats stats = queue.createStats(0);
+    assertThat(stats.missingPacketCount).isEqualTo(0);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(0);
+    assertThat(stats.nackRequestCount).isEqualTo(1);
+  }
+
+  @Test
+  public void genericNack_deadlineExpiryTriggersOneRecoveryAndCountsOnce() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 3, 1);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(4), 2);
+    queue.poll(0);
+    assertThat(queue.poll(2)).isNull();
+    assertThat(queue.poll(100).sequenceNumber).isEqualTo(4);
+
+    RtpReorderingStats stats = queue.createStats(0);
+    assertThat(requester.keyFrameRequestCount).isEqualTo(1);
+    assertThat(queue.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.SEQUENCE_GAP);
+    assertThat(queue.getAndClearPendingDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(stats.missingPacketCount).isEqualTo(2);
+    assertThat(stats.sequenceGapEventCount).isEqualTo(1);
+    assertThat(stats.nackExpiredCount).isEqualTo(1);
+  }
+
+  @Test
+  public void genericNack_retriesOnceAtConfiguredDeadlineFraction() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 1, 2);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(3), 2);
+    queue.poll(0);
+    assertThat(queue.poll(2)).isNull();
+    queue.offer(makePacket(4), 42);
+
+    RtpReorderingStats stats = queue.createStats(0);
+    assertThat(requester.nackRequestCount).isEqualTo(2);
+    assertThat(stats.nackRetryCount).isEqualTo(1);
   }
 
   @Test
@@ -680,6 +752,30 @@ public class RtpPacketReorderingQueueTest {
   }
 
   @Test
+  public void genericNack_markerAndTooLargeGapUseExistingRecovery() {
+    CapturingNackRequester markerRequester = new CapturingNackRequester();
+    RtpPacketReorderingQueue markerQueue = newGenericNackQueue(markerRequester, true, 3, 1);
+    markerQueue.offer(makePacket(1), 1);
+    markerQueue.offer(makePacket(3, true), 2);
+    markerQueue.poll(0);
+    assertThat(markerQueue.poll(2).sequenceNumber).isEqualTo(3);
+    assertThat(markerRequester.nackRequestCount).isEqualTo(0);
+    assertThat(markerRequester.keyFrameRequestCount).isEqualTo(1);
+    assertThat(markerQueue.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.SEQUENCE_GAP);
+
+    CapturingNackRequester tooLargeRequester = new CapturingNackRequester();
+    RtpPacketReorderingQueue tooLargeQueue = newGenericNackQueue(tooLargeRequester, true, 1, 1);
+    tooLargeQueue.offer(makePacket(1), 1);
+    tooLargeQueue.offer(makePacket(4), 2);
+    tooLargeQueue.poll(0);
+    assertThat(tooLargeQueue.poll(2).sequenceNumber).isEqualTo(4);
+    assertThat(tooLargeRequester.nackRequestCount).isEqualTo(0);
+    assertThat(tooLargeRequester.keyFrameRequestCount).isEqualTo(1);
+    assertThat(tooLargeQueue.createStats(0).nackTooLargeCount).isEqualTo(1);
+  }
+
+  @Test
   public void genericNack_disabledPolicy_doesNotRequest() {
     CapturingNackRequester requester = new CapturingNackRequester();
     RtpPacketReorderingQueue queue = new RtpPacketReorderingQueue(
@@ -689,6 +785,21 @@ public class RtpPacketReorderingQueueTest {
     queue.offer(makePacket(1), 1); queue.offer(makePacket(3), 2);
     queue.poll(0); queue.poll(2);
     assertThat(requester.pid).isEqualTo(-1);
+  }
+
+  @Test
+  public void genericNack_packetDiagnosticsDisabledSendsButDoesNotCollectStats() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, false, 3, 1);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(3), 2);
+    queue.poll(0);
+    assertThat(queue.poll(2)).isNull();
+
+    RtpReorderingStats stats = queue.createStats(0);
+    assertThat(requester.nackRequestCount).isEqualTo(1);
+    assertThat(stats.nackRequestCount).isEqualTo(0);
+    assertThat(stats.nackPacketCount).isEqualTo(0);
   }
 
   @Test
@@ -703,17 +814,66 @@ public class RtpPacketReorderingQueueTest {
     assertThat(queue.createStats(0).nackTooLargeCount).isEqualTo(1);
   }
 
+  @Test
+  public void genericNack_resetClearsPendingWindow() {
+    CapturingNackRequester requester = new CapturingNackRequester();
+    RtpPacketReorderingQueue queue = newGenericNackQueue(requester, true, 3, 1);
+    queue.offer(makePacket(1), 1);
+    queue.offer(makePacket(3), 2);
+    queue.poll(0);
+    assertThat(queue.poll(2)).isNull();
+    queue.reset();
+    queue.offer(makePacket(10), 10);
+    assertThat(queue.poll(10).sequenceNumber).isEqualTo(10);
+    assertThat(queue.getAndClearPendingDiscontinuityReason()).isEqualTo(RtcpFeedbackReason.UNKNOWN);
+  }
+
+  private static RtpPacketReorderingQueue newGenericNackQueue(
+      CapturingNackRequester requester, boolean packetDiagnosticsEnabled, int maxGapSize, int maxRetries) {
+    return new RtpPacketReorderingQueue(
+        1,
+        RtspTransportMode.UDP,
+        new CapturingDiagnosticsListener(),
+        requester,
+        1,
+        false,
+        new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(),
+        packetDiagnosticsEnabled,
+        new RtcpFeedbackPolicy.Builder()
+            .setGenericNackEnabled(true)
+            .setFeedbackStrategy(RtcpFeedbackPolicy.RTCP_ONLY)
+            .setGenericNackMaxGapSize(maxGapSize)
+            .setGenericNackMaxRetries(maxRetries)
+            .build());
+  }
+
   private static final class CapturingNackRequester implements RtcpFeedbackRequester {
     int pid = -1;
     int blp = -1;
-    @Override public boolean requestKeyFrame(int reason) { return false; }
-    @Override public boolean requestGenericNack(int mediaSsrc, int pid, int blp) {
-      this.pid = pid; this.blp = blp; return true;
+    int nackRequestCount;
+    int keyFrameRequestCount;
+
+    @Override
+    public boolean requestKeyFrame(int reason) {
+      keyFrameRequestCount++;
+      return true;
+    }
+
+    @Override
+    public boolean requestGenericNack(int mediaSsrc, int pid, int blp) {
+      this.pid = pid;
+      this.blp = blp;
+      nackRequestCount++;
+      return true;
     }
   }
 
   private static RtpPacket makePacket(int sequenceNumber) {
-    return new RtpPacket.Builder().setSequenceNumber(sequenceNumber).build();
+    return makePacket(sequenceNumber, false);
+  }
+
+  private static RtpPacket makePacket(int sequenceNumber, boolean marker) {
+    return new RtpPacket.Builder().setSequenceNumber(sequenceNumber).setMarker(marker).build();
   }
 
   private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {

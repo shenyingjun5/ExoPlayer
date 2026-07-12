@@ -24,6 +24,7 @@ public final class RtspSampleReadStats {
 
   public final int trackId;
   public final int sampleQueueIndex;
+  @Nullable public final String sampleMimeType;
   public final long sampleTimeUs;
   public final long rtpTimestamp;
   public final @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus;
@@ -41,6 +42,7 @@ public final class RtspSampleReadStats {
     this(
         trackId,
         sampleQueueIndex,
+        /* sampleMimeType= */ null,
         sampleTimeUs,
         /* rtpTimestamp= */ C.TIME_UNSET,
         RtspSampleRtpTimestampMappingStatus.NOT_FOUND,
@@ -60,6 +62,7 @@ public final class RtspSampleReadStats {
     this(
         trackId,
         sampleQueueIndex,
+        /* sampleMimeType= */ null,
         sampleTimeUs,
         rtpTimestamp,
         rtpTimestamp == C.TIME_UNSET
@@ -79,8 +82,31 @@ public final class RtspSampleReadStats {
       long readElapsedRealtimeMs,
       long sampleQueueBufferedAheadMs,
       long mediaPeriodBufferedAheadMs) {
+    this(
+        trackId,
+        sampleQueueIndex,
+        /* sampleMimeType= */ null,
+        sampleTimeUs,
+        rtpTimestamp,
+        rtpTimestampMappingStatus,
+        readElapsedRealtimeMs,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs);
+  }
+
+  public RtspSampleReadStats(
+      int trackId,
+      int sampleQueueIndex,
+      @Nullable String sampleMimeType,
+      long sampleTimeUs,
+      long rtpTimestamp,
+      @RtspSampleRtpTimestampMappingStatus.Status int rtpTimestampMappingStatus,
+      long readElapsedRealtimeMs,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs) {
     this.trackId = trackId;
     this.sampleQueueIndex = sampleQueueIndex;
+    this.sampleMimeType = sampleMimeType;
     this.sampleTimeUs = sampleTimeUs;
     this.rtpTimestamp = rtpTimestamp;
     this.rtpTimestampMappingStatus = rtpTimestampMappingStatus;
@@ -100,6 +126,7 @@ public final class RtspSampleReadStats {
     RtspSampleReadStats other = (RtspSampleReadStats) obj;
     return trackId == other.trackId
         && sampleQueueIndex == other.sampleQueueIndex
+        && Util.areEqual(sampleMimeType, other.sampleMimeType)
         && sampleTimeUs == other.sampleTimeUs
         && rtpTimestamp == other.rtpTimestamp
         && rtpTimestampMappingStatus == other.rtpTimestampMappingStatus
@@ -112,6 +139,7 @@ public final class RtspSampleReadStats {
   public int hashCode() {
     int result = trackId;
     result = 31 * result + sampleQueueIndex;
+    result = 31 * result + (sampleMimeType == null ? 0 : sampleMimeType.hashCode());
     result = 31 * result + (int) (sampleTimeUs ^ (sampleTimeUs >>> 32));
     result = 31 * result + (int) (rtpTimestamp ^ (rtpTimestamp >>> 32));
     result = 31 * result + rtpTimestampMappingStatus;
@@ -124,11 +152,12 @@ public final class RtspSampleReadStats {
   @Override
   public String toString() {
     return Util.formatInvariant(
-        "RtspSampleReadStats(trackId=%d, sampleQueueIndex=%d, sampleTimeUs=%d, "
+        "RtspSampleReadStats(trackId=%d, sampleQueueIndex=%d, sampleMimeType=%s, sampleTimeUs=%d, "
             + "rtpTimestamp=%d, rtpTimestampMappingStatus=%d, readElapsedRealtimeMs=%d, "
             + "sampleQueueBufferedAheadMs=%d, mediaPeriodBufferedAheadMs=%d)",
         trackId,
         sampleQueueIndex,
+        sampleMimeType,
         sampleTimeUs,
         rtpTimestamp,
         rtpTimestampMappingStatus,

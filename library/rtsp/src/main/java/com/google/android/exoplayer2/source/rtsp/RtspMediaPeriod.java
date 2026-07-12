@@ -609,6 +609,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           new RtspSampleReadStats(
               loaderWrapper.loadInfo.trackId,
               sampleQueueIndex,
+              loaderWrapper.loadInfo.mediaTrack.payloadFormat.format.sampleMimeType,
               buffer.timeUs,
               mappingResult.rtpTimestamp,
               mappingResult.status,
@@ -827,6 +828,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
   }
 
+  private boolean isVideoTrack(int trackId) {
+    for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
+      RtpLoadInfo loadInfo = rtspLoaderWrappers.get(i).loadInfo;
+      if (loadInfo.trackId == trackId) {
+        return MimeTypes.isVideo(loadInfo.mediaTrack.payloadFormat.format.sampleMimeType);
+      }
+    }
+    // Diagnostics callbacks are only emitted by configured load infos in production. Preserve the
+    // existing fallback for tests and any callback delivered while a wrapper is being replaced.
+    return true;
+  }
+
   private static ImmutableList<TrackGroup> buildTrackGroups(
       ImmutableList<RtspLoaderWrapper> rtspLoaderWrappers) {
     ImmutableList.Builder<TrackGroup> listBuilder = new ImmutableList.Builder<>();
@@ -945,7 +958,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         @RtcpFeedbackReason.Reason int reason,
         String detail) {
       if (!rtspBacklogRecoveryPolicy.isMediaPeriodRecoverySignalEnabled()
-          || transportMode != RtspTransportMode.TCP_INTERLEAVED) {
+          || transportMode != RtspTransportMode.TCP_INTERLEAVED
+          || !isVideoTrack(trackId)) {
         return;
       }
       checkNotNull(rtspDiagnosticsListener)
@@ -1517,6 +1531,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     public boolean requestKeyFrame(@RtcpFeedbackReason.Reason int reason) {
+      if (!MimeTypes.isVideo(mediaTrack.payloadFormat.format.sampleMimeType)) {
+        return false;
+      }
       if (Looper.myLooper() != handler.getLooper()) {
         return handler.post(() -> requestKeyFrameInternal(reason));
       }

@@ -397,9 +397,16 @@ public final class RtspFeedbackApiTest {
   @Test
   public void sampleQueueBacklogRecoverySignal_requiresExplicitPolicyAndVideoTrack() {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
+            .build();
     RtspMediaSource mediaSource =
         new RtspMediaSource.Factory()
             .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
             .setRtspPacketDiagnosticsEnabled(true)
             .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
     RtspMediaPeriod mediaPeriod =
@@ -409,12 +416,6 @@ public final class RtspFeedbackApiTest {
                 new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
                 /* startPositionUs= */ 0);
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
-        /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
-        "video/avc",
-        /* sampleQueueBufferedAheadMs= */ 1300,
-        /* mediaPeriodBufferedAheadMs= */ 1300);
     mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
         /* trackId= */ 2,
         RtspTransportMode.TCP_INTERLEAVED,

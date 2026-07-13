@@ -902,6 +902,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     @Override
+    public void onRtspRtpTrackActivity(RtspRtpTrackActivityStats activityStats) {
+      checkNotNull(rtspDiagnosticsListener).onRtspRtpTrackActivity(activityStats);
+    }
+
+    @Override
     public void onFirstDecodableVideoAccessUnitReady(
         RtspH264AccessUnitStats accessUnitStats) {
       checkNotNull(rtspDiagnosticsListener).onFirstDecodableVideoAccessUnitReady(accessUnitStats);

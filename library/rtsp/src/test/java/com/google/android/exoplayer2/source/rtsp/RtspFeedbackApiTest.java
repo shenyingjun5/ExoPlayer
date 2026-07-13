@@ -23,6 +23,7 @@ import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.source.MediaSource.MediaPeriodId;
 import com.google.android.exoplayer2.upstream.DefaultAllocator;
+import com.google.android.exoplayer2.util.MimeTypes;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -162,6 +163,10 @@ public final class RtspFeedbackApiTest {
     assertThat(policy.getRtpReorderWaitMs(RtspTransportMode.UNKNOWN))
         .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
     assertThat(policy.isMediaPeriodRecoverySignalEnabled()).isTrue();
+    assertThat(policy.isRtpActivityNotificationEnabled()).isTrue();
+    assertThat(policy.rtpActivityNotificationIntervalMs)
+        .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_ACTIVITY_NOTIFICATION_INTERVAL_MS);
+    assertThat(RtspBacklogRecoveryPolicy.DISABLED.isRtpActivityNotificationEnabled()).isFalse();
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.getRtpReorderWaitMs(
             RtspTransportMode.TCP_INTERLEAVED))
         .isEqualTo(2);
@@ -195,11 +200,19 @@ public final class RtspFeedbackApiTest {
             .setTcpInterleavedBacklogResetPackets(240)
             .setTcpInterleavedBacklogDepthResetMinAgeMs(200)
             .build();
+    RtspBacklogRecoveryPolicy shorterActivityIntervalPolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedBacklogResetMs(300)
+            .setTcpInterleavedBacklogResetPackets(240)
+            .setRtpActivityNotificationIntervalMs(250)
+            .build();
 
     assertThat(inheritedMinimumAgePolicy).isEqualTo(explicitSameMinimumAgePolicy);
     assertThat(inheritedMinimumAgePolicy.hashCode())
         .isEqualTo(explicitSameMinimumAgePolicy.hashCode());
     assertThat(inheritedMinimumAgePolicy).isNotEqualTo(earlierMinimumAgePolicy);
+    assertThat(inheritedMinimumAgePolicy).isNotEqualTo(shorterActivityIntervalPolicy);
   }
 
   @Test
@@ -1063,6 +1076,15 @@ public final class RtspFeedbackApiTest {
             RtspTransportMode.TCP_INTERLEAVED,
             123));
     diagnosticsListener.onFirstRtpPacketReceived(packetStats);
+    diagnosticsListener.onRtspRtpTrackActivity(
+        new RtspRtpTrackActivityStats(
+            1,
+            MimeTypes.VIDEO_H264,
+            RtspTransportMode.UDP,
+            /* lastPacketArrivalElapsedRealtimeMs= */ 5678,
+            /* receivedPacketCount= */ 10,
+            /* lastSequenceNumber= */ 10,
+            /* lastRtpTimestamp= */ 1234));
     diagnosticsListener.onFirstDecodableVideoAccessUnitReady(
         new RtspH264AccessUnitStats(
             1, 10, 1234, true, true, 5, RtspH264AccessUnitStats.ACCESS_UNIT_TYPE_IDR, 88));
@@ -1098,6 +1120,36 @@ public final class RtspFeedbackApiTest {
     feedbackListener.onRtcpFeedbackThrottled(feedbackRequest);
     feedbackListener.onRtcpFeedbackSent(feedbackRequest);
     feedbackListener.onRtcpFeedbackSendFailed(feedbackRequest, new Exception("test"));
+  }
+
+  @Test
+  public void mediaPeriodDiagnostics_forwardsRtpTrackActivity() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+    RtspRtpTrackActivityStats activityStats =
+        new RtspRtpTrackActivityStats(
+            1,
+            MimeTypes.VIDEO_H264,
+            RtspTransportMode.TCP_INTERLEAVED,
+            /* lastPacketArrivalElapsedRealtimeMs= */ 1234,
+            /* receivedPacketCount= */ 7,
+            /* lastSequenceNumber= */ 10,
+            /* lastRtpTimestamp= */ 5678);
+
+    checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting())
+        .onRtspRtpTrackActivity(activityStats);
+
+    assertThat(diagnosticsListener.rtpTrackActivityStats).containsExactly(activityStats);
+    mediaSource.releasePeriod(mediaPeriod);
   }
 
   private static void assertSampleQueueBacklogThreshold(long thresholdMs) {
@@ -1148,6 +1200,8 @@ public final class RtspFeedbackApiTest {
         new java.util.ArrayList<>();
     public final java.util.ArrayList<RtspMediaPeriodRecoveryStats> mediaPeriodRecoveryStats =
         new java.util.ArrayList<>();
+    public final java.util.ArrayList<RtspRtpTrackActivityStats> rtpTrackActivityStats =
+        new java.util.ArrayList<>();
 
     @Override
     public void onTransportFallback(RtspTransportFallbackStats fallbackStats) {
@@ -1157,6 +1211,11 @@ public final class RtspFeedbackApiTest {
     @Override
     public void onH264AccessUnitReady(RtspH264AccessUnitReadyStats accessUnitStats) {
       accessUnitReadyStats.add(accessUnitStats);
+    }
+
+    @Override
+    public void onRtspRtpTrackActivity(RtspRtpTrackActivityStats activityStats) {
+      rtpTrackActivityStats.add(activityStats);
     }
 
     @Override

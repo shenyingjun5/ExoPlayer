@@ -809,3 +809,35 @@ commit 为 `f9ea587c33714e5c09b6f5d9a18ca9b86ece9a9f`。远端 RTSP metadata 的
 - `RtpLoadInfo.requestKeyFrame()` 与 media-period recovery 共用 MIME 判定；audio/unknown 不发送 PLI/FIR。视频 SampleQueue backlog 与视频 TCP reset 的既有低延迟行为保持不变。
 - 默认普通 RTSP 不启用 recovery policy；新增判断只在低频 feedback/reset 边界执行。没有 RTP/sample hot-path 日志、JSON、IO、锁、阻塞 callback 或逐包对象分配。
 - 测试覆盖 video/audio/unknown MIME、policy/transport gate、unknown TCP channel reset、audio SampleQueue backlog、`sampleMimeType` value object；定向 `RtspFeedbackApiTest`、完整 `:library-rtsp:testDebugUnitTest` 和 `:library-rtsp:assembleRelease` 均通过。
+
+## ExoPlayer E26 低频视频 RTP 活动事件
+
+### 2026-07-13 实施复核
+
+- `.26` 在生产 `packet diagnostics=false` 时只有首 RTP 事件，Cast-SDK 的
+  `rtspLastVideoPacketElapsedRealtimeMs` 会永久停在首包。H8 10 分钟现场在持续渲染期间因一次
+  renderer gap 使用 stale `ageMs=282610/packets=1` 误触发 no-packet rebuild；业务 watchdog
+  不能依赖逐包 diagnostics，也不能只看 renderer 活跃度。
+- 新增 `RtspDiagnosticsListener#onRtspRtpTrackActivity(RtspRtpTrackActivityStats)`。事件只在
+  `RtspBacklogRecoveryPolicy.enabled + listener != null + video MIME` 时启用，独立于
+  `setRtspPacketDiagnosticsEnabled`；audio track 永不发送该事件。
+- `RtspRtpTrackActivityStats` 提供 `trackId`、`sampleMimeType`、`transportMode`、
+  `lastPacketArrivalElapsedRealtimeMs`、session/extractor 生命周期内的 `receivedPacketCount`、
+  `lastSequenceNumber` 和 `lastRtpTimestamp`。Cast-SDK 应继续用自己的 media-source generation
+  隔离旧 listener，再以 `trackId` 更新视频 no-packet watchdog。
+- 默认节流间隔为 `500ms`，可通过
+  `RtspBacklogRecoveryPolicy.Builder#setRtpActivityNotificationIntervalMs(long)` 调整，`0` 为显式
+  关闭。首个有效视频 RTP 立即通知，随后间隔内仅更新 primitive count，不创建 stats；每个
+  extractor 最多每 500ms 创建和回调一个 stats 对象。
+- arrival time 复用 `RtpExtractor` 为 reorder cutoff 已经读取的
+  `SystemClock.elapsedRealtime()`，没有新增逐包时钟读取。默认 `listener=null` 继续走原有 listener
+  空分支，不维护活动计数、不创建对象、不回调；没有新增日志、JSON、文件/网络 IO、锁、
+  `volatile` 或跨线程阻塞。
+- 本项不修改 TCP queue、RTP reorder、WAIT_IDR、PLI/FIR、SampleQueue、`300ms` reset 阈值或
+  transport 策略。
+
+### E26 状态
+
+| ID | 状态 | 验证 |
+| --- | --- | --- |
+| E26 | 已实现并验证，待发布 `2.19.1-labi.27` | packet diagnostics off 仍通知视频活动；500ms 节流和累计准确；audio、policy disabled、interval=0 不通知；media-period 转发和值语义通过；完整 RTSP `320 tests / 0 failures / 0 errors`；release AAR 构建通过 |

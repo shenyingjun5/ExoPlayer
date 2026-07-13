@@ -34,6 +34,14 @@ public interface RtspDiagnosticsListener {
   default void onFirstRtpPacketReceived(RtpPacketStats packetStats) {}
 
   /**
+   * Called at a throttled interval while RTP packets are arriving for a video track.
+   *
+   * <p>This callback is independent from packet diagnostics. It is only enabled by an explicit
+   * low-latency backlog recovery policy and is never emitted for audio tracks.
+   */
+  default void onRtspRtpTrackActivity(RtspRtpTrackActivityStats activityStats) {}
+
+  /**
    * Called when the first complete H.264 IDR access unit with SPS/PPS available is assembled.
    *
    * <p>This is not a rendered-frame callback. It only means the RTP depacketizer has assembled a

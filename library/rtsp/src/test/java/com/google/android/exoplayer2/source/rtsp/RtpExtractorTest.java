@@ -48,6 +48,101 @@ public final class RtpExtractorTest {
     assertThat(diagnosticsListener.packetReceivedCount).isEqualTo(0);
     assertThat(diagnosticsListener.packetDequeuedCount).isEqualTo(0);
     assertThat(diagnosticsListener.packetDroppedCount).isEqualTo(0);
+    assertThat(diagnosticsListener.rtpTrackActivityStats).isEmpty();
+  }
+
+  @Test
+  public void read_lowLatencyVideoAndPacketDiagnosticsDisabled_emitsTrackActivity()
+      throws Exception {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.init(createExtractorOutput());
+    extractor.read(
+        new FakeExtractorInput.Builder().setData(createRtpPacketBytes()).build(),
+        new PositionHolder());
+
+    assertThat(diagnosticsListener.packetReceivedCount).isEqualTo(0);
+    assertThat(diagnosticsListener.rtpTrackActivityStats).hasSize(1);
+    RtspRtpTrackActivityStats activityStats = diagnosticsListener.rtpTrackActivityStats.get(0);
+    assertThat(activityStats.trackId).isEqualTo(1);
+    assertThat(activityStats.sampleMimeType).isEqualTo(MimeTypes.VIDEO_H264);
+    assertThat(activityStats.transportMode).isEqualTo(RtspTransportMode.TCP_INTERLEAVED);
+    assertThat(activityStats.receivedPacketCount).isEqualTo(1);
+    assertThat(activityStats.lastSequenceNumber).isEqualTo(10);
+    assertThat(activityStats.lastRtpTimestamp).isEqualTo(1000);
+  }
+
+  @Test
+  public void rtpTrackActivity_throttlesCallbacksAndKeepsPrimitivePacketCount() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setRtpActivityNotificationIntervalMs(500)
+                .build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.maybeNotifyRtpTrackActivityForTesting(
+        createRtpPacket(/* sequenceNumber= */ 10, /* timestamp= */ 1000),
+        /* packetArrivalTimeMs= */ 1_000);
+    extractor.maybeNotifyRtpTrackActivityForTesting(
+        createRtpPacket(/* sequenceNumber= */ 11, /* timestamp= */ 2000),
+        /* packetArrivalTimeMs= */ 1_250);
+    extractor.maybeNotifyRtpTrackActivityForTesting(
+        createRtpPacket(/* sequenceNumber= */ 12, /* timestamp= */ 3000),
+        /* packetArrivalTimeMs= */ 1_500);
+
+    assertThat(diagnosticsListener.rtpTrackActivityStats).hasSize(2);
+    assertThat(diagnosticsListener.rtpTrackActivityStats.get(0).receivedPacketCount).isEqualTo(1);
+    RtspRtpTrackActivityStats latestStats = diagnosticsListener.rtpTrackActivityStats.get(1);
+    assertThat(latestStats.receivedPacketCount).isEqualTo(3);
+    assertThat(latestStats.lastPacketArrivalElapsedRealtimeMs).isEqualTo(1_500);
+    assertThat(latestStats.lastSequenceNumber).isEqualTo(12);
+  }
+
+  @Test
+  public void rtpTrackActivity_audioTrackDoesNotRefreshVideoActivity() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractorForMimeType(
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder().setEnabled(true).build(),
+            MimeTypes.AUDIO_ALAW);
+
+    extractor.maybeNotifyRtpTrackActivityForTesting(
+        createRtpPacket(/* sequenceNumber= */ 10, /* timestamp= */ 1000),
+        /* packetArrivalTimeMs= */ 1_000);
+
+    assertThat(diagnosticsListener.rtpTrackActivityStats).isEmpty();
+  }
+
+  @Test
+  public void rtpTrackActivity_explicitZeroIntervalDisablesCallbacks() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtpExtractor extractor =
+        createExtractor(
+            diagnosticsListener,
+            RtcpFeedbackPolicy.DEFAULT,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setRtpActivityNotificationIntervalMs(0)
+                .build(),
+            /* rtspPacketDiagnosticsEnabled= */ false);
+
+    extractor.maybeNotifyRtpTrackActivityForTesting(
+        createRtpPacket(/* sequenceNumber= */ 10, /* timestamp= */ 1000),
+        /* packetArrivalTimeMs= */ 1_000);
+
+    assertThat(diagnosticsListener.rtpTrackActivityStats).isEmpty();
   }
 
   @Test
@@ -228,6 +323,31 @@ public final class RtpExtractorTest {
         rtspPacketDiagnosticsEnabled);
   }
 
+  private static RtpExtractor createExtractorForMimeType(
+      RtspDiagnosticsListener diagnosticsListener,
+      RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy,
+      String sampleMimeType) {
+    boolean isAudio = MimeTypes.isAudio(sampleMimeType);
+    Format.Builder formatBuilder = new Format.Builder().setSampleMimeType(sampleMimeType);
+    if (isAudio) {
+      formatBuilder.setSampleRate(8_000).setChannelCount(1);
+    }
+    return new RtpExtractor(
+        new RtpPayloadFormat(
+            formatBuilder.build(),
+            /* rtpPayloadType= */ isAudio ? 8 : 96,
+            /* clockRate= */ isAudio ? 8_000 : 90_000,
+            /* fmtpParameters= */ ImmutableMap.of(),
+            isAudio ? "PCMA" : RtpPayloadFormat.RTP_MEDIA_H264),
+        /* trackId= */ isAudio ? 2 : 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        diagnosticsListener,
+        /* rtcpFeedbackRequester= */ null,
+        RtcpFeedbackPolicy.DEFAULT,
+        rtspBacklogRecoveryPolicy,
+        /* rtspPacketDiagnosticsEnabled= */ false);
+  }
+
   private static RtpExtractor createExtractor(
       RtspDiagnosticsListener diagnosticsListener,
       RtcpFeedbackPolicy rtcpFeedbackPolicy,
@@ -275,20 +395,29 @@ public final class RtpExtractorTest {
         /* payloadData= */ new byte[] {0x65, 0x01, 0x02});
   }
 
-  private static byte[] createRtpPacketBytes(int sequenceNumber, long timestamp, byte[] payloadData) {
-    RtpPacket packet =
-        new RtpPacket.Builder()
-            .setMarker(true)
-            .setPayloadType((byte) 96)
-            .setSequenceNumber(sequenceNumber)
-            .setTimestamp(timestamp)
-            .setSsrc(0x12345678)
-            .setPayloadData(payloadData)
-            .build();
+  private static byte[] createRtpPacketBytes(
+      int sequenceNumber, long timestamp, byte[] payloadData) {
+    RtpPacket packet = createRtpPacket(sequenceNumber, timestamp, payloadData);
     byte[] packetBytes = new byte[12 + payloadData.length];
     assertThat(packet.writeToBuffer(packetBytes, /* offset= */ 0, packetBytes.length))
         .isEqualTo(packetBytes.length);
     return packetBytes;
+  }
+
+  private static RtpPacket createRtpPacket(int sequenceNumber, long timestamp) {
+    return createRtpPacket(sequenceNumber, timestamp, new byte[] {0x65, 0x01, 0x02});
+  }
+
+  private static RtpPacket createRtpPacket(
+      int sequenceNumber, long timestamp, byte[] payloadData) {
+    return new RtpPacket.Builder()
+        .setMarker(true)
+        .setPayloadType((byte) 96)
+        .setSequenceNumber(sequenceNumber)
+        .setTimestamp(timestamp)
+        .setSsrc(0x12345678)
+        .setPayloadData(payloadData)
+        .build();
   }
 
   private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {
@@ -297,6 +426,8 @@ public final class RtpExtractorTest {
     public int packetDequeuedCount;
     public int packetDroppedCount;
     public int waitForIdrStartedCount;
+    public final java.util.ArrayList<RtspRtpTrackActivityStats> rtpTrackActivityStats =
+        new java.util.ArrayList<>();
 
     @Override
     public void onFirstRtpPacketReceived(RtpPacketStats packetStats) {
@@ -306,6 +437,11 @@ public final class RtpExtractorTest {
     @Override
     public void onRtpPacketReceived(RtpPacketStats packetStats) {
       packetReceivedCount++;
+    }
+
+    @Override
+    public void onRtspRtpTrackActivity(RtspRtpTrackActivityStats activityStats) {
+      rtpTrackActivityStats.add(activityStats);
     }
 
     @Override

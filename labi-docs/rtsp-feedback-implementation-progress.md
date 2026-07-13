@@ -925,3 +925,27 @@ Publication:
   `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`.
 - Remote `javap` confirms public field `tcpInterleavedBacklogDepthResetMinAgeMs` and Builder method
   `setTcpInterleavedBacklogDepthResetMinAgeMs(long)`.
+
+## Low-Frequency Video RTP Activity
+
+Status: Implemented and verified; `2.19.1-labi.27` publication pending.
+
+Scope:
+
+- Added `RtspRtpTrackActivityStats` and
+  `RtspDiagnosticsListener#onRtspRtpTrackActivity(...)` for a throttled video-track RTP heartbeat
+  independent from packet diagnostics.
+- Added `RtspBacklogRecoveryPolicy.Builder#setRtpActivityNotificationIntervalMs(long)` with a
+  `500ms` default and `0` explicit disable value.
+- Gated the feature on explicit enabled recovery policy, non-null listener, and video MIME. Audio,
+  disabled/default RTSP, and listener-null sessions do not maintain state or emit callbacks.
+- Reused the packet arrival elapsed-realtime value already read by `RtpExtractor`; no new packet
+  clock reads, logs, JSON, IO, locks, volatile fields, or unbounded allocations were added.
+- Did not change queue, reorder, WAIT_IDR, feedback, SampleQueue, reset threshold, or transport
+  behavior.
+
+Verification:
+
+- Targeted `RtpExtractorTest`, `RtspRtpTrackActivityStatsTest`, and `RtspFeedbackApiTest`: passed.
+- Full `:library-rtsp:testDebugUnitTest`: `320 tests`, `0 failures`, `0 errors`.
+- `:library-rtsp:assembleRelease`: passed.

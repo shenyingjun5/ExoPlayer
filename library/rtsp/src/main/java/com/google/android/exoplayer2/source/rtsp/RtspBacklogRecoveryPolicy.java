@@ -25,6 +25,9 @@ public final class RtspBacklogRecoveryPolicy {
   /** ExoPlayer 2.19.1 RTP reordering wait, roughly one video frame. */
   public static final long DEFAULT_RTP_REORDER_WAIT_MS = 30;
 
+  /** Default interval for low-frequency video RTP activity notifications. */
+  public static final long DEFAULT_RTP_ACTIVITY_NOTIFICATION_INTERVAL_MS = 500;
+
   /** Disabled policy that preserves ExoPlayer's default RTSP behavior. */
   public static final RtspBacklogRecoveryPolicy DISABLED = new Builder().build();
 
@@ -85,6 +88,8 @@ public final class RtspBacklogRecoveryPolicy {
   public final boolean initialWaitForIdr;
   /** Whether H.264 re-enters WAIT_IDR after seek/reset. */
   public final boolean initialWaitForIdrAfterSeek;
+  /** Minimum interval between video RTP activity notifications, or {@code 0} to disable. */
+  public final long rtpActivityNotificationIntervalMs;
   /** Maximum TCP interleaved queue age in milliseconds, or {@code 0} to disable. */
   public final long maxTcpInterleavedQueueAgeMs;
   /** TCP interleaved queue safety-cap depth in RTP packets, or {@code 0} to disable. */
@@ -116,6 +121,7 @@ public final class RtspBacklogRecoveryPolicy {
     sampleQueueBacklogRecoveryThresholdMs = builder.sampleQueueBacklogRecoveryThresholdMs;
     initialWaitForIdr = builder.initialWaitForIdr;
     initialWaitForIdrAfterSeek = builder.initialWaitForIdrAfterSeek;
+    rtpActivityNotificationIntervalMs = builder.rtpActivityNotificationIntervalMs;
     maxTcpInterleavedQueueAgeMs = tcpInterleavedBacklogResetMs;
     maxTcpInterleavedQueueDepth = tcpInterleavedBacklogResetPackets;
     maxRtpReorderQueueAgeMs = rtpReorderBacklogResetMs;
@@ -170,6 +176,11 @@ public final class RtspBacklogRecoveryPolicy {
         && sampleQueueBacklogRecoveryThresholdMs > 0;
   }
 
+  /** Returns whether low-frequency video RTP activity notifications are enabled. */
+  public boolean isRtpActivityNotificationEnabled() {
+    return enabled && rtpActivityNotificationIntervalMs > 0;
+  }
+
   @Override
   public boolean equals(Object obj) {
     if (this == obj) {
@@ -195,7 +206,8 @@ public final class RtspBacklogRecoveryPolicy {
         && sampleQueueBacklogRecoverySignalEnabled == other.sampleQueueBacklogRecoverySignalEnabled
         && sampleQueueBacklogRecoveryThresholdMs == other.sampleQueueBacklogRecoveryThresholdMs
         && initialWaitForIdr == other.initialWaitForIdr
-        && initialWaitForIdrAfterSeek == other.initialWaitForIdrAfterSeek;
+        && initialWaitForIdrAfterSeek == other.initialWaitForIdrAfterSeek
+        && rtpActivityNotificationIntervalMs == other.rtpActivityNotificationIntervalMs;
   }
 
   @Override
@@ -226,6 +238,11 @@ public final class RtspBacklogRecoveryPolicy {
                     ^ (sampleQueueBacklogRecoveryThresholdMs >>> 32));
     result = 31 * result + (initialWaitForIdr ? 1 : 0);
     result = 31 * result + (initialWaitForIdrAfterSeek ? 1 : 0);
+    result =
+        31 * result
+            + (int)
+                (rtpActivityNotificationIntervalMs
+                    ^ (rtpActivityNotificationIntervalMs >>> 32));
     return result;
   }
 
@@ -247,11 +264,13 @@ public final class RtspBacklogRecoveryPolicy {
     private long sampleQueueBacklogRecoveryThresholdMs;
     private boolean initialWaitForIdr;
     private boolean initialWaitForIdrAfterSeek;
+    private long rtpActivityNotificationIntervalMs;
 
     public Builder() {
       tcpInterleavedBacklogDepthResetMinAgeMs = -1;
       tcpInterleavedRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
       udpRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
+      rtpActivityNotificationIntervalMs = DEFAULT_RTP_ACTIVITY_NOTIFICATION_INTERVAL_MS;
     }
 
     /** Sets whether low-latency backlog recovery is enabled. */
@@ -390,6 +409,20 @@ public final class RtspBacklogRecoveryPolicy {
     @CanIgnoreReturnValue
     public Builder setInitialWaitForIdrAfterSeek(boolean initialWaitForIdrAfterSeek) {
       this.initialWaitForIdrAfterSeek = initialWaitForIdrAfterSeek;
+      return this;
+    }
+
+    /**
+     * Sets the minimum interval between low-frequency video RTP activity notifications.
+     *
+     * <p>Set to {@code 0} to disable the notifications. Notifications also require this policy to
+     * be enabled and a diagnostics listener to be registered.
+     */
+    @CanIgnoreReturnValue
+    public Builder setRtpActivityNotificationIntervalMs(
+        long rtpActivityNotificationIntervalMs) {
+      checkArgument(rtpActivityNotificationIntervalMs >= 0);
+      this.rtpActivityNotificationIntervalMs = rtpActivityNotificationIntervalMs;
       return this;
     }
 

@@ -29,6 +29,7 @@ import com.google.android.exoplayer2.extractor.PositionHolder;
 import com.google.android.exoplayer2.extractor.SeekMap;
 import com.google.android.exoplayer2.source.rtsp.reader.DefaultRtpPayloadReaderFactory;
 import com.google.android.exoplayer2.source.rtsp.reader.RtpPayloadReader;
+import com.google.android.exoplayer2.util.MimeTypes;
 import com.google.android.exoplayer2.util.ParsableByteArray;
 import java.io.IOException;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
@@ -55,6 +56,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final long rtpReorderWaitMs;
   private final boolean rtspPacketDiagnosticsEnabled;
+  private final boolean rtpActivityNotificationsEnabled;
+  @Nullable private final String sampleMimeType;
+  private final long rtpActivityNotificationIntervalMs;
   private final boolean payloadReaderDiscontinuityNotificationsEnabled;
   private final Object lock;
   private final RtpPacketReorderingQueue reorderingQueue;
@@ -65,6 +69,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private volatile int firstSequenceNumber;
   private volatile int lastSsrc;
   private long lastExtractorReadElapsedRealtimeMs;
+  private long lastRtpActivityNotificationElapsedRealtimeMs;
+  private long rtpActivityPacketCount;
 
   @GuardedBy("lock")
   private boolean isSeekPending;
@@ -107,6 +113,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.rtspBacklogRecoveryPolicy = rtspBacklogRecoveryPolicy;
     rtpReorderWaitMs = rtspBacklogRecoveryPolicy.getRtpReorderWaitMs(transportMode);
     this.rtspPacketDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
+    sampleMimeType = payloadFormat.format.sampleMimeType;
+    rtpActivityNotificationsEnabled =
+        rtspDiagnosticsListener != null
+            && rtspBacklogRecoveryPolicy.isRtpActivityNotificationEnabled()
+            && MimeTypes.isVideo(sampleMimeType);
+    rtpActivityNotificationIntervalMs =
+        rtspBacklogRecoveryPolicy.rtpActivityNotificationIntervalMs;
     payloadReaderDiscontinuityNotificationsEnabled =
         rtcpFeedbackPolicy.sequenceGapRequestThreshold > 0
             || rtcpFeedbackPolicy.requestKeyFrameOnQueueReset
@@ -139,6 +152,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     firstSequenceNumber = C.INDEX_UNSET;
     lastSsrc = C.INDEX_UNSET;
     lastExtractorReadElapsedRealtimeMs = C.TIME_UNSET;
+    lastRtpActivityNotificationElapsedRealtimeMs = C.TIME_UNSET;
     nextRtpTimestamp = C.TIME_UNSET;
     playbackStartTimeUs = C.TIME_UNSET;
   }
@@ -217,12 +231,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     long packetArrivalTimeMs = SystemClock.elapsedRealtime();
     long extractorReadStallMs = 0;
-    if (rtspDiagnosticsListener != null
-        && rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled()) {
-      if (lastExtractorReadElapsedRealtimeMs != C.TIME_UNSET) {
-        extractorReadStallMs = Math.max(0, packetArrivalTimeMs - lastExtractorReadElapsedRealtimeMs);
+    if (rtspDiagnosticsListener != null) {
+      if (rtpActivityNotificationsEnabled) {
+        maybeNotifyRtpTrackActivity(packet, packetArrivalTimeMs);
       }
-      lastExtractorReadElapsedRealtimeMs = packetArrivalTimeMs;
+      if (rtspBacklogRecoveryPolicy.isRtpReorderBacklogRecoveryEnabled()) {
+        if (lastExtractorReadElapsedRealtimeMs != C.TIME_UNSET) {
+          extractorReadStallMs =
+              Math.max(0, packetArrivalTimeMs - lastExtractorReadElapsedRealtimeMs);
+        }
+        lastExtractorReadElapsedRealtimeMs = packetArrivalTimeMs;
+      }
     }
     long packetCutoffTimeMs = getCutoffTimeMs(packetArrivalTimeMs);
     boolean emitPacketDiagnostics =
@@ -344,6 +363,33 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /* package */ long getRtpReorderWaitMsForTesting() {
     return rtpReorderWaitMs;
+  }
+
+  /* package */ void maybeNotifyRtpTrackActivityForTesting(
+      RtpPacket packet, long packetArrivalTimeMs) {
+    if (rtpActivityNotificationsEnabled) {
+      maybeNotifyRtpTrackActivity(packet, packetArrivalTimeMs);
+    }
+  }
+
+  private void maybeNotifyRtpTrackActivity(RtpPacket packet, long packetArrivalTimeMs) {
+    rtpActivityPacketCount++;
+    if (lastRtpActivityNotificationElapsedRealtimeMs != C.TIME_UNSET
+        && packetArrivalTimeMs - lastRtpActivityNotificationElapsedRealtimeMs
+            < rtpActivityNotificationIntervalMs) {
+      return;
+    }
+    lastRtpActivityNotificationElapsedRealtimeMs = packetArrivalTimeMs;
+    checkNotNull(rtspDiagnosticsListener)
+        .onRtspRtpTrackActivity(
+            new RtspRtpTrackActivityStats(
+                trackId,
+                sampleMimeType,
+                transportMode,
+                packetArrivalTimeMs,
+                rtpActivityPacketCount,
+                packet.sequenceNumber,
+                packet.timestamp));
   }
 
   private RtpPacketStats createPacketStats(RtpPacket packet, long packetArrivalTimeMs) {

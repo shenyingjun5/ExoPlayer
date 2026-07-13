@@ -882,3 +882,29 @@ Publication:
   isolated reruns without touching RTSP code. Publication therefore followed the existing release
   policy and skipped duplicate `test/lint` tasks after the targeted/full RTSP tests and release AAR
   build had passed.
+
+## E24/T64 TCP Interleaved Depth Reset Age Gate
+
+Status: Implemented and verified; publication pending.
+
+Review conclusion:
+
+- A TCP interleaved queue depth of 240 packets is not sufficient evidence of sustained backlog.
+  The H8 `240 packets / 106ms` sample is consistent with a valid high-bitrate IDR or motion burst.
+- Keep the configured age reset as an independent hard trigger. Require depth and a minimum oldest
+  packet age together for the packet safety-cap branch.
+- Add `tcpInterleavedBacklogDepthResetMinAgeMs` and
+  `Builder#setTcpInterleavedBacklogDepthResetMinAgeMs(long)`. When unset, the value inherits
+  `tcpInterleavedBacklogResetMs`, so existing `300ms/240 packets` callers gain the safe behavior
+  without choosing a new threshold. Zero explicitly disables the depth branch.
+
+Tests and boundaries:
+
+- Deterministic tests cover `240 packets / 106ms` without reset, packet + configured minimum-age
+  reset, the independent `300ms` age reset, disabled/depth-only behavior, and reset diagnostics.
+- Targeted `TransferRtpDataChannelTest` and `RtspFeedbackApiTest`, full
+  `:library-rtsp:testDebugUnitTest`, and `:library-rtsp:assembleRelease` pass.
+- The ordinary RTSP path still uses its original `byte[]` queue and returns before clock reads or
+  envelope allocation. The extra primitive comparisons run only in the explicitly enabled TCP
+  backlog-recovery path. No UDP, WAIT_IDR, feedback, SampleQueue, audio, logging, IO, or locking
+  behavior changes.

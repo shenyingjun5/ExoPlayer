@@ -52,8 +52,13 @@ public final class RtspBacklogRecoveryPolicy {
   public final long tcpInterleavedBacklogWarnMs;
   /** TCP interleaved queue reset age in milliseconds, or {@code 0} to disable. */
   public final long tcpInterleavedBacklogResetMs;
-  /** TCP interleaved queue reset depth in RTP packets, or {@code 0} to disable. */
+  /** TCP interleaved queue safety-cap depth in RTP packets, or {@code 0} to disable. */
   public final int tcpInterleavedBacklogResetPackets;
+  /**
+   * Minimum oldest-packet age required for a TCP interleaved queue depth reset, or {@code 0} to
+   * disable depth-based reset.
+   */
+  public final long tcpInterleavedBacklogDepthResetMinAgeMs;
   /** RTP reordering queue warning span in milliseconds, or {@code 0} to disable. */
   public final long rtpReorderBacklogWarnMs;
   /** RTP reordering queue reset span/age in milliseconds, or {@code 0} to disable. */
@@ -82,7 +87,7 @@ public final class RtspBacklogRecoveryPolicy {
   public final boolean initialWaitForIdrAfterSeek;
   /** Maximum TCP interleaved queue age in milliseconds, or {@code 0} to disable. */
   public final long maxTcpInterleavedQueueAgeMs;
-  /** Maximum TCP interleaved queue depth in RTP packets, or {@code 0} to disable. */
+  /** TCP interleaved queue safety-cap depth in RTP packets, or {@code 0} to disable. */
   public final int maxTcpInterleavedQueueDepth;
   /** Maximum RTP reordering queue age in milliseconds, or {@code 0} to disable. */
   public final long maxRtpReorderQueueAgeMs;
@@ -96,6 +101,10 @@ public final class RtspBacklogRecoveryPolicy {
     tcpInterleavedBacklogWarnMs = builder.tcpInterleavedBacklogWarnMs;
     tcpInterleavedBacklogResetMs = builder.tcpInterleavedBacklogResetMs;
     tcpInterleavedBacklogResetPackets = builder.tcpInterleavedBacklogResetPackets;
+    tcpInterleavedBacklogDepthResetMinAgeMs =
+        builder.tcpInterleavedBacklogDepthResetMinAgeMs >= 0
+            ? builder.tcpInterleavedBacklogDepthResetMinAgeMs
+            : tcpInterleavedBacklogResetMs;
     rtpReorderBacklogWarnMs = builder.rtpReorderBacklogWarnMs;
     rtpReorderBacklogResetMs = builder.rtpReorderBacklogResetMs;
     rtpReorderBacklogResetPackets = builder.rtpReorderBacklogResetPackets;
@@ -116,7 +125,10 @@ public final class RtspBacklogRecoveryPolicy {
 
   /** Returns whether TCP interleaved backlog recovery is enabled. */
   public boolean isTcpInterleavedBacklogRecoveryEnabled() {
-    return enabled && (maxTcpInterleavedQueueAgeMs > 0 || maxTcpInterleavedQueueDepth > 0);
+    return enabled
+        && (maxTcpInterleavedQueueAgeMs > 0
+            || (maxTcpInterleavedQueueDepth > 0
+                && tcpInterleavedBacklogDepthResetMinAgeMs > 0));
   }
 
   /** Returns whether RTP reordering queue backlog recovery is enabled. */
@@ -171,6 +183,8 @@ public final class RtspBacklogRecoveryPolicy {
         && tcpInterleavedBacklogWarnMs == other.tcpInterleavedBacklogWarnMs
         && tcpInterleavedBacklogResetMs == other.tcpInterleavedBacklogResetMs
         && tcpInterleavedBacklogResetPackets == other.tcpInterleavedBacklogResetPackets
+        && tcpInterleavedBacklogDepthResetMinAgeMs
+            == other.tcpInterleavedBacklogDepthResetMinAgeMs
         && rtpReorderBacklogWarnMs == other.rtpReorderBacklogWarnMs
         && rtpReorderBacklogResetMs == other.rtpReorderBacklogResetMs
         && rtpReorderBacklogResetPackets == other.rtpReorderBacklogResetPackets
@@ -190,6 +204,11 @@ public final class RtspBacklogRecoveryPolicy {
     result = 31 * result + (int) (tcpInterleavedBacklogWarnMs ^ (tcpInterleavedBacklogWarnMs >>> 32));
     result = 31 * result + (int) (tcpInterleavedBacklogResetMs ^ (tcpInterleavedBacklogResetMs >>> 32));
     result = 31 * result + tcpInterleavedBacklogResetPackets;
+    result =
+        31 * result
+            + (int)
+                (tcpInterleavedBacklogDepthResetMinAgeMs
+                    ^ (tcpInterleavedBacklogDepthResetMinAgeMs >>> 32));
     result = 31 * result + (int) (rtpReorderBacklogWarnMs ^ (rtpReorderBacklogWarnMs >>> 32));
     result = 31 * result + (int) (rtpReorderBacklogResetMs ^ (rtpReorderBacklogResetMs >>> 32));
     result = 31 * result + rtpReorderBacklogResetPackets;
@@ -216,6 +235,7 @@ public final class RtspBacklogRecoveryPolicy {
     private long tcpInterleavedBacklogWarnMs;
     private long tcpInterleavedBacklogResetMs;
     private int tcpInterleavedBacklogResetPackets;
+    private long tcpInterleavedBacklogDepthResetMinAgeMs;
     private long rtpReorderBacklogWarnMs;
     private long rtpReorderBacklogResetMs;
     private int rtpReorderBacklogResetPackets;
@@ -229,6 +249,7 @@ public final class RtspBacklogRecoveryPolicy {
     private boolean initialWaitForIdrAfterSeek;
 
     public Builder() {
+      tcpInterleavedBacklogDepthResetMinAgeMs = -1;
       tcpInterleavedRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
       udpRtpReorderWaitMs = DEFAULT_RTP_REORDER_WAIT_MS;
     }
@@ -256,11 +277,26 @@ public final class RtspBacklogRecoveryPolicy {
       return this;
     }
 
-    /** Sets the TCP interleaved backlog reset depth in RTP packets. */
+    /** Sets the TCP interleaved backlog safety-cap depth in RTP packets. */
     @CanIgnoreReturnValue
     public Builder setTcpInterleavedBacklogResetPackets(int tcpInterleavedBacklogResetPackets) {
       checkArgument(tcpInterleavedBacklogResetPackets >= 0);
       this.tcpInterleavedBacklogResetPackets = tcpInterleavedBacklogResetPackets;
+      return this;
+    }
+
+    /**
+     * Sets the minimum oldest-packet age required for a TCP interleaved queue depth reset.
+     *
+     * <p>If unset, this inherits {@link #setTcpInterleavedBacklogResetMs(long)}. Set to {@code 0}
+     * to disable depth-based reset while keeping the age-based hard reset.
+     */
+    @CanIgnoreReturnValue
+    public Builder setTcpInterleavedBacklogDepthResetMinAgeMs(
+        long tcpInterleavedBacklogDepthResetMinAgeMs) {
+      checkArgument(tcpInterleavedBacklogDepthResetMinAgeMs >= 0);
+      this.tcpInterleavedBacklogDepthResetMinAgeMs =
+          tcpInterleavedBacklogDepthResetMinAgeMs;
       return this;
     }
 

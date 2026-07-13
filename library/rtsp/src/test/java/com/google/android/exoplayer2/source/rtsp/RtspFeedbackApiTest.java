@@ -102,6 +102,7 @@ public final class RtspFeedbackApiTest {
             .setEnabled(true)
             .setTcpInterleavedBacklogResetMs(300)
             .setTcpInterleavedBacklogResetPackets(240)
+            .setTcpInterleavedBacklogDepthResetMinAgeMs(200)
             .setRtpReorderBacklogResetMs(200)
             .setRtpReorderBacklogResetPackets(240)
             .setTcpInterleavedRtpReorderWaitMs(2)
@@ -123,6 +124,11 @@ public final class RtspFeedbackApiTest {
     assertThat(mediaSource.getRtspFeedbackListener()).isSameInstanceAs(feedbackListener);
     assertThat(mediaSource.getRtcpFeedbackPolicy()).isEqualTo(feedbackPolicy);
     assertThat(mediaSource.getRtspBacklogRecoveryPolicy()).isEqualTo(backlogRecoveryPolicy);
+    assertThat(
+            mediaSource
+                .getRtspBacklogRecoveryPolicy()
+                .tcpInterleavedBacklogDepthResetMinAgeMs)
+        .isEqualTo(200);
     assertThat(mediaSource.getRtspPacketDiagnosticsEnabled()).isTrue();
 
     RtspMediaPeriod mediaPeriod =
@@ -163,6 +169,37 @@ public final class RtspFeedbackApiTest {
         .isEqualTo(RtspBacklogRecoveryPolicy.DEFAULT_RTP_REORDER_WAIT_MS);
     assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.isMediaPeriodRecoverySignalEnabled())
         .isFalse();
+    assertThat(RtspBacklogRecoveryPolicy.LOW_LATENCY.tcpInterleavedBacklogDepthResetMinAgeMs)
+        .isEqualTo(RtspBacklogRecoveryPolicy.LOW_LATENCY.tcpInterleavedBacklogResetMs);
+  }
+
+  @Test
+  public void rtspBacklogRecoveryPolicy_depthMinimumAgeParticipatesInValueSemantics() {
+    RtspBacklogRecoveryPolicy inheritedMinimumAgePolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedBacklogResetMs(300)
+            .setTcpInterleavedBacklogResetPackets(240)
+            .build();
+    RtspBacklogRecoveryPolicy explicitSameMinimumAgePolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedBacklogResetMs(300)
+            .setTcpInterleavedBacklogResetPackets(240)
+            .setTcpInterleavedBacklogDepthResetMinAgeMs(300)
+            .build();
+    RtspBacklogRecoveryPolicy earlierMinimumAgePolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setTcpInterleavedBacklogResetMs(300)
+            .setTcpInterleavedBacklogResetPackets(240)
+            .setTcpInterleavedBacklogDepthResetMinAgeMs(200)
+            .build();
+
+    assertThat(inheritedMinimumAgePolicy).isEqualTo(explicitSameMinimumAgePolicy);
+    assertThat(inheritedMinimumAgePolicy.hashCode())
+        .isEqualTo(explicitSameMinimumAgePolicy.hashCode());
+    assertThat(inheritedMinimumAgePolicy).isNotEqualTo(earlierMinimumAgePolicy);
   }
 
   @Test

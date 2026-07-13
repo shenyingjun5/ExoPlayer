@@ -89,11 +89,12 @@ public class TransferRtpDataChannelTest {
             new RtspBacklogRecoveryPolicy.Builder()
                 .setEnabled(true)
                 .setTcpInterleavedBacklogResetPackets(2)
+                .setTcpInterleavedBacklogDepthResetMinAgeMs(10)
                 .build());
     byte[] buffer = new byte[8];
 
-    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
-    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 0);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 10);
 
     assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, buffer.length))
         .isEqualTo(C.RESULT_END_OF_INPUT);
@@ -120,13 +121,14 @@ public class TransferRtpDataChannelTest {
             new RtspBacklogRecoveryPolicy.Builder()
                 .setEnabled(true)
                 .setTcpInterleavedBacklogResetPackets(2)
+                .setTcpInterleavedBacklogDepthResetMinAgeMs(10)
                 .build());
 
-    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 0);
     assertThat(transferRtpDataChannel.read(new byte[4], /* offset= */ 0, /* length= */ 4))
         .isEqualTo(4);
-    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
-    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4));
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 100);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 110);
 
     assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
     assertThat(diagnosticsListener.lastStats.dataChannelReadInProgress).isFalse();
@@ -171,6 +173,7 @@ public class TransferRtpDataChannelTest {
             new RtspBacklogRecoveryPolicy.Builder()
                 .setEnabled(true)
                 .setTcpInterleavedBacklogResetPackets(3)
+                .setTcpInterleavedBacklogDepthResetMinAgeMs(10)
                 .build());
     byte[] firstPacket = buildTestData(4);
     byte[] secondPacket = buildTestData(4);
@@ -196,6 +199,7 @@ public class TransferRtpDataChannelTest {
             new RtspBacklogRecoveryPolicy.Builder()
                 .setEnabled(true)
                 .setTcpInterleavedBacklogResetPackets(2)
+                .setTcpInterleavedBacklogDepthResetMinAgeMs(10)
                 .build());
     byte[] packetAfterReset = buildTestData(4);
     byte[] buffer = new byte[4];
@@ -207,6 +211,112 @@ public class TransferRtpDataChannelTest {
     assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
     assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
     assertThat(buffer).isEqualTo(packetAfterReset);
+  }
+
+  @Test
+  public void backlogRecovery_packetLimitAt106Ms_doesNotResetBeforeInheritedMinimumAge() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetMs(300)
+                .setTcpInterleavedBacklogResetPackets(240)
+                .build());
+    byte[] packet = buildTestData(4);
+
+    for (int i = 0; i < 239; i++) {
+      transferRtpDataChannel.onInterleavedBinaryDataReceived(packet, /* arrivalMs= */ 0);
+    }
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(packet, /* arrivalMs= */ 106);
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(0);
+    assertThat(transferRtpDataChannel.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
+    assertThat(transferRtpDataChannel.read(new byte[4], /* offset= */ 0, /* length= */ 4))
+        .isEqualTo(4);
+  }
+
+  @Test
+  public void backlogRecovery_packetLimitWithConfiguredMinimumAge_resetsAndReportsStats() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetMs(300)
+                .setTcpInterleavedBacklogResetPackets(240)
+                .setTcpInterleavedBacklogDepthResetMinAgeMs(100)
+                .build());
+    byte[] packet = buildTestData(4);
+
+    for (int i = 0; i < 239; i++) {
+      transferRtpDataChannel.onInterleavedBinaryDataReceived(packet, /* arrivalMs= */ 0);
+    }
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(packet, /* arrivalMs= */ 106);
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastStats.queueDepth).isEqualTo(240);
+    assertThat(diagnosticsListener.lastStats.droppedPacketCount).isEqualTo(240);
+    assertThat(diagnosticsListener.lastStats.oldestPacketAgeMs).isEqualTo(106);
+    assertThat(diagnosticsListener.lastStats.queueSpanMs).isEqualTo(106);
+    assertThat(transferRtpDataChannel.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.QUEUE_RESET);
+  }
+
+  @Test
+  public void backlogRecovery_ageLimitStillResetsBelowPacketLimit() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            diagnosticsListener,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetMs(300)
+                .setTcpInterleavedBacklogResetPackets(240)
+                .build());
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 0);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(buildTestData(4), /* arrivalMs= */ 300);
+
+    assertThat(diagnosticsListener.backlogResetCount).isEqualTo(1);
+    assertThat(diagnosticsListener.lastStats.queueDepth).isEqualTo(2);
+    assertThat(diagnosticsListener.lastStats.oldestPacketAgeMs).isEqualTo(300);
+    assertThat(diagnosticsListener.lastStats.queueSpanMs).isEqualTo(300);
+  }
+
+  @Test
+  public void backlogRecovery_depthOnlyWithoutMinimumAge_doesNotChangeDefaultQueueBehavior() {
+    TransferRtpDataChannel transferRtpDataChannel =
+        new TransferRtpDataChannel(
+            /* trackId= */ 3,
+            /* pollTimeoutMs= */ 0,
+            /* rtspDiagnosticsListener= */ null,
+            new RtspBacklogRecoveryPolicy.Builder()
+                .setEnabled(true)
+                .setTcpInterleavedBacklogResetPackets(2)
+                .build());
+    byte[] firstPacket = buildTestData(4);
+    byte[] secondPacket = buildTestData(4);
+    byte[] buffer = new byte[4];
+
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(firstPacket);
+    transferRtpDataChannel.onInterleavedBinaryDataReceived(secondPacket);
+
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(firstPacket);
+    assertThat(transferRtpDataChannel.read(buffer, /* offset= */ 0, /* length= */ 4)).isEqualTo(4);
+    assertThat(buffer).isEqualTo(secondPacket);
+    assertThat(transferRtpDataChannel.getAndClearPendingDiscontinuityReason())
+        .isEqualTo(RtcpFeedbackReason.UNKNOWN);
   }
 
   @Test

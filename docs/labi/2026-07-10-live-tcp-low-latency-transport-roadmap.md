@@ -705,6 +705,33 @@ duration: 2min smoke / 10min trend / 30min stability
 - Code review 已修复：不完整 AU 后误接收 P 帧、throttled 请求覆盖原 scheduled requestId、`idr_emitted` 未进入 eventCount、Windows gate 永不解除、旧 media-period signal 误重建新 session 等边界。
 - T27 sequence wrap、T18 30 分钟正常网、T20 普通 RTSP隔离和 T33 SampleQueue backlog 恢复边界已完成；T19 弱网矩阵尚未执行，当前不能宣称全部弱网产品验收完成。
 
+## ExoPlayer E24/T64 TCP depth reset 最小包龄
+
+### 2026-07-13 实施复核
+
+- H8 现场的 `queueDepth=240, oldestAgeMs=106, queueSpanMs=106` 来自
+  `TransferRtpDataChannel.shouldFlushBacklog()` 的 `age OR depth` 条件。1080p/7Mbps 的 IDR
+  或高运动 burst 可以在约 100ms 内达到 240 个 RTP packet；depth 单独触发不能证明消费端
+  持续滞留，会无谓进入 `QUEUE_RESET -> WAIT_IDR -> ACTION_REBUILD_REQUIRED`。
+- 保留 `oldestAge >= tcpInterleavedBacklogResetMs` 的独立硬触发，不放宽生产 `300ms`。
+  depth 分支改为同时满足 `queueDepth >= tcpInterleavedBacklogResetPackets` 和
+  `oldestAge >= tcpInterleavedBacklogDepthResetMinAgeMs`。
+- 新 Builder API：
+  `setTcpInterleavedBacklogDepthResetMinAgeMs(long)`。未调用时继承
+  `tcpInterleavedBacklogResetMs`，不引入新的猜测阈值；显式设为 `0` 可关闭 depth 分支而保留
+  age 硬触发。当前 Cast 配置 `resetMs=300/resetPackets=240` 即使不调用新 API，也不会在
+  `240 packets / 106ms` reset。
+- 变更只存在于显式 `RtspBacklogRecoveryPolicy.enabled` 的 TCP interleaved envelope 分支。
+  普通 `EXOPLAYER_DEFAULT + DISABLED + listener null + packet diagnostics false` 仍直接写原始
+  `byte[]` queue，不读取时钟、不创建 envelope、不执行新增比较。UDP、RTP reorder、WAIT_IDR、
+  PLI/FIR、SampleQueue 和音频恢复判断均未修改。
+
+### E24 状态
+
+| ID | 状态 | 验证 |
+| --- | --- | --- |
+| E24/T64 | 已实现并验证，待发布 | `240 packets / 106ms` 不 reset；packet + 显式 minimum-age reset；`age=300ms` 独立 reset；depth-only/default 不改变原队列行为；reset stats 字段准确；完整 RTSP unit test 和 release AAR 构建通过 |
+
 ## ExoPlayer T35/T36 实施复核/进展
 
 ### 2026-07-11 方案复核

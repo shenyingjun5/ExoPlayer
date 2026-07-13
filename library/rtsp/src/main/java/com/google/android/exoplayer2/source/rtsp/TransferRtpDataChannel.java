@@ -278,10 +278,16 @@ import java.util.concurrent.LinkedBlockingQueue;
   }
 
   private boolean shouldFlushBacklog(int queueDepth, long oldestPacketAgeMs) {
-    return (rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth > 0
-            && queueDepth >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth)
-        || (rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs > 0
-            && oldestPacketAgeMs >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs);
+    boolean ageLimitReached =
+        rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs > 0
+            && oldestPacketAgeMs >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueAgeMs;
+    boolean depthLimitReached =
+        rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth > 0
+            && rtspBacklogRecoveryPolicy.tcpInterleavedBacklogDepthResetMinAgeMs > 0
+            && queueDepth >= rtspBacklogRecoveryPolicy.maxTcpInterleavedQueueDepth
+            && oldestPacketAgeMs
+                >= rtspBacklogRecoveryPolicy.tcpInterleavedBacklogDepthResetMinAgeMs;
+    return ageLimitReached || depthLimitReached;
   }
 
   private long getOldestPacketAgeMs(long nowElapsedRealtimeMs) {

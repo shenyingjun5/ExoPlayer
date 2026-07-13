@@ -822,7 +822,7 @@ Publication:
 
 ## FORCE_TCP Content Profile Recovery Isolation
 
-Status: Implemented and verified; publication target `2.19.1-labi.25`.
+Status: Implemented, verified and released as `2.19.1-labi.25`.
 
 Review conclusion:
 
@@ -856,3 +856,29 @@ Tests:
 - Configured hard thresholds `800ms`, `1200ms` and `4000ms` trigger at the exact boundary.
 - Targeted `RtspFeedbackApiTest` and `DefaultLoadControlTest` pass.
 - Full `:library-rtsp:testDebugUnitTest` and `:library-rtsp:assembleRelease` pass.
+
+Publication:
+
+- Source commit/tag: `e64aa346f12385b6e66c7be33eebbd89c7f63a2d`,
+  `exoplayer-rtsp-2.19.1-labi.25`.
+- GitHub Pages commit: `9ee4572aaa2bdd697fc5f341a034b9b8afb1ad47`.
+- Published modules: `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
+  `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`, `exoplayer-core`,
+  `exoplayer-hls`, `exoplayer-rtsp`.
+- Remote core/HLS/RTSP POM and AAR requests returned HTTP 200; RTSP metadata reports
+  `latest/release=2.19.1-labi.25`.
+- Remote SHA256:
+  - RTSP AAR: `f5b570950ba82c1df3b00f63cffbf4e5544b4322afe3f89ee20f030ce218cfe3`.
+  - RTSP POM: `0bfe6f201525b45b4ba68c57c7ad72b0e16674ed14930321695e7a69b6505e75`.
+  - Core AAR: `a48d0d62704e597a1221d4f7e02addbc1bf4ce32a8f7985c8b0b3afd7b6813b4`.
+  - HLS AAR: `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`.
+- Remote `javap` confirms the existing recovery API surface:
+  `setRtspBacklogRecoveryPolicy`, `setSampleQueueBacklogRecoverySignalEnabled`,
+  `setSampleQueueBacklogRecoveryThresholdMs`, `setMediaPeriodRecoverySignalEnabled`, and
+  `onRtspMediaPeriodRecoveryRequired`.
+- The first all-module publish dependency run executed 4,852 core tests and hit two existing
+  asynchronous timeout failures in `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`. Both failed again in
+  isolated reruns without touching RTSP code. Publication therefore followed the existing release
+  policy and skipped duplicate `test/lint` tasks after the targeted/full RTSP tests and release AAR
+  build had passed.

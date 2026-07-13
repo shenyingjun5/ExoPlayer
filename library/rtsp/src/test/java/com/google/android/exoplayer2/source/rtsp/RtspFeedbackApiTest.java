@@ -451,7 +451,8 @@ public final class RtspFeedbackApiTest {
   }
 
   @Test
-  public void sampleQueueBacklogRecoverySignal_packetDiagnosticsDisabledDoesNotTrigger() {
+  public void
+      sampleQueueBacklogRecoverySignal_packetDiagnosticsDisabledStillEmitsLowFrequencySignal() {
     CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
     RtspBacklogRecoveryPolicy policy =
         new RtspBacklogRecoveryPolicy.Builder()
@@ -478,8 +479,40 @@ public final class RtspFeedbackApiTest {
         /* sampleQueueBufferedAheadMs= */ 1300,
         /* mediaPeriodBufferedAheadMs= */ 1300);
 
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_policyDisabledDoesNotTrigger() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 4000,
+        /* mediaPeriodBufferedAheadMs= */ 4000);
+
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
     mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_respectsConfiguredProfileThresholds() {
+    assertSampleQueueBacklogThreshold(/* thresholdMs= */ 800);
+    assertSampleQueueBacklogThreshold(/* thresholdMs= */ 1200);
+    assertSampleQueueBacklogThreshold(/* thresholdMs= */ 4000);
   }
 
   @Test
@@ -1028,6 +1061,47 @@ public final class RtspFeedbackApiTest {
     feedbackListener.onRtcpFeedbackThrottled(feedbackRequest);
     feedbackListener.onRtcpFeedbackSent(feedbackRequest);
     feedbackListener.onRtcpFeedbackSendFailed(feedbackRequest, new Exception("test"));
+  }
+
+  private static void assertSampleQueueBacklogThreshold(long thresholdMs) {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(thresholdMs)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    RtspMediaPeriod mediaPeriod =
+        (RtspMediaPeriod)
+            mediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ thresholdMs - 1,
+        /* mediaPeriodBufferedAheadMs= */ thresholdMs - 1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* trackId= */ 1,
+        RtspTransportMode.TCP_INTERLEAVED,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ thresholdMs,
+        /* mediaPeriodBufferedAheadMs= */ thresholdMs);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(0).sampleQueueBufferedAheadMs)
+        .isEqualTo(thresholdMs);
+
+    mediaSource.releasePeriod(mediaPeriod);
   }
 
   private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {

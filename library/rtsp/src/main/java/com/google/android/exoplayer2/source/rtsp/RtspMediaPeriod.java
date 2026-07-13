@@ -597,39 +597,63 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         && !buffer.isEndOfStream()
         && (readFlags & SampleStream.FLAG_PEEK) == 0
         && (readFlags & SampleStream.FLAG_OMIT_SAMPLE_DATA) == 0
-        && rtspDiagnosticsListener != null
-        && rtspPacketDiagnosticsEnabled) {
-      long readElapsedRealtimeMs = SystemClock.elapsedRealtime();
-      SampleRtpTimestampLookupResult mappingResult =
-          lookupSampleRtpTimestampForDiagnostics(loaderWrapper.loadInfo.trackId, buffer.timeUs);
+        && rtspDiagnosticsListener != null) {
+      boolean sampleDiagnosticsEnabled = rtspPacketDiagnosticsEnabled;
+      boolean sampleQueueBacklogRecoveryEnabled =
+          !sampleQueueBacklogRecoverySignaled
+              && rtspBacklogRecoveryPolicy.isSampleQueueBacklogRecoverySignalEnabled();
+      if (!sampleDiagnosticsEnabled && !sampleQueueBacklogRecoveryEnabled) {
+        return result;
+      }
+      String sampleMimeType = loaderWrapper.loadInfo.mediaTrack.payloadFormat.format.sampleMimeType;
+      sampleQueueBacklogRecoveryEnabled &= MimeTypes.isVideo(sampleMimeType);
+      if (!sampleDiagnosticsEnabled && !sampleQueueBacklogRecoveryEnabled) {
+        return result;
+      }
       long sampleQueueBufferedAheadMs =
           getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs);
-      long mediaPeriodBufferedAheadMs = getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs);
-      rtspDiagnosticsListener.onRtspSampleRead(
-          new RtspSampleReadStats(
-              loaderWrapper.loadInfo.trackId,
-              sampleQueueIndex,
-              loaderWrapper.loadInfo.mediaTrack.payloadFormat.format.sampleMimeType,
-              buffer.timeUs,
-              mappingResult.rtpTimestamp,
-              mappingResult.status,
-              readElapsedRealtimeMs,
-              sampleQueueBufferedAheadMs,
-              mediaPeriodBufferedAheadMs));
-      rtspDiagnosticsListener.onRtspDecoderInputQueued(
-          new RtspDecoderInputQueuedStats(
-              loaderWrapper.loadInfo.trackId,
-              sampleQueueIndex,
-              buffer.timeUs,
-              mappingResult.rtpTimestamp,
-              mappingResult.status,
-              readElapsedRealtimeMs));
-      maybeNotifySampleQueueBacklogRecoveryRequired(
-          loaderWrapper.loadInfo.trackId,
-          loaderWrapper.loadInfo.transportMode,
-          loaderWrapper.loadInfo.mediaTrack.payloadFormat.format.sampleMimeType,
-          sampleQueueBufferedAheadMs,
-          mediaPeriodBufferedAheadMs);
+      long mediaPeriodBufferedAheadMs = C.TIME_UNSET;
+      if (sampleDiagnosticsEnabled
+          || (sampleQueueBacklogRecoveryEnabled
+              && sampleQueueBufferedAheadMs != C.TIME_UNSET
+              && sampleQueueBufferedAheadMs
+                  >= rtspBacklogRecoveryPolicy.sampleQueueBacklogRecoveryThresholdMs)) {
+        mediaPeriodBufferedAheadMs = getBufferedAheadMs(getBufferedPositionUs(), buffer.timeUs);
+      }
+      if (sampleDiagnosticsEnabled) {
+        long readElapsedRealtimeMs = SystemClock.elapsedRealtime();
+        SampleRtpTimestampLookupResult mappingResult =
+            lookupSampleRtpTimestampForDiagnostics(loaderWrapper.loadInfo.trackId, buffer.timeUs);
+        checkNotNull(rtspDiagnosticsListener)
+            .onRtspSampleRead(
+                new RtspSampleReadStats(
+                    loaderWrapper.loadInfo.trackId,
+                    sampleQueueIndex,
+                    sampleMimeType,
+                    buffer.timeUs,
+                    mappingResult.rtpTimestamp,
+                    mappingResult.status,
+                    readElapsedRealtimeMs,
+                    sampleQueueBufferedAheadMs,
+                    mediaPeriodBufferedAheadMs));
+        checkNotNull(rtspDiagnosticsListener)
+            .onRtspDecoderInputQueued(
+                new RtspDecoderInputQueuedStats(
+                    loaderWrapper.loadInfo.trackId,
+                    sampleQueueIndex,
+                    buffer.timeUs,
+                    mappingResult.rtpTimestamp,
+                    mappingResult.status,
+                    readElapsedRealtimeMs));
+      }
+      if (sampleQueueBacklogRecoveryEnabled) {
+        maybeNotifySampleQueueBacklogRecoveryRequired(
+            loaderWrapper.loadInfo.trackId,
+            loaderWrapper.loadInfo.transportMode,
+            sampleMimeType,
+            sampleQueueBufferedAheadMs,
+            mediaPeriodBufferedAheadMs);
+      }
     }
     return result;
   }
@@ -656,7 +680,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       long mediaPeriodBufferedAheadMs) {
     if (sampleQueueBacklogRecoverySignaled
         || rtspDiagnosticsListener == null
-        || !rtspPacketDiagnosticsEnabled
         || !rtspBacklogRecoveryPolicy.isSampleQueueBacklogRecoverySignalEnabled()
         || sampleQueueBufferedAheadMs == C.TIME_UNSET
         || sampleQueueBufferedAheadMs < rtspBacklogRecoveryPolicy.sampleQueueBacklogRecoveryThresholdMs

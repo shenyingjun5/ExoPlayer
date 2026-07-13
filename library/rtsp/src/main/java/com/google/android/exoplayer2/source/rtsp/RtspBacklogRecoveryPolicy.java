@@ -68,7 +68,11 @@ public final class RtspBacklogRecoveryPolicy {
   public final long udpRtpReorderWaitMs;
   /** Whether TCP resets should tell the app that media-period rebuild recovery is required. */
   public final boolean mediaPeriodRecoverySignalEnabled;
-  /** Whether video SampleQueue backlog should request controlled media-period rebuild recovery. */
+  /**
+   * Whether video SampleQueue backlog should request controlled media-period rebuild recovery.
+   *
+   * <p>This low-frequency recovery behavior is independent from packet diagnostics.
+   */
   public final boolean sampleQueueBacklogRecoverySignalEnabled;
   /** Video SampleQueue buffered-ahead threshold for controlled rebuild recovery. */
   public final long sampleQueueBacklogRecoveryThresholdMs;
@@ -317,7 +321,12 @@ public final class RtspBacklogRecoveryPolicy {
       return this;
     }
 
-    /** Sets whether video SampleQueue backlog may request controlled media-period rebuild recovery. */
+    /**
+     * Sets whether video SampleQueue backlog may request controlled media-period rebuild recovery.
+     *
+     * <p>This does not enable packet diagnostics. A diagnostics listener is still required to
+     * receive the one-shot recovery signal.
+     */
     @CanIgnoreReturnValue
     public Builder setSampleQueueBacklogRecoverySignalEnabled(
         boolean sampleQueueBacklogRecoverySignalEnabled) {

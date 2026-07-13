@@ -819,3 +819,40 @@ Publication:
   - Remote `classes.jar` contains `RtspSampleRtpTimestampMappingStatus`,
     `RtspBacklogRecoveryStats`, `RtspSampleReadStats` and
     `RtspDecoderInputQueuedStats`; `javap` confirms all T30 reset-context fields.
+
+## FORCE_TCP Content Profile Recovery Isolation
+
+Status: Implemented and verified; publication target `2.19.1-labi.25`.
+
+Review conclusion:
+
+- Existing APIs can express the three content-profile budgets without adding product concepts to
+  the fork. `RtspBacklogRecoveryPolicy.Builder#setSampleQueueBacklogRecoveryThresholdMs(long)` is
+  scoped to each `RtspMediaSource`, while `DefaultLoadControl.Builder#setBufferDurationsMs(...)`
+  and `setMinBufferFloorMs(int)` are scoped to each Player instance.
+- Cast-SDK must keep the TCP interleaved queue, RTP reorder and `WAIT_IDR` production values
+  unchanged and vary only the video SampleQueue hard threshold (`800/4000/1200ms`) and the
+  Player-level LoadControl snapshot.
+- The `.24` implementation incorrectly required packet diagnostics for the low-frequency
+  SampleQueue recovery signal. This made an explicitly enabled recovery policy depend on a
+  diagnostics switch.
+
+Scope:
+
+- Decouple the one-shot `ACTION_REBUILD_REQUIRED` SampleQueue signal from high-frequency packet
+  diagnostics. A non-null listener and an explicitly enabled recovery policy remain mandatory.
+- Keep `onRtspSampleRead` and `onRtspDecoderInputQueued` behind packet diagnostics. With packet
+  diagnostics disabled, no per-sample stats objects or clock reads are added.
+- Keep ordinary RTSP unchanged: `EXOPLAYER_DEFAULT`, `RtspBacklogRecoveryPolicy.DISABLED`, null
+  listener and packet diagnostics disabled take the original short-circuit path.
+- In the explicit recovery-only video path, check only the current SampleQueue buffered-ahead
+  value until the configured threshold is reached. Scan the media-period buffered position only
+  for the one-shot recovery event, and stop monitoring after that event.
+
+Tests:
+
+- Packet diagnostics disabled still emits the explicitly enabled low-frequency recovery signal.
+- Disabled policy and audio tracks do not emit video recovery.
+- Configured hard thresholds `800ms`, `1200ms` and `4000ms` trigger at the exact boundary.
+- Targeted `RtspFeedbackApiTest` and `DefaultLoadControlTest` pass.
+- Full `:library-rtsp:testDebugUnitTest` and `:library-rtsp:assembleRelease` pass.

@@ -730,7 +730,13 @@ duration: 2min smoke / 10min trend / 30min stability
 
 | ID | 状态 | 验证 |
 | --- | --- | --- |
-| E24/T64 | 已实现并验证，待发布 | `240 packets / 106ms` 不 reset；packet + 显式 minimum-age reset；`age=300ms` 独立 reset；depth-only/default 不改变原队列行为；reset stats 字段准确；完整 RTSP unit test 和 release AAR 构建通过 |
+| E24/T64 | 已发布 `2.19.1-labi.26` | `240 packets / 106ms` 不 reset；packet + 显式 minimum-age reset；`age=300ms` 独立 reset；depth-only/default 不改变原队列行为；reset stats 字段准确；完整 RTSP unit test 和 release AAR 构建通过 |
+
+发布信息：source/tag 为 `b29eb06cfe` / `exoplayer-rtsp-2.19.1-labi.26`，GitHub Pages
+commit 为 `f9ea587c33714e5c09b6f5d9a18ca9b86ece9a9f`。远端 RTSP metadata 的
+`latest/release` 均为 `2.19.1-labi.26`；RTSP AAR/POM SHA256 分别为
+`3496d04bb6cbaddb2b7e9fe27f3bd5c0025c145f6c229e0b8fcf11701517ba44` /
+`8182e8153b40515522033166af59528893cc8b5d1fc142118e200df90f8bde9e`。
 
 ## ExoPlayer T35/T36 实施复核/进展
 

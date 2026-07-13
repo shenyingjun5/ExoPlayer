@@ -885,7 +885,7 @@ Publication:
 
 ## E24/T64 TCP Interleaved Depth Reset Age Gate
 
-Status: Implemented and verified; publication pending.
+Status: Implemented, verified, and released as `2.19.1-labi.26`.
 
 Review conclusion:
 
@@ -908,3 +908,20 @@ Tests and boundaries:
   envelope allocation. The extra primitive comparisons run only in the explicitly enabled TCP
   backlog-recovery path. No UDP, WAIT_IDR, feedback, SampleQueue, audio, logging, IO, or locking
   behavior changes.
+
+Publication:
+
+- Source commit/tag: `b29eb06cfe`, `exoplayer-rtsp-2.19.1-labi.26`.
+- GitHub Pages commit: `f9ea587c33714e5c09b6f5d9a18ca9b86ece9a9f`.
+- Published modules: `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
+  `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`, `exoplayer-core`,
+  `exoplayer-hls`, and `exoplayer-rtsp`.
+- Remote RTSP metadata reports `latest/release=2.19.1-labi.26`; remote RTSP/core/HLS AAR and POM
+  requests return HTTP 200.
+- Remote SHA256: RTSP AAR
+  `3496d04bb6cbaddb2b7e9fe27f3bd5c0025c145f6c229e0b8fcf11701517ba44`, RTSP POM
+  `8182e8153b40515522033166af59528893cc8b5d1fc142118e200df90f8bde9e`, core AAR
+  `a48d0d62704e597a1221d4f7e02addbc1bf4ce32a8f7985c8b0b3afd7b6813b4`, and HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`.
+- Remote `javap` confirms public field `tcpInterleavedBacklogDepthResetMinAgeMs` and Builder method
+  `setTcpInterleavedBacklogDepthResetMinAgeMs(long)`.

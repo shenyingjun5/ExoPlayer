@@ -840,4 +840,13 @@ commit 为 `f9ea587c33714e5c09b6f5d9a18ca9b86ece9a9f`。远端 RTSP metadata 的
 
 | ID | 状态 | 验证 |
 | --- | --- | --- |
-| E26 | 已实现并验证，待发布 `2.19.1-labi.27` | packet diagnostics off 仍通知视频活动；500ms 节流和累计准确；audio、policy disabled、interval=0 不通知；media-period 转发和值语义通过；完整 RTSP `320 tests / 0 failures / 0 errors`；release AAR 构建通过 |
+| E26 | 已发布 `2.19.1-labi.27` | packet diagnostics off 仍通知视频活动；500ms 节流和累计准确；audio、policy disabled、interval=0 不通知；media-period 转发和值语义通过；完整 RTSP `320 tests / 0 failures / 0 errors`；release AAR 构建通过 |
+
+发布信息：source/tag 为 `3c998e50e109309939e9e48d2b808c0dbb340707` /
+`exoplayer-rtsp-2.19.1-labi.27`，GitHub Pages commit 为
+`355689a724a4921919454ceeafc8d0c28efad810`。远端 RTSP/core/HLS metadata 的
+`latest/release` 均为 `2.19.1-labi.27`，AAR/POM 均返回 HTTP 200。远端 RTSP AAR/POM
+SHA256 分别为 `042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a521` /
+`ad03acce882a02c772b41fad8c166685ff24db2ca4e7563b086bf68c0a1d8d00`；`javap` 已确认
+`RtspRtpTrackActivityStats`、`onRtspRtpTrackActivity(...)`、
+`rtpActivityNotificationIntervalMs` 和 `setRtpActivityNotificationIntervalMs(long)` 均存在。

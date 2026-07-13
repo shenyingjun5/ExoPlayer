@@ -928,7 +928,7 @@ Publication:
 
 ## Low-Frequency Video RTP Activity
 
-Status: Implemented and verified; `2.19.1-labi.27` publication pending.
+Status: Implemented, verified, and released as `2.19.1-labi.27`.
 
 Scope:
 
@@ -949,3 +949,25 @@ Verification:
 - Targeted `RtpExtractorTest`, `RtspRtpTrackActivityStatsTest`, and `RtspFeedbackApiTest`: passed.
 - Full `:library-rtsp:testDebugUnitTest`: `320 tests`, `0 failures`, `0 errors`.
 - `:library-rtsp:assembleRelease`: passed.
+
+Publication:
+
+- Source commit/tag: `3c998e50e109309939e9e48d2b808c0dbb340707`,
+  `exoplayer-rtsp-2.19.1-labi.27`.
+- GitHub Pages commit: `355689a724a4921919454ceeafc8d0c28efad810`.
+- Published modules: `exoplayer-common`, `exoplayer-container`, `exoplayer-database`,
+  `exoplayer-datasource`, `exoplayer-decoder`, `exoplayer-extractor`, `exoplayer-core`,
+  `exoplayer-hls`, and `exoplayer-rtsp`.
+- Remote RTSP/core/HLS metadata reports `latest/release=2.19.1-labi.27`; all six AAR/POM
+  requests returned HTTP 200.
+- Remote SHA256: RTSP AAR
+  `042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a521`, RTSP POM
+  `ad03acce882a02c772b41fad8c166685ff24db2ca4e7563b086bf68c0a1d8d00`, core AAR
+  `a48d0d62704e597a1221d4f7e02addbc1bf4ce32a8f7985c8b0b3afd7b6813b4`, core POM
+  `2eb3c89e1568df535a1ff2d03d71f9de57763732922bd0042cd9ddf2301ff6f8`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, and HLS POM
+  `be3efc03db1d9df7c84be0d57d0957bf89eefd83421c2487ca33088acb320fe8`.
+- Remote RTSP AAR `javap` confirms `RtspRtpTrackActivityStats`,
+  `RtspDiagnosticsListener#onRtspRtpTrackActivity(...)`, policy field
+  `rtpActivityNotificationIntervalMs`, and Builder method
+  `setRtpActivityNotificationIntervalMs(long)`.

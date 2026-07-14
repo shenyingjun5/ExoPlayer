@@ -353,6 +353,28 @@ public class SimpleExoPlayer extends BasePlayer
     }
 
     /**
+     * @deprecated Use {@link ExoPlayer.Builder#setMediaClockDiagnosticsListener(
+     *     MediaClockDiagnosticsListener)} instead.
+     */
+    @CanIgnoreReturnValue
+    @Deprecated
+    public Builder setMediaClockDiagnosticsListener(
+        @Nullable MediaClockDiagnosticsListener mediaClockDiagnosticsListener) {
+      wrappedBuilder.setMediaClockDiagnosticsListener(mediaClockDiagnosticsListener);
+      return this;
+    }
+
+    /**
+     * @deprecated Use {@link ExoPlayer.Builder#setMediaClockDiagnosticsIntervalMs(long)} instead.
+     */
+    @CanIgnoreReturnValue
+    @Deprecated
+    public Builder setMediaClockDiagnosticsIntervalMs(long intervalMs) {
+      wrappedBuilder.setMediaClockDiagnosticsIntervalMs(intervalMs);
+      return this;
+    }
+
+    /**
      * @deprecated Use {@link
      *     ExoPlayer.Builder#setLivePlaybackSpeedControl(LivePlaybackSpeedControl)} instead.
      */

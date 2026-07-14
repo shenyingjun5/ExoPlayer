@@ -132,6 +132,30 @@ import com.google.android.exoplayer2.util.StandaloneMediaClock;
     return getPositionUs();
   }
 
+  /** Returns whether the standalone clock was selected by the last clock synchronization. */
+  public boolean isUsingStandaloneClock() {
+    return isUsingStandaloneClock;
+  }
+
+  /** Returns the renderer currently providing the renderer clock, or null. */
+  @Nullable
+  public Renderer getRendererClockSource() {
+    return rendererClockSource;
+  }
+
+  /** Returns the source selected by the last clock synchronization. */
+  public @MediaClockSnapshot.ClockSource int getClockSource() {
+    if (isUsingStandaloneClock) {
+      return MediaClockSnapshot.CLOCK_SOURCE_STANDALONE;
+    }
+    if (rendererClockSource == null) {
+      return MediaClockSnapshot.CLOCK_SOURCE_NONE;
+    }
+    return rendererClockSource.getTrackType() == C.TRACK_TYPE_AUDIO
+        ? MediaClockSnapshot.CLOCK_SOURCE_AUDIO_RENDERER
+        : MediaClockSnapshot.CLOCK_SOURCE_OTHER_RENDERER;
+  }
+
   // MediaClock implementation.
 
   @Override

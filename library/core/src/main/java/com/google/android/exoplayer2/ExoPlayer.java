@@ -456,6 +456,8 @@ public interface ExoPlayer extends Player {
   @SuppressWarnings("deprecation")
   final class Builder {
 
+    private static final long MIN_MEDIA_CLOCK_DIAGNOSTICS_INTERVAL_MS = 250;
+
     /* package */ final Context context;
 
     /* package */ Clock clock;
@@ -485,6 +487,8 @@ public interface ExoPlayer extends Player {
     /* package */ long detachSurfaceTimeoutMs;
     /* package */ boolean pauseAtEndOfMediaItems;
     /* package */ boolean usePlatformDiagnostics;
+    @Nullable /* package */ MediaClockDiagnosticsListener mediaClockDiagnosticsListener;
+    /* package */ long mediaClockDiagnosticsIntervalMs;
     @Nullable /* package */ Looper playbackLooper;
     /* package */ boolean buildCalled;
 
@@ -683,6 +687,7 @@ public interface ExoPlayer extends Player {
       releaseTimeoutMs = DEFAULT_RELEASE_TIMEOUT_MS;
       detachSurfaceTimeoutMs = DEFAULT_DETACH_SURFACE_TIMEOUT_MS;
       usePlatformDiagnostics = true;
+      mediaClockDiagnosticsIntervalMs = 0;
     }
 
     /**
@@ -1106,6 +1111,36 @@ public interface ExoPlayer extends Player {
     public Builder setUsePlatformDiagnostics(boolean usePlatformDiagnostics) {
       checkState(!buildCalled);
       this.usePlatformDiagnostics = usePlatformDiagnostics;
+      return this;
+    }
+
+    /**
+     * Sets a listener for explicitly enabled, low-frequency media clock diagnostics snapshots.
+     *
+     * <p>Snapshots are disabled unless this listener is non-null and {@link
+     * #setMediaClockDiagnosticsIntervalMs(long)} is set to a positive value.
+     */
+    @CanIgnoreReturnValue
+    public Builder setMediaClockDiagnosticsListener(
+        @Nullable MediaClockDiagnosticsListener mediaClockDiagnosticsListener) {
+      checkState(!buildCalled);
+      this.mediaClockDiagnosticsListener = mediaClockDiagnosticsListener;
+      return this;
+    }
+
+    /**
+     * Sets the media clock diagnostics snapshot interval, in milliseconds.
+     *
+     * <p>A value of zero disables snapshots. Positive values must be at least 250 milliseconds.
+     * This setting only observes clock state and does not alter media clock selection or playback
+     * behavior.
+     */
+    @CanIgnoreReturnValue
+    public Builder setMediaClockDiagnosticsIntervalMs(long intervalMs) {
+      checkState(!buildCalled);
+      checkArgument(
+          intervalMs == 0 || intervalMs >= MIN_MEDIA_CLOCK_DIAGNOSTICS_INTERVAL_MS);
+      mediaClockDiagnosticsIntervalMs = intervalMs;
       return this;
     }
 

@@ -59,6 +59,27 @@ public class DefaultMediaClockTest {
   }
 
   @Test
+  public void initialClockSource_isStandaloneWithoutRendererSource() {
+    assertThat(mediaClock.isUsingStandaloneClock()).isTrue();
+    assertThat(mediaClock.getRendererClockSource()).isNull();
+    assertThat(mediaClock.getClockSource())
+        .isEqualTo(MediaClockSnapshot.CLOCK_SOURCE_STANDALONE);
+  }
+
+  @Test
+  public void readyRendererClockSource_afterSyncIsRenderer() throws ExoPlaybackException {
+    MediaClockRenderer mediaClockRenderer = new MediaClockRenderer(C.TRACK_TYPE_AUDIO);
+    mediaClock.onRendererEnabled(mediaClockRenderer);
+
+    mediaClock.syncAndGetPositionUs(/* isReadingAhead= */ false);
+
+    assertThat(mediaClock.isUsingStandaloneClock()).isFalse();
+    assertThat(mediaClock.getRendererClockSource()).isSameInstanceAs(mediaClockRenderer);
+    assertThat(mediaClock.getClockSource())
+        .isEqualTo(MediaClockSnapshot.CLOCK_SOURCE_AUDIO_RENDERER);
+  }
+
+  @Test
   public void standaloneGetAndResetPosition_shouldNotTriggerCallback() throws Exception {
     mediaClock.resetPosition(TEST_POSITION_US);
     mediaClock.syncAndGetPositionUs(/* isReadingAhead= */ false);
@@ -385,7 +406,12 @@ public class DefaultMediaClockTest {
     public long positionUs;
 
     public MediaClockRenderer() throws ExoPlaybackException {
+      this(C.TRACK_TYPE_UNKNOWN);
+    }
+
+    public MediaClockRenderer(@C.TrackType int trackType) throws ExoPlaybackException {
       this(
+          trackType,
           PlaybackParameters.DEFAULT,
           /* playbackParametersAreMutable= */ false,
           /* isReady= */ true,
@@ -397,6 +423,7 @@ public class DefaultMediaClockTest {
         PlaybackParameters playbackParameters, boolean playbackParametersAreMutable)
         throws ExoPlaybackException {
       this(
+          C.TRACK_TYPE_UNKNOWN,
           playbackParameters,
           playbackParametersAreMutable,
           /* isReady= */ true,
@@ -407,6 +434,7 @@ public class DefaultMediaClockTest {
     public MediaClockRenderer(boolean isReady, boolean isEnded, boolean hasReadStreamToEnd)
         throws ExoPlaybackException {
       this(
+          C.TRACK_TYPE_UNKNOWN,
           PlaybackParameters.DEFAULT,
           /* playbackParametersAreMutable= */ false,
           isReady,
@@ -415,13 +443,14 @@ public class DefaultMediaClockTest {
     }
 
     private MediaClockRenderer(
+        @C.TrackType int trackType,
         PlaybackParameters playbackParameters,
         boolean playbackParametersAreMutable,
         boolean isReady,
         boolean isEnded,
         boolean hasReadStreamToEnd)
         throws ExoPlaybackException {
-      super(C.TRACK_TYPE_UNKNOWN);
+      super(trackType);
       this.playbackParameters = playbackParameters;
       this.playbackParametersAreMutable = playbackParametersAreMutable;
       this.isReady = isReady;

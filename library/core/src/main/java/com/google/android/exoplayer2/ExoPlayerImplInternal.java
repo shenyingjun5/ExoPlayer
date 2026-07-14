@@ -166,6 +166,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private static final int MSG_SET_OFFLOAD_SCHEDULING_ENABLED = 24;
   private static final int MSG_ATTEMPT_RENDERER_ERROR_RECOVERY = 25;
   private static final int MSG_RENDERER_CAPABILITIES_CHANGED = 26;
+  private static final int MSG_MEDIA_CLOCK_DIAGNOSTICS = 27;
 
   private static final int ACTIVE_INTERVAL_MS = 10;
   private static final int IDLE_INTERVAL_MS = 1000;
@@ -204,6 +205,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
   private final MediaSourceList mediaSourceList;
   private final LivePlaybackSpeedControl livePlaybackSpeedControl;
   private final long releaseTimeoutMs;
+  @Nullable private final MediaClockDiagnosticsListener mediaClockDiagnosticsListener;
+  @Nullable private final HandlerWrapper mediaClockDiagnosticsEventHandler;
+  private final long mediaClockDiagnosticsIntervalMs;
 
   @SuppressWarnings("unused")
   private SeekParameters seekParameters;
@@ -228,6 +232,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
   @Nullable private ExoPlaybackException pendingRecoverableRendererError;
   private long setForegroundModeTimeoutMs;
   private long playbackMaybeBecameStuckAtMs;
+  @Nullable private Renderer lastDiagnosticsAudioRenderer;
+  private long lastDiagnosticsAudioClockPositionUs;
+  private long diagnosticsAudioClockLastAdvancedElapsedRealtimeMs;
 
   public ExoPlayerImplInternal(
       Renderer[] renderers,
@@ -246,6 +253,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
       Clock clock,
       PlaybackInfoUpdateListener playbackInfoUpdateListener,
       PlayerId playerId,
+      @Nullable MediaClockDiagnosticsListener mediaClockDiagnosticsListener,
+      long mediaClockDiagnosticsIntervalMs,
       Looper playbackLooper) {
     this.playbackInfoUpdateListener = playbackInfoUpdateListener;
     this.renderers = renderers;
@@ -261,6 +270,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
     this.setForegroundModeTimeoutMs = releaseTimeoutMs;
     this.pauseAtEndOfWindow = pauseAtEndOfWindow;
     this.clock = clock;
+    boolean mediaClockDiagnosticsEnabled =
+        mediaClockDiagnosticsListener != null && mediaClockDiagnosticsIntervalMs > 0;
+    this.mediaClockDiagnosticsListener =
+        mediaClockDiagnosticsEnabled ? mediaClockDiagnosticsListener : null;
+    this.mediaClockDiagnosticsIntervalMs =
+        mediaClockDiagnosticsEnabled ? mediaClockDiagnosticsIntervalMs : 0;
+    lastDiagnosticsAudioClockPositionUs = C.TIME_UNSET;
+    diagnosticsAudioClockLastAdvancedElapsedRealtimeMs = C.TIME_UNSET;
 
     playbackMaybeBecameStuckAtMs = C.TIME_UNSET;
     backBufferDurationUs = loadControl.getBackBufferDurationUs();
@@ -289,6 +306,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
     deliverPendingMessageAtStartPositionRequired = true;
 
     HandlerWrapper eventHandler = clock.createHandler(applicationLooper, /* callback= */ null);
+    mediaClockDiagnosticsEventHandler = mediaClockDiagnosticsEnabled ? eventHandler : null;
     queue = new MediaPeriodQueue(analyticsCollector, eventHandler);
     mediaSourceList =
         new MediaSourceList(/* listener= */ this, analyticsCollector, eventHandler, playerId);
@@ -305,6 +323,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
       this.playbackLooper = internalPlaybackThread.getLooper();
     }
     handler = clock.createHandler(this.playbackLooper, this);
+    if (mediaClockDiagnosticsEnabled) {
+      scheduleNextMediaClockDiagnosticsSnapshot();
+    }
   }
 
   public void experimentalSetForegroundModeTimeoutMs(long setForegroundModeTimeoutMs) {
@@ -584,6 +605,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
           break;
         case MSG_RENDERER_CAPABILITIES_CHANGED:
           reselectTracksInternalAndSeek();
+          break;
+        case MSG_MEDIA_CLOCK_DIAGNOSTICS:
+          reportMediaClockDiagnostics();
           break;
         case MSG_RELEASE:
           releaseInternal();
@@ -1421,6 +1445,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
   }
 
   private void releaseInternal() {
+    handler.removeMessages(MSG_MEDIA_CLOCK_DIAGNOSTICS);
     resetInternal(
         /* resetRenderers= */ true,
         /* resetPosition= */ false,
@@ -1436,6 +1461,82 @@ import java.util.concurrent.atomic.AtomicBoolean;
       released = true;
       notifyAll();
     }
+  }
+
+  private void reportMediaClockDiagnostics() {
+    MediaClockDiagnosticsListener listener = checkNotNull(mediaClockDiagnosticsListener);
+    HandlerWrapper eventHandler = checkNotNull(mediaClockDiagnosticsEventHandler);
+    long elapsedRealtimeMs = clock.elapsedRealtime();
+    long mediaClockPositionUs = mediaClock.getPositionUs();
+    @Nullable Renderer rendererClockSource = mediaClock.getRendererClockSource();
+    @MediaClockSnapshot.ClockSource int clockSource = mediaClock.getClockSource();
+
+    @Nullable Renderer audioRenderer = null;
+    for (int i = 0; i < renderers.length; i++) {
+      Renderer renderer = renderers[i];
+      if (renderer.getTrackType() == C.TRACK_TYPE_AUDIO
+          && renderer.getState() != Renderer.STATE_DISABLED) {
+        audioRenderer = renderer;
+        break;
+      }
+    }
+
+    boolean audioRendererPresent = audioRenderer != null;
+    boolean audioRendererReady = audioRendererPresent && audioRenderer.isReady();
+    boolean audioRendererEnded = audioRendererPresent && audioRenderer.isEnded();
+    long audioClockPositionUs = C.TIME_UNSET;
+    if (audioRendererPresent) {
+      @Nullable com.google.android.exoplayer2.util.MediaClock audioClock =
+          audioRenderer.getMediaClock();
+      if (audioClock != null) {
+        audioClockPositionUs =
+            audioRenderer == rendererClockSource && !mediaClock.isUsingStandaloneClock()
+                ? mediaClockPositionUs
+                : audioClock.getPositionUs();
+      }
+    }
+
+    long audioClockLastAdvancedElapsedRealtimeMs = C.TIME_UNSET;
+    long audioClockStalledForMs = C.TIME_UNSET;
+    if (audioClockPositionUs != C.TIME_UNSET) {
+      if (audioRenderer != lastDiagnosticsAudioRenderer
+          || lastDiagnosticsAudioClockPositionUs == C.TIME_UNSET
+          || audioClockPositionUs != lastDiagnosticsAudioClockPositionUs) {
+        diagnosticsAudioClockLastAdvancedElapsedRealtimeMs = elapsedRealtimeMs;
+      }
+      lastDiagnosticsAudioRenderer = audioRenderer;
+      lastDiagnosticsAudioClockPositionUs = audioClockPositionUs;
+      audioClockLastAdvancedElapsedRealtimeMs =
+          diagnosticsAudioClockLastAdvancedElapsedRealtimeMs;
+      audioClockStalledForMs =
+          Math.max(0, elapsedRealtimeMs - audioClockLastAdvancedElapsedRealtimeMs);
+    } else {
+      lastDiagnosticsAudioRenderer = null;
+      lastDiagnosticsAudioClockPositionUs = C.TIME_UNSET;
+      diagnosticsAudioClockLastAdvancedElapsedRealtimeMs = C.TIME_UNSET;
+    }
+
+    MediaClockSnapshot snapshot =
+        new MediaClockSnapshot(
+            elapsedRealtimeMs,
+            mediaClockPositionUs,
+            clockSource,
+            audioRendererPresent,
+            audioRendererReady,
+            audioRendererEnded,
+            audioClockPositionUs,
+            audioClockLastAdvancedElapsedRealtimeMs,
+            audioClockStalledForMs,
+            mediaClock.getPlaybackParameters().speed);
+    eventHandler.post(() -> listener.onMediaClockSnapshot(snapshot));
+    if (!released) {
+      scheduleNextMediaClockDiagnosticsSnapshot();
+    }
+  }
+
+  private void scheduleNextMediaClockDiagnosticsSnapshot() {
+    handler.sendEmptyMessageAtTime(
+        MSG_MEDIA_CLOCK_DIAGNOSTICS, clock.uptimeMillis() + mediaClockDiagnosticsIntervalMs);
   }
 
   private void resetInternal(

@@ -850,3 +850,43 @@ SHA256 分别为 `042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a5
 `ad03acce882a02c772b41fad8c166685ff24db2ca4e7563b086bf68c0a1d8d00`；`javap` 已确认
 `RtspRtpTrackActivityStats`、`onRtspRtpTrackActivity(...)`、
 `rtpActivityNotificationIntervalMs` 和 `setRtpActivityNotificationIntervalMs(long)` 均存在。
+
+
+## F26/A25 低频媒体时钟观测闭环
+
+### 2026-07-14 API 复核与实现
+
+- 现有 `Player#getCurrentPosition()`、`AnalyticsListener#onAudioUnderrun` /
+  `onAudioPositionAdvancing` 和 RTCP SR mapping 无法确认 `DefaultMediaClock` 当前使用
+  renderer clock 还是 standalone clock，也无法取得活动 audio renderer 的 clock position、
+  ready/ended 和最近推进时间，因此确认存在 fork API gap。
+- 新增通用 core API：`MediaClockDiagnosticsListener#onMediaClockSnapshot(...)`、
+  `MediaClockSnapshot`、`ExoPlayer.Builder#setMediaClockDiagnosticsListener(...)` 和
+  `setMediaClockDiagnosticsIntervalMs(long)`；兼容的 `SimpleExoPlayer.Builder` 同步转发。
+- snapshot 字段为 `elapsedRealtimeMs`、`mediaClockPositionUs`、`clockSource`、
+  `audioRendererPresent/Ready/Ended`、`audioClockPositionUs`、
+  `audioClockLastAdvancedElapsedRealtimeMs`、`audioClockStalledForMs` 和
+  `playbackSpeed`。无活动 audio renderer 或 renderer 不提供 clock 时，audio clock 字段使用
+  `C.TIME_UNSET` fail-closed。
+- `clockSource` 和 `audioClockPositionUs` 独立表达：player 可以暂用 standalone clock，
+  同时活动 audio renderer 仍可提供 AudioSink clock position；该状态可区分 media clock 回退与
+  AudioTrack clock 停滞。
+- 采样作为独立消息运行在 ExoPlayer playback looper，snapshot 异步投递到 application looper。
+  interval 为 `0` 或 listener 为 `null` 时不调度消息、不读取 diagnostics 时钟、不维护推进
+  状态、不创建 snapshot。正 interval 最小为 `250ms`，Cast-SDK 仅在自家 explicit
+  LOW_LATENCY RTSP + system audio 路径设置 `500-1000ms`。
+- 本项只观测，不切换 media clock、不 flush AudioSink、不修改 SampleQueue、LoadControl、
+  WAIT_IDR、rebuild、transport 或 decoder 行为；没有新增日志、JSON、文件/网络 IO、锁或
+  packet/sample/frame/AudioTrack hot-path callback。
+
+### F26/A25 状态
+
+| ID | 状态 | 验证 |
+| --- | --- | --- |
+| F26/A25 | 实现与发布门禁验证完成，`2.19.1-labi.28` 发布进行中 | 定向媒体时钟测试通过；完整 RTSP `320/0/0`；core/RTSP release AAR 和 core lint 通过；全量 core `4861` 项仅保留两个已知异步 timeout，隔离复现且与本改动无关 |
+
+验证补充：全量 core 首轮另有 `PlaylistPlaybackTest.test_subtitle` 失败，隔离重跑已通过；
+`ExoPlayerTest.onEvents_correspondToListenerCalls` 和
+`DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` 两个历史 timeout 隔离
+重跑仍失败，与此前全量发布记录一致。新增测试、完整 RTSP、lint 和 release 构建均通过，允许按
+既有发布策略继续全模块 Maven 发布。

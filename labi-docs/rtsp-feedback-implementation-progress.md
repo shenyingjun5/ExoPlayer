@@ -971,3 +971,40 @@ Publication:
   `RtspDiagnosticsListener#onRtspRtpTrackActivity(...)`, policy field
   `rtpActivityNotificationIntervalMs`, and Builder method
   `setRtpActivityNotificationIntervalMs(long)`.
+
+
+## Low-Frequency Media Clock Diagnostics
+
+Status: Implemented and release-gate verified; `2.19.1-labi.28` publication pending.
+
+Review and scope:
+
+- Existing public Player, AnalyticsListener and RTCP SR APIs cannot identify the active
+  `DefaultMediaClock` source or expose the active audio renderer clock position and advancement
+  state. A core API is required because `library/core` cannot depend on RTSP policy types.
+- Added `MediaClockDiagnosticsListener`, `MediaClockSnapshot`,
+  `ExoPlayer.Builder#setMediaClockDiagnosticsListener`, and
+  `setMediaClockDiagnosticsIntervalMs`. Cast-SDK owns the outer gate and must configure these only
+  for its explicit low-latency RTSP system-audio player.
+- Listener null or interval zero does not schedule the diagnostics message. The enabled path samples
+  on the playback looper at a minimum 250ms interval and posts the immutable snapshot to the
+  application looper.
+- This is observation-only. It does not modify media-clock selection, AudioSink, SampleQueue,
+  LoadControl, decoder, transport, feedback, or recovery behavior. No packet/sample/frame hot-path
+  logging, allocation, clock read, lock, JSON, or IO was added.
+
+Verification so far:
+
+- Targeted `MediaClockDiagnosticsTest`, `MediaClockSnapshotTest`, and
+  `DefaultMediaClockTest`: passed.
+- Full `:library-rtsp:testDebugUnitTest`: `320 tests`, `0 failures`, `0 errors`.
+- `:library-core:lintDebug`, `:library-core:assembleRelease`, and
+  `:library-rtsp:assembleRelease`: passed.
+- Full core run executed `4861` tests. `PlaylistPlaybackTest.test_subtitle` passed on isolated
+  rerun. The two previously documented asynchronous timeouts in
+  `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` reproduced in isolated
+  reruns and are unrelated to this diagnostics path.
+- Local release core AAR contains `MediaClockDiagnosticsListener`, `MediaClockSnapshot`, both
+  builder setters, all clock-source constants, and all snapshot fields. Final source commit, tag,
+  publication and remote verification are pending.

@@ -975,7 +975,7 @@ Publication:
 
 ## Low-Frequency Media Clock Diagnostics
 
-Status: Implemented and release-gate verified; `2.19.1-labi.28` publication pending.
+Status: Published as `2.19.1-labi.28`.
 
 Review and scope:
 
@@ -1005,6 +1005,26 @@ Verification so far:
   `ExoPlayerTest.onEvents_correspondToListenerCalls` and
   `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` reproduced in isolated
   reruns and are unrelated to this diagnostics path.
-- Local release core AAR contains `MediaClockDiagnosticsListener`, `MediaClockSnapshot`, both
-  builder setters, all clock-source constants, and all snapshot fields. Final source commit, tag,
-  publication and remote verification are pending.
+- Local and remote release core AARs contain `MediaClockDiagnosticsListener`,
+  `MediaClockSnapshot`, both builder setters, all clock-source constants, and all snapshot fields.
+
+Publication:
+
+- Version: `com.zknowai.exoplayer:*:2.19.1-labi.28`.
+- Source commit/tag: `b4d8c803954b1f27439666ec08b552dcedca4016` /
+  `exoplayer-rtsp-2.19.1-labi.28`.
+- GitHub Pages commit: `9d0d2d4a59b9a9188850d9ecb9cb9e167480a58f`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote RTSP/core/HLS metadata reports `latest/release=2.19.1-labi.28`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: core AAR
+  `132feeec3d8996f2ab6fb2fc01ff13b5822546663e05f24ef4eefa9e8704875b`, core POM
+  `8daf0ec0cfbfa4c052e50895f695ea310da3d835d5ceee86e8013b3740d37a24`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `7744c7ccb0189a02b587d590526d7a59f3caa03b487c4659b0d4079ff6acb9cf`, RTSP AAR
+  `042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a521`, and RTSP POM
+  `dd2d3fd13fa4f534c235d410fc85860b9895aac6204b962aa935926d40284072`.
+- Remote `javap` confirms `ExoPlayer.Builder` and `SimpleExoPlayer.Builder` listener/interval
+  setters, `MediaClockDiagnosticsListener#onMediaClockSnapshot`, all `MediaClockSnapshot` fields,
+  and no Cast-SDK classes in the core AAR.

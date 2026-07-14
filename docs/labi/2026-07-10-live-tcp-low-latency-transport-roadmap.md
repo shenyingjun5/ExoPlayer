@@ -883,10 +883,26 @@ SHA256 分别为 `042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a5
 
 | ID | 状态 | 验证 |
 | --- | --- | --- |
-| F26/A25 | 实现与发布门禁验证完成，`2.19.1-labi.28` 发布进行中 | 定向媒体时钟测试通过；完整 RTSP `320/0/0`；core/RTSP release AAR 和 core lint 通过；全量 core `4861` 项仅保留两个已知异步 timeout，隔离复现且与本改动无关 |
+| F26/A25 | 已发布 `2.19.1-labi.28` | 定向媒体时钟测试通过；完整 RTSP `320/0/0`；core/RTSP release AAR 和 core lint 通过；全量 core `4861` 项仅保留两个已知异步 timeout，隔离复现且与本改动无关 |
 
 验证补充：全量 core 首轮另有 `PlaylistPlaybackTest.test_subtitle` 失败，隔离重跑已通过；
 `ExoPlayerTest.onEvents_correspondToListenerCalls` 和
 `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes` 两个历史 timeout 隔离
 重跑仍失败，与此前全量发布记录一致。新增测试、完整 RTSP、lint 和 release 构建均通过，允许按
 既有发布策略继续全模块 Maven 发布。
+
+发布信息：source commit/tag 为
+`b4d8c803954b1f27439666ec08b552dcedca4016` /
+`exoplayer-rtsp-2.19.1-labi.28`，GitHub Pages commit 为
+`9d0d2d4a59b9a9188850d9ecb9cb9e167480a58f`。已发布 common、container、database、
+datasource、decoder、extractor、core、HLS 和 RTSP 全模块；远端 core/HLS/RTSP metadata
+的 `latest/release` 均为 `2.19.1-labi.28`，六个 AAR/POM 请求均返回 HTTP 200。
+远端 core AAR/POM SHA256 为
+`132feeec3d8996f2ab6fb2fc01ff13b5822546663e05f24ef4eefa9e8704875b` /
+`8daf0ec0cfbfa4c052e50895f695ea310da3d835d5ceee86e8013b3740d37a24`；HLS 为
+`e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa` /
+`7744c7ccb0189a02b587d590526d7a59f3caa03b487c4659b0d4079ff6acb9cf`；RTSP 为
+`042af27d851de87fccc3c882a59f9b343045e2ad2f49f33e4150e49b4198a521` /
+`dd2d3fd13fa4f534c235d410fc85860b9895aac6204b962aa935926d40284072`。
+远端 core AAR `javap` 已确认 listener、snapshot、两套 Builder setter、全部 clock source
+常量和 snapshot 字段，且 class list 不包含 Cast-SDK 类型。

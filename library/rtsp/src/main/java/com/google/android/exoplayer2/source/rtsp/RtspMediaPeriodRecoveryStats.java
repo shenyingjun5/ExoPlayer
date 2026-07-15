@@ -50,6 +50,18 @@ public final class RtspMediaPeriodRecoveryStats {
   public final long sampleQueueBufferedAheadMs;
   /** Media-period buffered-ahead duration at this request, or {@link C#TIME_UNSET}. */
   public final long mediaPeriodBufferedAheadMs;
+  /** Sample time at the initial threshold breach, or {@link C#TIME_UNSET}. */
+  public final long triggerSampleTimeUs;
+  /** Largest queued sample time at the initial threshold breach, or {@link C#TIME_UNSET}. */
+  public final long largestQueuedSampleTimeUs;
+  /** SampleQueue read index at the initial threshold breach, or {@link C#INDEX_UNSET}. */
+  public final int sampleQueueReadIndex;
+  /** SampleQueue write index at the initial threshold breach, or {@link C#INDEX_UNSET}. */
+  public final int sampleQueueWriteIndex;
+  /** Number of unread samples at the initial threshold breach, or {@link C#INDEX_UNSET}. */
+  public final int sampleQueueUnreadSampleCount;
+  /** Number of consecutive consumed video reads used to confirm persistent backlog. */
+  public final int confirmationReadCount;
   @Nullable public final String detail;
 
   public RtspMediaPeriodRecoveryStats(
@@ -68,6 +80,12 @@ public final class RtspMediaPeriodRecoveryStats {
         /* recoveryGeneration= */ 0,
         /* sampleQueueBufferedAheadMs= */ C.TIME_UNSET,
         /* mediaPeriodBufferedAheadMs= */ C.TIME_UNSET,
+        /* triggerSampleTimeUs= */ C.TIME_UNSET,
+        /* largestQueuedSampleTimeUs= */ C.TIME_UNSET,
+        /* sampleQueueReadIndex= */ C.INDEX_UNSET,
+        /* sampleQueueWriteIndex= */ C.INDEX_UNSET,
+        /* sampleQueueUnreadSampleCount= */ C.INDEX_UNSET,
+        /* confirmationReadCount= */ 0,
         detail);
   }
 
@@ -81,6 +99,40 @@ public final class RtspMediaPeriodRecoveryStats {
       long sampleQueueBufferedAheadMs,
       long mediaPeriodBufferedAheadMs,
       @Nullable String detail) {
+    this(
+        trackId,
+        transportMode,
+        reason,
+        action,
+        eventElapsedRealtimeMs,
+        recoveryGeneration,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs,
+        /* triggerSampleTimeUs= */ C.TIME_UNSET,
+        /* largestQueuedSampleTimeUs= */ C.TIME_UNSET,
+        /* sampleQueueReadIndex= */ C.INDEX_UNSET,
+        /* sampleQueueWriteIndex= */ C.INDEX_UNSET,
+        /* sampleQueueUnreadSampleCount= */ C.INDEX_UNSET,
+        /* confirmationReadCount= */ 0,
+        detail);
+  }
+
+  public RtspMediaPeriodRecoveryStats(
+      int trackId,
+      @RtspTransportMode.Mode int transportMode,
+      @RtcpFeedbackReason.Reason int reason,
+      @Action int action,
+      long eventElapsedRealtimeMs,
+      int recoveryGeneration,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs,
+      long triggerSampleTimeUs,
+      long largestQueuedSampleTimeUs,
+      int sampleQueueReadIndex,
+      int sampleQueueWriteIndex,
+      int sampleQueueUnreadSampleCount,
+      int confirmationReadCount,
+      @Nullable String detail) {
     this.trackId = trackId;
     this.transportMode = transportMode;
     this.reason = reason;
@@ -89,6 +141,12 @@ public final class RtspMediaPeriodRecoveryStats {
     this.recoveryGeneration = recoveryGeneration;
     this.sampleQueueBufferedAheadMs = sampleQueueBufferedAheadMs;
     this.mediaPeriodBufferedAheadMs = mediaPeriodBufferedAheadMs;
+    this.triggerSampleTimeUs = triggerSampleTimeUs;
+    this.largestQueuedSampleTimeUs = largestQueuedSampleTimeUs;
+    this.sampleQueueReadIndex = sampleQueueReadIndex;
+    this.sampleQueueWriteIndex = sampleQueueWriteIndex;
+    this.sampleQueueUnreadSampleCount = sampleQueueUnreadSampleCount;
+    this.confirmationReadCount = confirmationReadCount;
     this.detail = detail;
   }
 
@@ -109,6 +167,12 @@ public final class RtspMediaPeriodRecoveryStats {
         && recoveryGeneration == other.recoveryGeneration
         && sampleQueueBufferedAheadMs == other.sampleQueueBufferedAheadMs
         && mediaPeriodBufferedAheadMs == other.mediaPeriodBufferedAheadMs
+        && triggerSampleTimeUs == other.triggerSampleTimeUs
+        && largestQueuedSampleTimeUs == other.largestQueuedSampleTimeUs
+        && sampleQueueReadIndex == other.sampleQueueReadIndex
+        && sampleQueueWriteIndex == other.sampleQueueWriteIndex
+        && sampleQueueUnreadSampleCount == other.sampleQueueUnreadSampleCount
+        && confirmationReadCount == other.confirmationReadCount
         && Util.areEqual(detail, other.detail);
   }
 
@@ -122,6 +186,12 @@ public final class RtspMediaPeriodRecoveryStats {
     result = 31 * result + recoveryGeneration;
     result = 31 * result + (int) (sampleQueueBufferedAheadMs ^ (sampleQueueBufferedAheadMs >>> 32));
     result = 31 * result + (int) (mediaPeriodBufferedAheadMs ^ (mediaPeriodBufferedAheadMs >>> 32));
+    result = 31 * result + (int) (triggerSampleTimeUs ^ (triggerSampleTimeUs >>> 32));
+    result = 31 * result + (int) (largestQueuedSampleTimeUs ^ (largestQueuedSampleTimeUs >>> 32));
+    result = 31 * result + sampleQueueReadIndex;
+    result = 31 * result + sampleQueueWriteIndex;
+    result = 31 * result + sampleQueueUnreadSampleCount;
+    result = 31 * result + confirmationReadCount;
     result = 31 * result + (detail == null ? 0 : detail.hashCode());
     return result;
   }
@@ -131,7 +201,10 @@ public final class RtspMediaPeriodRecoveryStats {
     return Util.formatInvariant(
         "RtspMediaPeriodRecoveryStats(trackId=%d, transportMode=%d, reason=%d, action=%d, "
             + "recoveryGeneration=%d, sampleQueueBufferedAheadMs=%d, "
-            + "mediaPeriodBufferedAheadMs=%d, eventElapsedRealtimeMs=%d, detail=%s)",
+            + "mediaPeriodBufferedAheadMs=%d, triggerSampleTimeUs=%d, "
+            + "largestQueuedSampleTimeUs=%d, sampleQueueReadIndex=%d, "
+            + "sampleQueueWriteIndex=%d, sampleQueueUnreadSampleCount=%d, "
+            + "confirmationReadCount=%d, eventElapsedRealtimeMs=%d, detail=%s)",
         trackId,
         transportMode,
         reason,
@@ -139,6 +212,12 @@ public final class RtspMediaPeriodRecoveryStats {
         recoveryGeneration,
         sampleQueueBufferedAheadMs,
         mediaPeriodBufferedAheadMs,
+        triggerSampleTimeUs,
+        largestQueuedSampleTimeUs,
+        sampleQueueReadIndex,
+        sampleQueueWriteIndex,
+        sampleQueueUnreadSampleCount,
+        confirmationReadCount,
         eventElapsedRealtimeMs,
         detail);
   }

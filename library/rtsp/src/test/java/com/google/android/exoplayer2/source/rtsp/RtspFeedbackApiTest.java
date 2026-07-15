@@ -24,6 +24,9 @@ import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.source.MediaSource.MediaPeriodId;
 import com.google.android.exoplayer2.upstream.DefaultAllocator;
 import com.google.android.exoplayer2.util.MimeTypes;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.concurrent.CountDownLatch;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -267,6 +270,15 @@ public final class RtspFeedbackApiTest {
             RtcpFeedbackReason.QUEUE_RESET,
             RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
             123,
+            /* recoveryGeneration= */ 4,
+            /* sampleQueueBufferedAheadMs= */ 833,
+            /* mediaPeriodBufferedAheadMs= */ 833,
+            /* triggerSampleTimeUs= */ 1000,
+            /* largestQueuedSampleTimeUs= */ 834_000,
+            /* sampleQueueReadIndex= */ 10,
+            /* sampleQueueWriteIndex= */ 35,
+            /* sampleQueueUnreadSampleCount= */ 25,
+            /* confirmationReadCount= */ 25,
             "rtsp_backlog_queue_reset");
 
     assertThat(stats)
@@ -277,6 +289,15 @@ public final class RtspFeedbackApiTest {
                 RtcpFeedbackReason.QUEUE_RESET,
                 RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
                 123,
+                4,
+                833,
+                833,
+                1000,
+                834_000,
+                10,
+                35,
+                25,
+                25,
                 "rtsp_backlog_queue_reset"));
     assertThat(stats.hashCode())
         .isEqualTo(
@@ -286,9 +307,31 @@ public final class RtspFeedbackApiTest {
                     RtcpFeedbackReason.QUEUE_RESET,
                     RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
                     123,
+                    4,
+                    833,
+                    833,
+                    1000,
+                    834_000,
+                    10,
+                    35,
+                    25,
+                    25,
                     "rtsp_backlog_queue_reset")
                 .hashCode());
     assertThat(stats.toString()).contains("action=1");
+    assertThat(stats.toString()).contains("sampleQueueUnreadSampleCount=25");
+    assertThat(stats.toString()).contains("confirmationReadCount=25");
+
+    RtspMediaPeriodRecoveryStats legacyStats =
+        new RtspMediaPeriodRecoveryStats(
+            1,
+            RtspTransportMode.TCP_INTERLEAVED,
+            RtcpFeedbackReason.QUEUE_RESET,
+            RtspMediaPeriodRecoveryStats.ACTION_REBUILD_REQUIRED,
+            123,
+            "legacy");
+    assertThat(legacyStats.triggerSampleTimeUs).isEqualTo(C.TIME_UNSET);
+    assertThat(legacyStats.sampleQueueReadIndex).isEqualTo(C.INDEX_UNSET);
   }
 
   @Test
@@ -399,18 +442,36 @@ public final class RtspFeedbackApiTest {
                 /* startPositionUs= */ 0);
 
     mediaPeriod.recordSampleRtpTimestampForDiagnostics(/* trackId= */ 1, /* sampleTimeUs= */ 10, 20);
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ 1300,
-        /* mediaPeriodBufferedAheadMs= */ 1300);
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ 1_300_000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ 1300,
-        /* mediaPeriodBufferedAheadMs= */ 1300);
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 100_000,
+        /* largestQueuedSampleTimeUs= */ 1_400_000,
+        /* sampleQueueReadIndex= */ 3,
+        /* sampleQueueWriteIndex= */ 5);
+    observeSampleQueueBacklog(
+        mediaPeriod,
+        /* trackId= */ 1,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 200_000,
+        /* largestQueuedSampleTimeUs= */ 1_500_000,
+        /* sampleQueueReadIndex= */ 4,
+        /* sampleQueueWriteIndex= */ 6);
 
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
     RtspMediaPeriodRecoveryStats recoveryStats =
@@ -421,6 +482,12 @@ public final class RtspFeedbackApiTest {
     assertThat(recoveryStats.recoveryGeneration).isEqualTo(1);
     assertThat(recoveryStats.sampleQueueBufferedAheadMs).isEqualTo(1300);
     assertThat(recoveryStats.mediaPeriodBufferedAheadMs).isEqualTo(1300);
+    assertThat(recoveryStats.triggerSampleTimeUs).isEqualTo(0);
+    assertThat(recoveryStats.largestQueuedSampleTimeUs).isEqualTo(1_300_000);
+    assertThat(recoveryStats.sampleQueueReadIndex).isEqualTo(1);
+    assertThat(recoveryStats.sampleQueueWriteIndex).isEqualTo(3);
+    assertThat(recoveryStats.sampleQueueUnreadSampleCount).isEqualTo(2);
+    assertThat(recoveryStats.confirmationReadCount).isEqualTo(2);
     assertThat(recoveryStats.detail).isEqualTo("sample_queue_backlog");
     assertThat(mediaPeriod.lookupSampleRtpTimestampForDiagnostics(/* trackId= */ 1, 10).status)
         .isEqualTo(RtspSampleRtpTimestampMappingStatus.CLEARED_FOR_RECOVERY);
@@ -450,12 +517,16 @@ public final class RtspFeedbackApiTest {
                 new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
                 /* startPositionUs= */ 0);
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 2,
-        RtspTransportMode.TCP_INTERLEAVED,
         "audio/mp4a-latm",
         /* sampleQueueBufferedAheadMs= */ 1300,
-        /* mediaPeriodBufferedAheadMs= */ 1300);
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ 1_300_000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
 
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
     mediaSource.releasePeriod(mediaPeriod);
@@ -522,12 +593,26 @@ public final class RtspFeedbackApiTest {
                 new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
                 /* startPositionUs= */ 0);
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ 1300,
-        /* mediaPeriodBufferedAheadMs= */ 1300);
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ 1_300_000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
+    observeSampleQueueBacklog(
+        mediaPeriod,
+        /* trackId= */ 1,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ 1300,
+        /* mediaPeriodBufferedAheadMs= */ 1300,
+        /* triggerSampleTimeUs= */ 100_000,
+        /* largestQueuedSampleTimeUs= */ 1_400_000,
+        /* sampleQueueReadIndex= */ 3,
+        /* sampleQueueWriteIndex= */ 5);
 
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
     mediaSource.releasePeriod(mediaPeriod);
@@ -547,15 +632,67 @@ public final class RtspFeedbackApiTest {
                 new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
                 /* startPositionUs= */ 0);
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ 4000,
-        /* mediaPeriodBufferedAheadMs= */ 4000);
+        /* mediaPeriodBufferedAheadMs= */ 4000,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ 4_000_000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
 
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
     mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoveryState_disabledAdvanceDoesNotWriteCandidate() throws Exception {
+    RtspMediaSource defaultMediaSource =
+        new RtspMediaSource.Factory()
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/default"));
+    RtspMediaPeriod defaultMediaPeriod =
+        (RtspMediaPeriod)
+            defaultMediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+    setPrivateField(defaultMediaPeriod, "sampleQueueBacklogCandidateArmed", true);
+    setPrivateField(defaultMediaPeriod, "sampleQueueBacklogCandidateTrackId", 7);
+    invokePrivateMethod(defaultMediaPeriod, "advanceSampleQueueRecoveryBoundary");
+
+    assertThat(getPrivateField(defaultMediaPeriod, "sampleQueueBacklogCandidateArmed"))
+        .isEqualTo(true);
+    assertThat(getPrivateField(defaultMediaPeriod, "sampleQueueBacklogCandidateTrackId"))
+        .isEqualTo(7);
+    defaultMediaSource.releasePeriod(defaultMediaPeriod);
+
+    RtspBacklogRecoveryPolicy enabledPolicy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
+            .build();
+    RtspMediaSource listenerNullMediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspBacklogRecoveryPolicy(enabledPolicy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/listener-null"));
+    RtspMediaPeriod listenerNullMediaPeriod =
+        (RtspMediaPeriod)
+            listenerNullMediaSource.createPeriod(
+                new MediaPeriodId(/* periodUid= */ new Object()),
+                new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+                /* startPositionUs= */ 0);
+    setPrivateField(listenerNullMediaPeriod, "sampleQueueBacklogCandidateArmed", true);
+    setPrivateField(listenerNullMediaPeriod, "sampleQueueBacklogCandidateTrackId", 8);
+    invokePrivateMethod(listenerNullMediaPeriod, "advanceSampleQueueRecoveryBoundary");
+
+    assertThat(getPrivateField(listenerNullMediaPeriod, "sampleQueueBacklogCandidateArmed"))
+        .isEqualTo(true);
+    assertThat(getPrivateField(listenerNullMediaPeriod, "sampleQueueBacklogCandidateTrackId"))
+        .isEqualTo(8);
+    listenerNullMediaSource.releasePeriod(listenerNullMediaPeriod);
   }
 
   @Test
@@ -563,6 +700,239 @@ public final class RtspFeedbackApiTest {
     assertSampleQueueBacklogThreshold(/* thresholdMs= */ 800);
     assertSampleQueueBacklogThreshold(/* thresholdMs= */ 1200);
     assertSampleQueueBacklogThreshold(/* thresholdMs= */ 4000);
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_sparseSingleGapDoesNotTrigger() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 833, 833, 0, 833_000, 1, 2);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 0, 0, 833_000, 833_000, 2, 2);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_sparseGapThenFrameDoesNotTrigger() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 866, 866, 0, 866_000, 1, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 33, 33, 833_000, 866_000, 2, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 0, 0, 866_000, 866_000, 3, 3);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_twoBreachesAcrossSparseTailDoesNotTrigger() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 800, 800, 100_000, 900_000, 2, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 0, 0, 900_000, 900_000, 3, 3);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_persistentThirtyFpsBacklogTriggers() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+    int candidateWriteIndex = 26;
+
+    for (int readIndex = 1; readIndex <= candidateWriteIndex; readIndex++) {
+      long sampleTimeUs = (readIndex - 1L) * 33_333L;
+      observeSampleQueueBacklog(
+          mediaPeriod,
+          0,
+          "video/avc",
+          /* sampleQueueBufferedAheadMs= */ 833,
+          /* mediaPeriodBufferedAheadMs= */ 833,
+          sampleTimeUs,
+          sampleTimeUs + 833_333L,
+          readIndex,
+          candidateWriteIndex + readIndex - 1);
+    }
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    RtspMediaPeriodRecoveryStats recoveryStats =
+        diagnosticsListener.mediaPeriodRecoveryStats.get(0);
+    assertThat(recoveryStats.sampleQueueBufferedAheadMs).isEqualTo(833);
+    assertThat(recoveryStats.triggerSampleTimeUs).isEqualTo(0);
+    assertThat(recoveryStats.largestQueuedSampleTimeUs).isEqualTo(833_333);
+    assertThat(recoveryStats.sampleQueueReadIndex).isEqualTo(1);
+    assertThat(recoveryStats.sampleQueueWriteIndex).isEqualTo(candidateWriteIndex);
+    assertThat(recoveryStats.sampleQueueUnreadSampleCount).isEqualTo(25);
+    assertThat(recoveryStats.confirmationReadCount).isEqualTo(candidateWriteIndex);
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_waitForIdrBoundaryRestartsCandidate() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    RtspH264RecoveryStats recoveryStats =
+        new RtspH264RecoveryStats(
+            0, 1, 2, /* waitingForIdr= */ true, 1, 0, RtcpFeedbackReason.WAITING_FOR_IDR);
+    checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting())
+        .onH264WaitForIdrStarted(recoveryStats);
+    checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting())
+        .onH264WaitForIdrEnded(recoveryStats);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 100_000, 1_000_000, 3, 5);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 200_000, 1_100_000, 5, 7);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(0).triggerSampleTimeUs)
+        .isEqualTo(100_000);
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_concurrentBoundariesInvalidateCandidate()
+      throws Exception {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+    RtspDiagnosticsListener forwardingListener =
+        checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting());
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    RtspH264RecoveryStats recoveryStats =
+        new RtspH264RecoveryStats(
+            0, 1, 2, /* waitingForIdr= */ true, 1, 0, RtcpFeedbackReason.WAITING_FOR_IDR);
+    RtspBacklogRecoveryStats backlogRecoveryStats =
+        new RtspBacklogRecoveryStats(
+            0,
+            RtspTransportMode.TCP_INTERLEAVED,
+            RtcpFeedbackReason.QUEUE_RESET,
+            3,
+            3,
+            400,
+            400,
+            1234);
+    CountDownLatch startLatch = new CountDownLatch(1);
+    Thread waitForIdrThread =
+        new Thread(
+            () -> {
+              awaitLatch(startLatch);
+              forwardingListener.onH264WaitForIdrStarted(recoveryStats);
+            });
+    Thread queueResetThread =
+        new Thread(
+            () -> {
+              awaitLatch(startLatch);
+              forwardingListener.onRtspBacklogQueueReset(backlogRecoveryStats);
+            });
+    waitForIdrThread.start();
+    queueResetThread.start();
+    startLatch.countDown();
+    waitForIdrThread.join();
+    queueResetThread.join();
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 100_000, 1_000_000, 3, 5);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 200_000, 1_100_000, 5, 7);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(0).triggerSampleTimeUs)
+        .isEqualTo(100_000);
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_queueResetRestartsCandidate() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    checkNotNull(mediaPeriod.getForwardingRtspDiagnosticsListenerForTesting())
+        .onRtspBacklogQueueReset(
+            new RtspBacklogRecoveryStats(
+                0,
+                RtspTransportMode.TCP_INTERLEAVED,
+                RtcpFeedbackReason.QUEUE_RESET,
+                3,
+                3,
+                400,
+                400,
+                1234));
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 100_000, 1_000_000, 3, 5);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_seekRestartsCandidate() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    mediaPeriod.seekToUs(/* positionUs= */ 1_000_000);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 100_000, 1_000_000, 3, 5);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_trackSwitchDoesNotCombineCandidates() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 1, "video/hevc", 900, 900, 100_000, 1_000_000, 3, 5);
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 200_000, 1_100_000, 3, 5);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+    mediaPeriod.release();
+  }
+
+  @Test
+  public void sampleQueueBacklogRecoverySignal_audioObservationDoesNotConfirmVideoCandidate() {
+    CapturingDiagnosticsListener diagnosticsListener = new CapturingDiagnosticsListener();
+    RtspMediaPeriod mediaPeriod = createSampleQueueRecoveryMediaPeriod(diagnosticsListener);
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 0, 900_000, 1, 3);
+    observeSampleQueueBacklog(
+        mediaPeriod, 1, "audio/mp4a-latm", 900, 900, 100_000, 1_000_000, 3, 5);
+
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+
+    observeSampleQueueBacklog(
+        mediaPeriod, 0, "video/avc", 900, 900, 200_000, 1_100_000, 3, 5);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
+    mediaPeriod.release();
   }
 
   @Test
@@ -1172,25 +1542,115 @@ public final class RtspFeedbackApiTest {
                 new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
                 /* startPositionUs= */ 0);
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ thresholdMs - 1,
-        /* mediaPeriodBufferedAheadMs= */ thresholdMs - 1);
+        /* mediaPeriodBufferedAheadMs= */ thresholdMs - 1,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ (thresholdMs - 1) * 1000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
 
-    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+    observeSampleQueueBacklog(
+        mediaPeriod,
         /* trackId= */ 1,
-        RtspTransportMode.TCP_INTERLEAVED,
         "video/avc",
         /* sampleQueueBufferedAheadMs= */ thresholdMs,
-        /* mediaPeriodBufferedAheadMs= */ thresholdMs);
+        /* mediaPeriodBufferedAheadMs= */ thresholdMs,
+        /* triggerSampleTimeUs= */ 0,
+        /* largestQueuedSampleTimeUs= */ thresholdMs * 1000,
+        /* sampleQueueReadIndex= */ 1,
+        /* sampleQueueWriteIndex= */ 3);
+    assertThat(diagnosticsListener.mediaPeriodRecoveryStats).isEmpty();
+
+    observeSampleQueueBacklog(
+        mediaPeriod,
+        /* trackId= */ 1,
+        "video/avc",
+        /* sampleQueueBufferedAheadMs= */ thresholdMs,
+        /* mediaPeriodBufferedAheadMs= */ thresholdMs,
+        /* triggerSampleTimeUs= */ 1000,
+        /* largestQueuedSampleTimeUs= */ thresholdMs * 1000 + 1000,
+        /* sampleQueueReadIndex= */ 3,
+        /* sampleQueueWriteIndex= */ 5);
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats).hasSize(1);
     assertThat(diagnosticsListener.mediaPeriodRecoveryStats.get(0).sampleQueueBufferedAheadMs)
         .isEqualTo(thresholdMs);
 
     mediaSource.releasePeriod(mediaPeriod);
+  }
+
+  private static RtspMediaPeriod createSampleQueueRecoveryMediaPeriod(
+      CapturingDiagnosticsListener diagnosticsListener) {
+    RtspBacklogRecoveryPolicy policy =
+        new RtspBacklogRecoveryPolicy.Builder()
+            .setEnabled(true)
+            .setSampleQueueBacklogRecoverySignalEnabled(true)
+            .setSampleQueueBacklogRecoveryThresholdMs(800)
+            .build();
+    RtspMediaSource mediaSource =
+        new RtspMediaSource.Factory()
+            .setRtspDiagnosticsListener(diagnosticsListener)
+            .setRtspBacklogRecoveryPolicy(policy)
+            .createMediaSource(MediaItem.fromUri("rtsp://127.0.0.1/test"));
+    return (RtspMediaPeriod)
+        mediaSource.createPeriod(
+            new MediaPeriodId(/* periodUid= */ new Object()),
+            new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+            /* startPositionUs= */ 0);
+  }
+
+  private static void observeSampleQueueBacklog(
+      RtspMediaPeriod mediaPeriod,
+      int trackId,
+      String sampleMimeType,
+      long sampleQueueBufferedAheadMs,
+      long mediaPeriodBufferedAheadMs,
+      long triggerSampleTimeUs,
+      long largestQueuedSampleTimeUs,
+      int sampleQueueReadIndex,
+      int sampleQueueWriteIndex) {
+    mediaPeriod.maybeNotifySampleQueueBacklogRecoveryRequired(
+        trackId,
+        RtspTransportMode.TCP_INTERLEAVED,
+        sampleMimeType,
+        sampleQueueBufferedAheadMs,
+        mediaPeriodBufferedAheadMs,
+        triggerSampleTimeUs,
+        largestQueuedSampleTimeUs,
+        sampleQueueReadIndex,
+        sampleQueueWriteIndex);
+  }
+
+  private static void setPrivateField(Object target, String fieldName, Object value)
+      throws Exception {
+    Field field = target.getClass().getDeclaredField(fieldName);
+    field.setAccessible(true);
+    field.set(target, value);
+  }
+
+  private static Object getPrivateField(Object target, String fieldName) throws Exception {
+    Field field = target.getClass().getDeclaredField(fieldName);
+    field.setAccessible(true);
+    return field.get(target);
+  }
+
+  private static void invokePrivateMethod(Object target, String methodName) throws Exception {
+    Method method = target.getClass().getDeclaredMethod(methodName);
+    method.setAccessible(true);
+    method.invoke(target);
+  }
+
+  private static void awaitLatch(CountDownLatch latch) {
+    try {
+      latch.await();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(e);
+    }
   }
 
   private static final class CapturingDiagnosticsListener implements RtspDiagnosticsListener {

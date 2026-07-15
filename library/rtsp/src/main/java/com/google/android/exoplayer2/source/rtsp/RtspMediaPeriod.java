@@ -129,6 +129,17 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private boolean isUsingRtpTcp;
   private boolean sampleQueueBacklogRecoverySignaled;
   private int recoveryGeneration;
+  private volatile int sampleQueueRecoveryBoundaryGeneration;
+  private boolean sampleQueueBacklogCandidateArmed;
+  private int sampleQueueBacklogCandidateTrackId;
+  private int sampleQueueBacklogCandidateBoundaryGeneration;
+  private int sampleQueueBacklogCandidateReadIndex;
+  private int sampleQueueBacklogCandidateWriteIndex;
+  private int sampleQueueBacklogCandidateUnreadSampleCount;
+  private int sampleQueueBacklogCandidateLastReadIndex;
+  private int sampleQueueBacklogCandidateConfirmationReadCount;
+  private long sampleQueueBacklogCandidateTriggerSampleTimeUs;
+  private long sampleQueueBacklogCandidateLargestQueuedSampleTimeUs;
 
   /**
    * Creates an RTSP media period.
@@ -335,6 +346,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   /** Releases the {@link RtspMediaPeriod}. */
   public void release() {
+    advanceSampleQueueRecoveryBoundary();
     for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
       rtspLoaderWrappers.get(i).release();
     }
@@ -379,6 +391,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @NullableType SampleStream[] streams,
       boolean[] streamResetFlags,
       long positionUs) {
+
+    advanceSampleQueueRecoveryBoundary();
 
     // Deselect old tracks.
     // Input array streams contains the streams selected in the previous track selection.
@@ -468,6 +482,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     //     initiate another seek upon receiving PLAY response by invoking this method again.
     //   2b.2. If RTSP PLAY (for the first seek) has not been sent, the new seek position will be
     //     used in the following PLAY request.
+
+    advanceSampleQueueRecoveryBoundary();
 
     // TODO(internal: b/213153670) Handle dropped seek position.
     if (getBufferedPositionUs() == 0 && !isUsingRtpTcp) {
@@ -610,8 +626,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (!sampleDiagnosticsEnabled && !sampleQueueBacklogRecoveryEnabled) {
         return result;
       }
+      long largestQueuedSampleTimeUs = loaderWrapper.getBufferedPositionUs();
       long sampleQueueBufferedAheadMs =
-          getBufferedAheadMs(loaderWrapper.getBufferedPositionUs(), buffer.timeUs);
+          getBufferedAheadMs(largestQueuedSampleTimeUs, buffer.timeUs);
       long mediaPeriodBufferedAheadMs = C.TIME_UNSET;
       if (sampleDiagnosticsEnabled
           || (sampleQueueBacklogRecoveryEnabled
@@ -652,7 +669,11 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             loaderWrapper.loadInfo.transportMode,
             sampleMimeType,
             sampleQueueBufferedAheadMs,
-            mediaPeriodBufferedAheadMs);
+            mediaPeriodBufferedAheadMs,
+            buffer.timeUs,
+            largestQueuedSampleTimeUs,
+            loaderWrapper.getSampleQueueReadIndex(),
+            loaderWrapper.getSampleQueueWriteIndex());
       }
     }
     return result;
@@ -677,13 +698,53 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       @RtspTransportMode.Mode int transportMode,
       @Nullable String sampleMimeType,
       long sampleQueueBufferedAheadMs,
-      long mediaPeriodBufferedAheadMs) {
+      long mediaPeriodBufferedAheadMs,
+      long triggerSampleTimeUs,
+      long largestQueuedSampleTimeUs,
+      int sampleQueueReadIndex,
+      int sampleQueueWriteIndex) {
     if (sampleQueueBacklogRecoverySignaled
         || rtspDiagnosticsListener == null
         || !rtspBacklogRecoveryPolicy.isSampleQueueBacklogRecoverySignalEnabled()
-        || sampleQueueBufferedAheadMs == C.TIME_UNSET
-        || sampleQueueBufferedAheadMs < rtspBacklogRecoveryPolicy.sampleQueueBacklogRecoveryThresholdMs
         || !MimeTypes.isVideo(sampleMimeType)) {
+      return;
+    }
+    int boundaryGeneration = sampleQueueRecoveryBoundaryGeneration;
+    if (sampleQueueBacklogCandidateArmed
+        && sampleQueueBacklogCandidateBoundaryGeneration != boundaryGeneration) {
+      clearSampleQueueBacklogRecoveryCandidate();
+    }
+    int unreadSampleCount = sampleQueueWriteIndex - sampleQueueReadIndex;
+    boolean thresholdBreached =
+        sampleQueueBufferedAheadMs != C.TIME_UNSET
+            && sampleQueueBufferedAheadMs
+                >= rtspBacklogRecoveryPolicy.sampleQueueBacklogRecoveryThresholdMs;
+    if (!thresholdBreached || unreadSampleCount <= 0) {
+      clearSampleQueueBacklogRecoveryCandidate();
+      return;
+    }
+    if (!sampleQueueBacklogCandidateArmed
+        || sampleQueueBacklogCandidateTrackId != trackId) {
+      armSampleQueueBacklogRecoveryCandidate(
+          trackId,
+          boundaryGeneration,
+          triggerSampleTimeUs,
+          largestQueuedSampleTimeUs,
+          sampleQueueReadIndex,
+          sampleQueueWriteIndex,
+          unreadSampleCount);
+      return;
+    }
+    if (sampleQueueReadIndex <= sampleQueueBacklogCandidateLastReadIndex) {
+      return;
+    }
+    sampleQueueBacklogCandidateLastReadIndex = sampleQueueReadIndex;
+    sampleQueueBacklogCandidateConfirmationReadCount++;
+
+    // A finite sparse timestamp gap cannot confirm backlog. The consumer must first read through
+    // every sample that was already queued when the candidate was armed, while the threshold remains
+    // breached and newly queued unread samples remain available.
+    if (sampleQueueReadIndex < sampleQueueBacklogCandidateWriteIndex) {
       return;
     }
     sampleQueueBacklogRecoverySignaled = true;
@@ -700,7 +761,67 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 recoveryGeneration,
                 sampleQueueBufferedAheadMs,
                 mediaPeriodBufferedAheadMs,
+                sampleQueueBacklogCandidateTriggerSampleTimeUs,
+                sampleQueueBacklogCandidateLargestQueuedSampleTimeUs,
+                sampleQueueBacklogCandidateReadIndex,
+                sampleQueueBacklogCandidateWriteIndex,
+                sampleQueueBacklogCandidateUnreadSampleCount,
+                sampleQueueBacklogCandidateConfirmationReadCount,
                 "sample_queue_backlog"));
+    clearSampleQueueBacklogRecoveryCandidate();
+  }
+
+  private void armSampleQueueBacklogRecoveryCandidate(
+      int trackId,
+      int boundaryGeneration,
+      long triggerSampleTimeUs,
+      long largestQueuedSampleTimeUs,
+      int sampleQueueReadIndex,
+      int sampleQueueWriteIndex,
+      int unreadSampleCount) {
+    sampleQueueBacklogCandidateArmed = true;
+    sampleQueueBacklogCandidateTrackId = trackId;
+    sampleQueueBacklogCandidateBoundaryGeneration = boundaryGeneration;
+    sampleQueueBacklogCandidateReadIndex = sampleQueueReadIndex;
+    sampleQueueBacklogCandidateWriteIndex = sampleQueueWriteIndex;
+    sampleQueueBacklogCandidateUnreadSampleCount = unreadSampleCount;
+    sampleQueueBacklogCandidateLastReadIndex = sampleQueueReadIndex;
+    sampleQueueBacklogCandidateConfirmationReadCount = 1;
+    sampleQueueBacklogCandidateTriggerSampleTimeUs = triggerSampleTimeUs;
+    sampleQueueBacklogCandidateLargestQueuedSampleTimeUs = largestQueuedSampleTimeUs;
+  }
+
+  private void clearSampleQueueBacklogRecoveryCandidate() {
+    sampleQueueBacklogCandidateArmed = false;
+    sampleQueueBacklogCandidateTrackId = C.INDEX_UNSET;
+    sampleQueueBacklogCandidateBoundaryGeneration = 0;
+    sampleQueueBacklogCandidateReadIndex = C.INDEX_UNSET;
+    sampleQueueBacklogCandidateWriteIndex = C.INDEX_UNSET;
+    sampleQueueBacklogCandidateUnreadSampleCount = C.INDEX_UNSET;
+    sampleQueueBacklogCandidateLastReadIndex = C.INDEX_UNSET;
+    sampleQueueBacklogCandidateConfirmationReadCount = 0;
+    sampleQueueBacklogCandidateTriggerSampleTimeUs = C.TIME_UNSET;
+    sampleQueueBacklogCandidateLargestQueuedSampleTimeUs = C.TIME_UNSET;
+  }
+
+  private void advanceSampleQueueRecoveryBoundary() {
+    if (!isSampleQueueBacklogRecoveryStateEnabled()) {
+      return;
+    }
+    sampleQueueRecoveryBoundaryGeneration++;
+    clearSampleQueueBacklogRecoveryCandidate();
+  }
+
+  private void invalidateSampleQueueRecoveryBoundary() {
+    if (!isSampleQueueBacklogRecoveryStateEnabled()) {
+      return;
+    }
+    sampleQueueRecoveryBoundaryGeneration++;
+  }
+
+  private boolean isSampleQueueBacklogRecoveryStateEnabled() {
+    return rtspDiagnosticsListener != null
+        && rtspBacklogRecoveryPolicy.isSampleQueueBacklogRecoverySignalEnabled();
   }
 
   /* package */ void onH264AccessUnitReadyForDiagnostics(
@@ -935,6 +1056,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onH264WaitForIdrStarted(RtspH264RecoveryStats recoveryStats) {
+      invalidateSampleQueueRecoveryBoundary();
       checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrStarted(recoveryStats);
     }
 
@@ -950,6 +1072,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onH264WaitForIdrEnded(RtspH264RecoveryStats recoveryStats) {
+      invalidateSampleQueueRecoveryBoundary();
       checkNotNull(rtspDiagnosticsListener).onH264WaitForIdrEnded(recoveryStats);
     }
 
@@ -972,6 +1095,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onRtpReorderingQueueReset(RtpReorderingStats reorderingStats) {
+      invalidateSampleQueueRecoveryBoundary();
       clearSampleRtpTimestampMappingsForRecovery(reorderingStats.trackId);
       checkNotNull(rtspDiagnosticsListener).onRtpReorderingQueueReset(reorderingStats);
       maybeNotifyMediaPeriodRecoveryRequired(
@@ -983,6 +1107,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     @Override
     public void onRtspBacklogQueueReset(RtspBacklogRecoveryStats backlogRecoveryStats) {
+      invalidateSampleQueueRecoveryBoundary();
       clearSampleRtpTimestampMappingsForRecovery(backlogRecoveryStats.trackId);
       checkNotNull(rtspDiagnosticsListener).onRtspBacklogQueueReset(backlogRecoveryStats);
       maybeNotifyMediaPeriodRecoveryRequired(
@@ -1260,6 +1385,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   private void retryWithRtpTcp(
       @RtspTransportFallbackReason.Reason int reason, int trackId) {
+    advanceSampleQueueRecoveryBoundary();
     @Nullable
     RtpDataChannel.Factory fallbackRtpDataChannelFactory =
         rtpDataChannelFactory.createFallbackDataChannelFactory();
@@ -1408,7 +1534,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     public int skipData(long positionUs) {
       int skipCount = sampleQueue.getSkipCount(positionUs, /* allowEndOfQueue= */ canceled);
       sampleQueue.skip(skipCount);
+      if (skipCount > 0) {
+        advanceSampleQueueRecoveryBoundary();
+      }
       return skipCount;
+    }
+
+    public int getSampleQueueReadIndex() {
+      return sampleQueue.getReadIndex();
+    }
+
+    public int getSampleQueueWriteIndex() {
+      return sampleQueue.getWriteIndex();
     }
 
     /** Cancels loading. */

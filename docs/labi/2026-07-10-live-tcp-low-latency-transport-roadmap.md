@@ -906,3 +906,37 @@ datasource、decoder、extractor、core、HLS 和 RTSP 全模块；远端 core/H
 `dd2d3fd13fa4f534c235d410fc85860b9895aac6204b962aa935926d40284072`。
 远端 core AAR `javap` 已确认 listener、snapshot、两套 Builder setter、全部 clock source
 常量和 snapshot 字段，且 class list 不包含 Cast-SDK 类型。
+
+## T87C SampleQueue backlog 持续性确认
+
+### 2026-07-15 实施复核
+
+- 保持生产 `sampleQueueBacklogRecoveryThresholdMs=800` 不变，不关闭恢复，也不修改
+  SampleQueue core、transport、WAIT_IDR、decoder、media clock 或 flush/seek/drop 行为。
+- 旧实现仅以 `largestQueuedTimestampUs - currentSampleTimeUs` 达到阈值作为 rebuild 证据，
+  稀疏样本时间戳（例如 `[0,833]`）可被误判为真实排队。单纯增加“连续两次 breach +
+  unread > 0”仍不足：`[0,100,900]` 会连续得到 `900/800ms`，但并不存在持续样本积压。
+- 新实现仅在 explicit recovery policy enabled、SampleQueue recovery enabled、listener 非空、
+  video track 的既有 readData gate 内维护 primitive candidate。首次 breach 记录 read/write
+  index、unread count、sample time 和 largest queued time；只有消费端在 buffered-ahead 持续
+  不低于阈值的同时，读穿首次 arm 时已经存在的 queue tail，且仍有新入队未读样本，才一次性
+  发出 `ACTION_REBUILD_REQUIRED`。
+- threshold 回落或 queue drained 会立即清候选。WAIT_IDR start/end、RTP/transfer queue reset、
+  seek、track selection、TCP retry、skip 和 period release 通过 recovery boundary generation
+  使候选失效，不能跨 discontinuity 拼接确认。
+- loader/playback 跨线程边界使用 `volatile` generation 作为失效 token，不作为精确事件计数。
+  并发增量即使合并，token 仍至少变化一次；候选只比较是否变化，因此不会跨 WAIT_IDR/reset
+  确认。默认/listener-null 路径在统一 state gate 前返回，不写 candidate primitive。
+- `RtspMediaPeriodRecoveryStats` 增加最终低频事件证据：`triggerSampleTimeUs`、
+  `largestQueuedSampleTimeUs`、`sampleQueueReadIndex`、`sampleQueueWriteIndex`、
+  `sampleQueueUnreadSampleCount`、`confirmationReadCount`。既有 6 参数和 9 参数构造器保留；
+  仅最终 signal 读取 elapsed realtime 并创建 stats。
+
+### T87C 状态
+
+| ID | 状态 | 验证 |
+| --- | --- | --- |
+| T87C | ExoPlayer 已实现并验证，待发布 `2.19.1-labi.29` | sparse `[0,833]`、`[0,833,866]`、两次 sparse breach 均不触发；持续 30fps backlog 触发；WAIT_IDR/reset/seek/track switch/audio/multi-track/default/listener-null 隔离通过；完整 RTSP `331/0/0`；release AAR 构建通过 |
+
+本项不新增逐 packet/sample callback、日志、JSON、IO、锁、对象队列、ring buffer 或 wall-clock
+读取；默认 RTSP 的 transport、buffer、decoder、retry/error 行为不变。

@@ -1028,3 +1028,36 @@ Publication:
 - Remote `javap` confirms `ExoPlayer.Builder` and `SimpleExoPlayer.Builder` listener/interval
   setters, `MediaClockDiagnosticsListener#onMediaClockSnapshot`, all `MediaClockSnapshot` fields,
   and no Cast-SDK classes in the core AAR.
+
+## T87C Persistent SampleQueue Backlog Confirmation
+
+Status: Implemented and verified; release target `2.19.1-labi.29`.
+
+Scope and semantics:
+
+- Kept the configured `800ms` production threshold and all transport, WAIT_IDR, decoder, media
+  clock, SampleQueue core, seek, flush, and drop behavior unchanged.
+- Replaced the one-observation timestamp-ahead signal with a primitive candidate under the existing
+  explicit enabled-policy, sample-recovery, non-null-listener, video-track gate.
+- A candidate emits only after consumed reads advance through the queue tail captured at the first
+  breach while the threshold remains breached and newly queued unread samples still exist. This
+  rejects sparse `[0,833]`, `[0,833,866]`, and `[0,100,900]` timestamp gaps without adding another
+  time threshold or frame-rate assumption.
+- WAIT_IDR start/end, RTP/transfer queue reset, seek, track selection, TCP retry, skip, and release
+  invalidate or clear the candidate through a period-local volatile boundary token. The token is an
+  idempotent invalidation marker, not an event counter; concurrent increments need only change it
+  once to prevent a candidate from spanning a recovery boundary.
+- Added final-event evidence fields to `RtspMediaPeriodRecoveryStats`: `triggerSampleTimeUs`,
+  `largestQueuedSampleTimeUs`, `sampleQueueReadIndex`, `sampleQueueWriteIndex`,
+  `sampleQueueUnreadSampleCount`, and `confirmationReadCount`. Existing constructors remain.
+- Listener-null and policy-disabled lifecycle paths return before candidate primitive writes. The
+  enabled read path uses primitive state and existing SampleQueue indexes; only the final one-shot
+  signal reads elapsed realtime and allocates a stats object.
+
+Verification:
+
+- Targeted `RtspFeedbackApiTest`: passed.
+- Full `:library-rtsp:testDebugUnitTest`: `331 tests`, `0 failures`, `0 errors`.
+- `:library-rtsp:assembleRelease`: passed.
+- Diff review found no new packet/sample logging, JSON, IO, lock, object queue, ring buffer, or
+  default-path clock read/allocation. No Cast-SDK type is referenced.

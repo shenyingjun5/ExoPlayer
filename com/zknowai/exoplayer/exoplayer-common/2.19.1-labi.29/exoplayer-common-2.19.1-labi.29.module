@@ -1,0 +1,135 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.zknowai.exoplayer",
+    "module": "exoplayer-common",
+    "version": "2.19.1-labi.29",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "7.4.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "com.google.guava",
+          "module": "guava",
+          "version": {
+            "requires": "31.1-android"
+          },
+          "excludes": [
+            {
+              "group": "com.google.j2objc",
+              "module": "j2objc-annotations"
+            },
+            {
+              "group": "org.checkerframework",
+              "module": "checker-compat-qual"
+            },
+            {
+              "group": "com.google.code.findbugs",
+              "module": "jsr305"
+            },
+            {
+              "group": "org.codehaus.mojo",
+              "module": "animal-sniffer-annotations"
+            },
+            {
+              "group": "org.checkerframework",
+              "module": "checker-qual"
+            },
+            {
+              "group": "com.google.errorprone",
+              "module": "error_prone_annotations"
+            }
+          ]
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-common-2.19.1-labi.29.aar",
+          "url": "exoplayer-common-2.19.1-labi.29.aar",
+          "size": 456296,
+          "sha512": "45b398f581e570c775029f2d163ca79e04d330f971a6e524c3467592b60c4e88b78fd73866e4efa127d10f2aa818d8f1489a88d39ae46ecf1db82266b5483e65",
+          "sha256": "5cc09569ce52810722c979ab73b1820167db88e1bb1cbaaab8b8650c70f35f41",
+          "sha1": "c561f08f9ee2229cb822ced717edd72e3aa8c518",
+          "md5": "90dabc9e0b967b0f663c2f1cdfd215e4"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.3.0"
+          }
+        },
+        {
+          "group": "com.google.guava",
+          "module": "guava",
+          "version": {
+            "requires": "31.1-android"
+          },
+          "excludes": [
+            {
+              "group": "com.google.j2objc",
+              "module": "j2objc-annotations"
+            },
+            {
+              "group": "org.checkerframework",
+              "module": "checker-compat-qual"
+            },
+            {
+              "group": "com.google.code.findbugs",
+              "module": "jsr305"
+            },
+            {
+              "group": "org.codehaus.mojo",
+              "module": "animal-sniffer-annotations"
+            },
+            {
+              "group": "org.checkerframework",
+              "module": "checker-qual"
+            },
+            {
+              "group": "com.google.errorprone",
+              "module": "error_prone_annotations"
+            }
+          ]
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-common-2.19.1-labi.29.aar",
+          "url": "exoplayer-common-2.19.1-labi.29.aar",
+          "size": 456296,
+          "sha512": "45b398f581e570c775029f2d163ca79e04d330f971a6e524c3467592b60c4e88b78fd73866e4efa127d10f2aa818d8f1489a88d39ae46ecf1db82266b5483e65",
+          "sha256": "5cc09569ce52810722c979ab73b1820167db88e1bb1cbaaab8b8650c70f35f41",
+          "sha1": "c561f08f9ee2229cb822ced717edd72e3aa8c518",
+          "md5": "90dabc9e0b967b0f663c2f1cdfd215e4"
+        }
+      ]
+    }
+  ]
+}

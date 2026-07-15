@@ -1031,7 +1031,7 @@ Publication:
 
 ## T87C Persistent SampleQueue Backlog Confirmation
 
-Status: Implemented and verified; release target `2.19.1-labi.29`.
+Status: Published as `2.19.1-labi.29`.
 
 Scope and semantics:
 
@@ -1061,3 +1061,22 @@ Verification:
 - `:library-rtsp:assembleRelease`: passed.
 - Diff review found no new packet/sample logging, JSON, IO, lock, object queue, ring buffer, or
   default-path clock read/allocation. No Cast-SDK type is referenced.
+
+Publication:
+
+- Source commit/tag: `03e78148cd3f83fb9885f77a2953690c05c47e43`,
+  `exoplayer-rtsp-2.19.1-labi.29`.
+- GitHub Pages commit: `8008ef8e3b`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote core/HLS/RTSP metadata reports `latest/release=2.19.1-labi.29`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: RTSP AAR
+  `2cbf0f7454c63e0277c1c4e19ec621af30ed20816275accf97cdd63c1a193a92`, RTSP POM
+  `624ff304e8b8cbf79864f8a231e149ebf1a06919113f1f3e7182bec6486d943e`, core AAR
+  `132feeec3d8996f2ab6fb2fc01ff13b5822546663e05f24ef4eefa9e8704875b`, core POM
+  `fd89f463c3c31037f7118f77b52c9db85b65a3d6a35618295e5ac70d5c1d1734`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `d181169f15487539e2acaa33efce641db0e35bc15b84d7db543e24106105a606`.
+- Remote RTSP AAR `javap` confirms all six evidence fields, both legacy constructors, the new full
+  constructor, and no Cast-SDK classes.

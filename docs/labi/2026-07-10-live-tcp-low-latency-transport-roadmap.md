@@ -936,7 +936,22 @@ datasource、decoder、extractor、core、HLS 和 RTSP 全模块；远端 core/H
 
 | ID | 状态 | 验证 |
 | --- | --- | --- |
-| T87C | ExoPlayer 已实现并验证，待发布 `2.19.1-labi.29` | sparse `[0,833]`、`[0,833,866]`、两次 sparse breach 均不触发；持续 30fps backlog 触发；WAIT_IDR/reset/seek/track switch/audio/multi-track/default/listener-null 隔离通过；完整 RTSP `331/0/0`；release AAR 构建通过 |
+| T87C | 已发布 `2.19.1-labi.29` | sparse `[0,833]`、`[0,833,866]`、两次 sparse breach 均不触发；持续 30fps backlog 触发；WAIT_IDR/reset/seek/track switch/audio/multi-track/default/listener-null 隔离通过；完整 RTSP `331/0/0`；release AAR 构建通过 |
 
 本项不新增逐 packet/sample callback、日志、JSON、IO、锁、对象队列、ring buffer 或 wall-clock
 读取；默认 RTSP 的 transport、buffer、decoder、retry/error 行为不变。
+
+发布信息：source commit/tag 为
+`03e78148cd3f83fb9885f77a2953690c05c47e43` /
+`exoplayer-rtsp-2.19.1-labi.29`，GitHub Pages commit 为
+`8008ef8e3b`。已发布 common、container、database、datasource、decoder、extractor、core、
+HLS 和 RTSP 全模块；远端 core/HLS/RTSP metadata 的 `latest/release` 均为
+`2.19.1-labi.29`，六个 AAR/POM 请求均返回 HTTP 200。远端 RTSP AAR/POM SHA256 为
+`2cbf0f7454c63e0277c1c4e19ec621af30ed20816275accf97cdd63c1a193a92` /
+`624ff304e8b8cbf79864f8a231e149ebf1a06919113f1f3e7182bec6486d943e`；core 为
+`132feeec3d8996f2ab6fb2fc01ff13b5822546663e05f24ef4eefa9e8704875b` /
+`fd89f463c3c31037f7118f77b52c9db85b65a3d6a35618295e5ac70d5c1d1734`；HLS 为
+`e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa` /
+`d181169f15487539e2acaa33efce641db0e35bc15b84d7db543e24106105a606`。
+远端 RTSP AAR `javap` 已确认六个新 evidence 字段、两个既有兼容构造器和新完整构造器，
+class list 不包含 Cast-SDK 类型。

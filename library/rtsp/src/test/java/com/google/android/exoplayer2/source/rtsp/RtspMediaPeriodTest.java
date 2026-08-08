@@ -25,7 +25,10 @@ import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.upstream.DefaultAllocator;
 import com.google.android.exoplayer2.util.Util;
 import com.google.common.collect.ImmutableList;
+import java.io.IOException;
+import java.net.BindException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.net.SocketFactory;
 import org.junit.After;
@@ -105,6 +108,72 @@ public final class RtspMediaPeriodTest {
     mediaPeriod.release();
 
     assertThat(refreshedSourceDurationMs.get()).isEqualTo(50_460);
+  }
+
+  @Test
+  public void prepareMediaPeriod_dataChannelBindFailsOnce_retriesAndPrepares() throws Exception {
+    RtpPacketStreamDump rtpPacketStreamDump =
+        RtspTestUtils.readRtpPacketStreamDump("media/rtsp/aac-dump.json");
+    rtspServer =
+        new RtspServer(
+            new RtspServer.ResponseProvider() {
+              @Override
+              public RtspResponse getOptionsResponse() {
+                return new RtspResponse(
+                    /* status= */ 200,
+                    new RtspHeaders.Builder().add(RtspHeaders.PUBLIC, "OPTIONS, DESCRIBE").build());
+              }
+
+              @Override
+              public RtspResponse getDescribeResponse(Uri requestedUri, RtspHeaders headers) {
+                return RtspTestUtils.newDescribeResponseWithSdpMessage(
+                    "v=0\r\n"
+                        + "o=- 1606776316530225 1 IN IP4 127.0.0.1\r\n"
+                        + "s=Exoplayer test\r\n"
+                        + "t=0 0\r\n"
+                        + "a=range:npt=0-50.46\r\n",
+                    ImmutableList.of(rtpPacketStreamDump),
+                    requestedUri);
+              }
+            });
+    AtomicInteger dataChannelOpenCount = new AtomicInteger();
+    TransferRtpDataChannelFactory delegate = new TransferRtpDataChannelFactory(DEFAULT_TIMEOUT_MS);
+    RtpDataChannel.Factory failFirstFactory =
+        trackId -> {
+          if (dataChannelOpenCount.getAndIncrement() == 0) {
+            throw new IOException(new BindException("transient port conflict"));
+          }
+          return delegate.createAndOpenDataChannel(trackId);
+        };
+    AtomicBoolean prepareCallbackCalled = new AtomicBoolean();
+
+    mediaPeriod =
+        new RtspMediaPeriod(
+            new DefaultAllocator(/* trimOnReset= */ true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+            failFirstFactory,
+            RtspTestUtils.getTestUri(rtspServer.startAndGetPortNumber()),
+            /* listener= */ timing -> {},
+            /* userAgent= */ "ExoPlayer:RtspPeriodTest",
+            /* socketFactory= */ SocketFactory.getDefault(),
+            /* debugLoggingEnabled= */ false);
+    mediaPeriod.prepare(
+        new MediaPeriod.Callback() {
+          @Override
+          public void onPrepared(MediaPeriod mediaPeriod) {
+            prepareCallbackCalled.set(true);
+          }
+
+          @Override
+          public void onContinueLoadingRequested(MediaPeriod source) {
+            source.continueLoading(/* positionUs= */ 0);
+          }
+        },
+        /* positionUs= */ 0);
+
+    RobolectricUtil.runMainLooperUntil(prepareCallbackCalled::get);
+    mediaPeriod.release();
+
+    assertThat(dataChannelOpenCount.get()).isEqualTo(2);
   }
 
   @Test

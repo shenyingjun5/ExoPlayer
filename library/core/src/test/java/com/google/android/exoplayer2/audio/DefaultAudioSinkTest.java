@@ -19,7 +19,11 @@ import static com.google.android.exoplayer2.audio.AudioSink.CURRENT_POSITION_NOT
 import static com.google.android.exoplayer2.audio.AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY;
 import static com.google.android.exoplayer2.audio.AudioSink.SINK_FORMAT_SUPPORTED_WITH_TRANSCODING;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
+import static org.mockito.Mockito.mock;
 
+import android.media.AudioFormat;
+import android.media.AudioTrack;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
 import com.google.android.exoplayer2.Format;
@@ -28,7 +32,9 @@ import com.google.android.exoplayer2.audio.DefaultAudioSink.DefaultAudioProcesso
 import com.google.android.exoplayer2.util.MimeTypes;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 import org.junit.Assert;
 import org.junit.Before;
@@ -73,6 +79,115 @@ public final class DefaultAudioSinkTest {
   public void handlesSpecializedAudioProcessorArray() {
     defaultAudioSink =
         new DefaultAudioSink.Builder().setAudioProcessors(new TeeAudioProcessor[0]).build();
+  }
+
+  @Test
+  public void getAudioTrackMinimumRetryBufferSize_pcm_isOneSecondOrMinBufferSize() {
+    assertThat(
+            DefaultAudioSink.getAudioTrackMinimumRetryBufferSize(
+                C.ENCODING_PCM_16BIT,
+                SAMPLE_RATE_44_1,
+                CHANNEL_COUNT_STEREO * BYTES_PER_FRAME_16_BIT,
+                Format.NO_VALUE,
+                /* minBufferSize= */ 12345))
+        .isEqualTo(176400);
+
+    assertThat(
+            DefaultAudioSink.getAudioTrackMinimumRetryBufferSize(
+                C.ENCODING_PCM_16BIT,
+                SAMPLE_RATE_44_1,
+                CHANNEL_COUNT_STEREO * BYTES_PER_FRAME_16_BIT,
+                Format.NO_VALUE,
+                /* minBufferSize= */ 200000))
+        .isEqualTo(200000);
+  }
+
+  @Test
+  public void getAudioTrackMinimumRetryBufferSize_nonPcmWithBitrate_isOneSecondOrMinBufferSize() {
+    assertThat(
+            DefaultAudioSink.getAudioTrackMinimumRetryBufferSize(
+                C.ENCODING_AAC_LC,
+                SAMPLE_RATE_44_1,
+                /* outputPcmFrameSize= */ C.LENGTH_UNSET,
+                /* inputBitrate= */ 128000,
+                /* minBufferSize= */ 12345))
+        .isEqualTo(16000);
+
+    assertThat(
+            DefaultAudioSink.getAudioTrackMinimumRetryBufferSize(
+                C.ENCODING_AAC_LC,
+                SAMPLE_RATE_44_1,
+                /* outputPcmFrameSize= */ C.LENGTH_UNSET,
+                /* inputBitrate= */ 128000,
+                /* minBufferSize= */ 20000))
+        .isEqualTo(20000);
+  }
+
+  @Test
+  public void getAudioTrackMinimumRetryBufferSize_nonPcmUnknownBitrate_usesMaximumEncodedRate() {
+    assertThat(
+            DefaultAudioSink.getAudioTrackMinimumRetryBufferSize(
+                C.ENCODING_AAC_LC,
+                SAMPLE_RATE_44_1,
+                /* outputPcmFrameSize= */ C.LENGTH_UNSET,
+                Format.NO_VALUE,
+                /* minBufferSize= */ 12345))
+        .isEqualTo(100000);
+  }
+
+  @Test
+  public void retryAudioTrackInitialization_retriesDownToMinimumAndReturnsSuccessfulSize()
+      throws Exception {
+    List<Integer> attemptedBufferSizes = new ArrayList<>();
+    AudioTrack expectedAudioTrack = mock(AudioTrack.class);
+    AudioSink.InitializationException initialFailure = createAudioTrackInitializationException();
+
+    DefaultAudioSink.AudioTrackRetryResult result =
+        DefaultAudioSink.retryAudioTrackInitialization(
+            /* initialBufferSize= */ 2_000_000,
+            /* minimumRetryBufferSize= */ 176_400,
+            /* frameSize= */ 4,
+            initialFailure,
+            bufferSize -> {
+              attemptedBufferSizes.add(bufferSize);
+              if (bufferSize > 176_400) {
+                throw createAudioTrackInitializationException();
+              }
+              return expectedAudioTrack;
+            });
+
+    assertThat(attemptedBufferSizes)
+        .containsExactly(1_000_000, 500_000, 250_000, 176_400)
+        .inOrder();
+    assertThat(result.audioTrack).isSameInstanceAs(expectedAudioTrack);
+    assertThat(result.bufferSize).isEqualTo(176_400);
+    assertThat(initialFailure.getSuppressed()).hasLength(3);
+  }
+
+  @Test
+  public void retryAudioTrackInitialization_allAttemptsFail_throwsInitialFailure() {
+    List<Integer> attemptedBufferSizes = new ArrayList<>();
+    AudioSink.InitializationException initialFailure = createAudioTrackInitializationException();
+
+    AudioSink.InitializationException thrown =
+        assertThrows(
+            AudioSink.InitializationException.class,
+            () ->
+                DefaultAudioSink.retryAudioTrackInitialization(
+                    /* initialBufferSize= */ 1_000_003,
+                    /* minimumRetryBufferSize= */ 176_401,
+                    /* frameSize= */ 4,
+                    initialFailure,
+                    bufferSize -> {
+                      attemptedBufferSizes.add(bufferSize);
+                      throw createAudioTrackInitializationException();
+                    }));
+
+    assertThat(thrown).isSameInstanceAs(initialFailure);
+    assertThat(attemptedBufferSizes)
+        .containsExactly(500_004, 250_004, 176_404)
+        .inOrder();
+    assertThat(initialFailure.getSuppressed()).hasLength(3);
   }
 
   @Test
@@ -382,6 +497,17 @@ public final class DefaultAudioSinkTest {
 
   private void configureDefaultAudioSink(int channelCount) throws AudioSink.ConfigurationException {
     configureDefaultAudioSink(channelCount, /* trimStartFrames= */ 0, /* trimEndFrames= */ 0);
+  }
+
+  private static AudioSink.InitializationException createAudioTrackInitializationException() {
+    return new AudioSink.InitializationException(
+        AudioTrack.STATE_UNINITIALIZED,
+        SAMPLE_RATE_44_1,
+        AudioFormat.CHANNEL_OUT_STEREO,
+        /* bufferSize= */ 2_000_000,
+        STEREO_44_1_FORMAT,
+        /* isRecoverable= */ false,
+        /* audioTrackException= */ null);
   }
 
   private void configureDefaultAudioSink(int channelCount, int trimStartFrames, int trimEndFrames)

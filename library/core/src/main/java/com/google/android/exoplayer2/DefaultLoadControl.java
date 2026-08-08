@@ -41,6 +41,8 @@ import com.google.errorprone.annotations.CanIgnoreReturnValue;
 @Deprecated
 public class DefaultLoadControl implements LoadControl {
 
+  private static final String TAG = "DefaultLoadControl";
+
   /**
    * The default minimum duration of media that the player will attempt to ensure is buffered at all
    * times, in milliseconds.
@@ -300,6 +302,7 @@ public class DefaultLoadControl implements LoadControl {
 
   private int targetBufferBytes;
   private boolean isLoading;
+  private boolean memoryPressureStopLogged;
 
   /** Constructs a new instance, using the {@code DEFAULT_*} constants defined in this class. */
   public DefaultLoadControl() {
@@ -437,17 +440,38 @@ public class DefaultLoadControl implements LoadControl {
     // Prevent playback from getting stuck if minBufferUs is too small.
     minBufferUs = max(minBufferUs, minBufferFloorUs);
     if (bufferedDurationUs < minBufferUs) {
-      isLoading = prioritizeTimeOverSizeThresholds || !targetBufferSizeReached;
+      boolean heapHasEnoughHeadroomForPrioritizeTimeOverSizeThreshold =
+          !prioritizeTimeOverSizeThresholds
+              || heapHasEnoughHeadroomForPrioritizeTimeOverSizeThreshold();
+      isLoading =
+          (prioritizeTimeOverSizeThresholds
+                  && heapHasEnoughHeadroomForPrioritizeTimeOverSizeThreshold)
+              || !targetBufferSizeReached;
+      boolean stoppedForMemoryPressure =
+          !isLoading
+              && prioritizeTimeOverSizeThresholds
+              && !heapHasEnoughHeadroomForPrioritizeTimeOverSizeThreshold;
+      if (stoppedForMemoryPressure && !memoryPressureStopLogged) {
+        Log.i(
+            TAG,
+            "Stopped loading before minBufferUs reached due to memory pressure, despite "
+                + "prioritizeTimeOverSizeThresholds=true.");
+      }
+      memoryPressureStopLogged = stoppedForMemoryPressure;
       if (!isLoading && bufferedDurationUs < minBufferFloorUs) {
         Log.w(
-            "DefaultLoadControl",
+            TAG,
             "Target buffer size reached with less than "
                 + Util.usToMs(minBufferFloorUs)
                 + "ms of buffered media data.");
       }
     } else if (bufferedDurationUs >= maxBufferUs || targetBufferSizeReached) {
       isLoading = false;
-    } // Else don't change the loading state.
+      memoryPressureStopLogged = false;
+    } else {
+      memoryPressureStopLogged = false;
+      // Don't change the loading state.
+    }
     return isLoading;
   }
 
@@ -495,6 +519,7 @@ public class DefaultLoadControl implements LoadControl {
             ? DEFAULT_MIN_BUFFER_SIZE
             : targetBufferBytesOverwrite;
     isLoading = false;
+    memoryPressureStopLogged = false;
     if (resetAllocator) {
       allocator.reset();
     }
@@ -522,6 +547,23 @@ public class DefaultLoadControl implements LoadControl {
       default:
         throw new IllegalArgumentException();
     }
+  }
+
+  /**
+   * Determines whether the heap has enough free space to respect {@link
+   * #prioritizeTimeOverSizeThresholds}.
+   *
+   * <p>Ignoring {@link #prioritizeTimeOverSizeThresholds} when heap space is very limited helps to
+   * avoid {@link OutOfMemoryError} when playing extremely high bitrate content.
+   *
+   * <p>"Enough space" is defined as 4% of the max heap size, because the system may start throwing
+   * {@link OutOfMemoryError} when available heap space drops below 1%.
+   */
+  private static boolean heapHasEnoughHeadroomForPrioritizeTimeOverSizeThreshold() {
+    Runtime runtime = Runtime.getRuntime();
+    long maxMemory = runtime.maxMemory();
+    // Either the heap still has space to grow, or it is at max size with at least 4% free.
+    return runtime.totalMemory() < maxMemory || runtime.freeMemory() >= (maxMemory / 25);
   }
 
   private static void assertGreaterOrEqual(int value1, int value2, String name1, String name2) {

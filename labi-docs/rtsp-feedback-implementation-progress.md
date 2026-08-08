@@ -1080,3 +1080,67 @@ Publication:
   `d181169f15487539e2acaa33efce641db0e35bc15b84d7db543e24106105a606`.
 - Remote RTSP AAR `javap` confirms all six evidence fields, both legacy constructors, the new full
   constructor, and no Cast-SDK classes.
+
+## T88 Broad Media3 ExoPlayer Playback Backport Batch 1
+
+Status: Implemented and release-verified locally; pending `2.19.1-labi.30` publication.
+
+Scope:
+
+- Backported Media3 RTSP UDP bind preparation fix from commit
+  `8bf3b5c78191c4129e7318c9587cfc3b400387d3`.
+  - `RtspMediaPeriod.InternalListener.onLoadError(...)` now retries `BindException` before checking
+    `prepared`, so UDP port conflicts during initial preparation can recover.
+  - `RtpDataLoadable.load()` no longer dereferences a null `dataChannel` in `finally`, preserving
+    the original bind/open failure instead of masking it with `NullPointerException`.
+- Backported Media3 `DefaultLoadControl` OOM guard from commit
+  `d32189df0f8a59c8992b37ceff02f5d3ceb2f822`.
+  - When `prioritizeTimeOverSizeThresholds=true`, the player only ignores byte-size limits if heap
+    headroom remains above the Media3 4% threshold.
+  - The fork's low-latency `setMinBufferFloorMs(int)` behavior is unchanged.
+- Backported Media3 `DefaultAudioSink` AudioTrack initialization retry strategy from commit
+  `6be48df57df0493868175b05050b9767965b61c4`.
+  - Because ExoPlayer 2.19.1 does not have Media3's newer `AudioOutputProvider` abstraction, the
+    policy was manually adapted to the existing `AudioTrack` construction path.
+  - On initialization failure only, retry buffer size is halved down to the max of 1-second audio
+    data and platform min buffer size. Normal audio write/render paths are unchanged.
+
+Performance and default-behavior review:
+
+- No new diagnostics listener, packet/sample/frame callback, JSON, IO, lock, or logging was added
+  to packet/frame hot paths.
+- RTSP change only affects loader error handling and cleanup after open failure.
+- LoadControl adds one heap-headroom check only inside `shouldContinueLoading(...)` when buffered
+  duration is below min buffer and `prioritizeTimeOverSizeThresholds=true`. The default
+  `prioritizeTimeOverSizeThresholds=false` path does not query the heap. The memory-pressure log is
+  emitted once per pressure-stop episode rather than once per loading evaluation.
+- AudioTrack retry logic only runs after `AudioTrack` initialization throws. Successful
+  initialization and steady-state audio rendering do not execute the retry loop.
+
+Verification:
+
+- Initial `./gradlew :library-rtsp:testDebugUnitTest` failed because `ANDROID_HOME` was not set in
+  the shell environment.
+- Passed:
+  `ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`.
+- Passed:
+  `ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:testDebugUnitTest --tests com.google.android.exoplayer2.DefaultLoadControlTest --tests com.google.android.exoplayer2.audio.DefaultAudioSinkTest`.
+- Added AudioTrack retry behavior coverage for retry ordering, aligned minimum, eventual success,
+  suppressed failures, and terminal failure.
+- Added `RtspMediaPeriodTest` integration coverage proving a transient preparation-time
+  `BindException` retries the RTP data channel and completes preparation.
+- Full `:library-rtsp:testDebugUnitTest`: `333 tests`, `0 failures`, `0 errors`.
+- Full `:library-core:testDebugUnitTest` executed `4,866 tests`: `4,864` passed and two unrelated
+  network-error expectation tests timed out while waiting for
+  `http://this-will-throw-an-exception.mp4` to fail:
+  `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`. Both fail at their
+  `runUntilError(...)` line and do not exercise the changed LoadControl or AudioTrack retry paths.
+- `:library-core:lint`, `:library-rtsp:lint`, `:library-core:assembleRelease`,
+  `:library-hls:assembleRelease`, and `:library-rtsp:assembleRelease` passed.
+
+Next recommended Media3 backport batch:
+
+- Audio session id concurrency fix: `16cb8176055bf5680e1e54b918ee347e5f28c1cc`.
+- `MediaCodec` operating-rate fallback: `d1a3251ca412f98af19f1e5b6b45c92ca356f64d`.
+- Surface immediate-render decision fix: `59ace1a2bc0149073c1e3600845422d905c2a45b`.

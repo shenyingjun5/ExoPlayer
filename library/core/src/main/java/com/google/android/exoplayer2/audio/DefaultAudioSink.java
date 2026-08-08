@@ -85,10 +85,10 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 public final class DefaultAudioSink implements AudioSink {
 
   /**
-   * If an attempt to instantiate an AudioTrack with a buffer size larger than this value fails, a
-   * second attempt is made using this buffer size.
+   * The fallback minimum buffer size to use for retry if the 1-second buffer size cannot be
+   * calculated.
    */
-  private static final int AUDIO_TRACK_SMALLER_BUFFER_RETRY_SIZE = 1_000_000;
+  private static final int AUDIO_TRACK_SMALLER_BUFFER_RETRY_FALLBACK_SIZE = 1_000_000;
 
   /**
    * Thrown when the audio track has provided a spurious timestamp, if {@link
@@ -986,23 +986,104 @@ public final class DefaultAudioSink implements AudioSink {
   }
 
   private AudioTrack buildAudioTrackWithRetry() throws InitializationException {
+    Configuration initialConfiguration = checkNotNull(configuration);
     try {
-      return buildAudioTrack(checkNotNull(configuration));
+      return buildAudioTrack(initialConfiguration);
     } catch (InitializationException initialFailure) {
-      // Retry with a smaller buffer size.
-      if (configuration.bufferSize > AUDIO_TRACK_SMALLER_BUFFER_RETRY_SIZE) {
-        Configuration retryConfiguration =
-            configuration.copyWithBufferSize(AUDIO_TRACK_SMALLER_BUFFER_RETRY_SIZE);
-        try {
-          AudioTrack audioTrack = buildAudioTrack(retryConfiguration);
-          configuration = retryConfiguration;
-          return audioTrack;
-        } catch (InitializationException retryFailure) {
-          initialFailure.addSuppressed(retryFailure);
-        }
+      int frameSize =
+          initialConfiguration.outputPcmFrameSize != C.LENGTH_UNSET
+              ? initialConfiguration.outputPcmFrameSize
+              : 1;
+      int minimumRetryBufferSize =
+          getAudioTrackMinimumRetryBufferSize(
+              initialConfiguration.outputEncoding,
+              initialConfiguration.outputSampleRate,
+              initialConfiguration.outputPcmFrameSize,
+              initialConfiguration.inputFormat.bitrate,
+              getAudioTrackMinBufferSize(
+                  initialConfiguration.outputSampleRate,
+                  initialConfiguration.outputChannelConfig,
+                  initialConfiguration.outputEncoding));
+      AudioTrackRetryResult retryResult;
+      try {
+        retryResult =
+            retryAudioTrackInitialization(
+                initialConfiguration.bufferSize,
+                minimumRetryBufferSize,
+                frameSize,
+                initialFailure,
+                bufferSize ->
+                    buildAudioTrack(initialConfiguration.copyWithBufferSize(bufferSize)));
+      } catch (InitializationException retryFailure) {
+        maybeDisableOffload();
+        throw retryFailure;
       }
-      maybeDisableOffload();
-      throw initialFailure;
+      configuration = initialConfiguration.copyWithBufferSize(retryResult.bufferSize);
+      return retryResult.audioTrack;
+    }
+  }
+
+  /* package */ static AudioTrackRetryResult retryAudioTrackInitialization(
+      int initialBufferSize,
+      int minimumRetryBufferSize,
+      int frameSize,
+      InitializationException initialFailure,
+      AudioTrackRetryBuilder audioTrackBuilder)
+      throws InitializationException {
+    int retryBufferSize = initialBufferSize;
+    while (retryBufferSize > minimumRetryBufferSize) {
+      int smallerBufferSize = max(minimumRetryBufferSize, retryBufferSize / 2);
+      smallerBufferSize = alignBufferSizeToFrameSize(smallerBufferSize, frameSize);
+      if (smallerBufferSize >= retryBufferSize) {
+        break;
+      }
+      retryBufferSize = smallerBufferSize;
+      try {
+        return new AudioTrackRetryResult(
+            audioTrackBuilder.build(retryBufferSize), retryBufferSize);
+      } catch (InitializationException retryFailure) {
+        initialFailure.addSuppressed(retryFailure);
+      }
+    }
+    throw initialFailure;
+  }
+
+  private static int alignBufferSizeToFrameSize(int bufferSize, int frameSize) {
+    int partialFrameSize = bufferSize % frameSize;
+    return partialFrameSize == 0 ? bufferSize : bufferSize + frameSize - partialFrameSize;
+  }
+
+  /* package */ static int getAudioTrackMinimumRetryBufferSize(
+      @C.Encoding int outputEncoding,
+      int outputSampleRate,
+      int outputPcmFrameSize,
+      int inputBitrate,
+      int minBufferSize) {
+    int oneSecondBufferSize;
+    if (Util.isEncodingLinearPcm(outputEncoding)) {
+      oneSecondBufferSize = outputSampleRate * outputPcmFrameSize;
+    } else if (inputBitrate != Format.NO_VALUE) {
+      oneSecondBufferSize = inputBitrate / 8;
+    } else {
+      int maxRate =
+          DefaultAudioTrackBufferSizeProvider.getMaximumEncodedRateBytesPerSecond(outputEncoding);
+      oneSecondBufferSize =
+          maxRate != C.RATE_UNSET_INT ? maxRate : AUDIO_TRACK_SMALLER_BUFFER_RETRY_FALLBACK_SIZE;
+    }
+    return max(oneSecondBufferSize, minBufferSize);
+  }
+
+  /* package */ interface AudioTrackRetryBuilder {
+    AudioTrack build(int bufferSize) throws InitializationException;
+  }
+
+  /* package */ static final class AudioTrackRetryResult {
+    public final AudioTrack audioTrack;
+    public final int bufferSize;
+
+    private AudioTrackRetryResult(AudioTrack audioTrack, int bufferSize) {
+      this.audioTrack = audioTrack;
+      this.bufferSize = bufferSize;
     }
   }
 

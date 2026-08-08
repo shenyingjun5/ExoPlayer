@@ -180,7 +180,7 @@ This scan compares Media3 release-note PRs/issues against the current fork after
 | P1 | Media3 1.2.x release note | TCP fallback race/hang | Local code has UDP-to-TCP fallback, but no focused comparison against Media3 1.2.x race fix. | Keep as a single fallback-stability patch. Higher risk than parser fixes; do after release config or before wider field test. |
 | P1 | `androidx/media#1087` | Skip invalid SDP media descriptions | 已回迁：invalid media descriptions are skipped and their media-level lines are ignored until the next `m=` section. | Done. Covered by `SessionDescriptionTest`. |
 | P1 | `androidx/media#1138` | URL encoded `@` in RTSP user-info | 已回迁：`removeUserInfo` splits on the last `@`; encoded `@` in user-info is preserved during parsing. | Done. Covered by `RtspMessageUtilTest`. |
-| P1 | Media3 1.11.0-alpha01 release note | UDP port binding transient stalls/failures | Not merged. Current Cast-SDK primary path is TCP interleaved; UDP feedback exists but UDP RTP acceptance is secondary. | Watch until stable or until UDP acceptance becomes required. Backport only if diff is small and Android 4.4-safe. |
+| P1 | Media3 1.11.0-alpha01 release note, commit `8bf3b5c78191c4129e7318c9587cfc3b400387d3` | UDP port binding transient stalls/failures | 已回迁：preparation 阶段允许重试 `BindException`，channel 创建前失败不再被 cleanup NPE 覆盖。 | Done. Covered by `RtpDataLoadableTest`, preparation retry integration coverage in `RtspMediaPeriodTest`, and full RTSP tests. |
 | P2 | `androidx/media#2941` | Discard video codecs below API 30 when frame rate changes | Not merged; touches video renderer / codec selection. | Defer. Potentially useful for camera streams with frame-rate changes, but core/renderer blast radius is larger than RTSP module. Need real black-screen/stutter evidence. |
 | P2 | Media3 1.11.0-alpha01 release note | Surface/frame rendering decisions and frame-rate estimation | Not merged; touches `MediaCodecVideoRenderer` / UI surfaces. | Watch only. Do not backport from alpha without reproduction. |
 | P2 | `androidx/media#1893` and Media3 1.9.0 stuck-player changes | Stuck player detection and wake lock defaults | Not merged; Media3 1.9.0 also raises `minSdk` to 23. | Do not wholesale backport. Prefer Cast-SDK-side timeout/retry policy and this fork's RTCP diagnostics. |
@@ -190,7 +190,7 @@ This scan compares Media3 release-note PRs/issues against the current fork after
 Recommended next batch:
 
 1. Next remaining RTSP client-interoperability item: compare and backport the 1.2.x TCP fallback race/hang fix if the diff is still relevant after the feedback changes.
-2. Hold 1.11.0-alpha01 UDP binding until stable or until UDP RTP acceptance requires it.
+2. UDP binding preparation fix has been backported as an isolated change with integration coverage.
 3. Keep renderer/Surface/LoadControl PRs as evidence-driven follow-ups only.
 
 ### RTSP Protocol Interop
@@ -211,7 +211,8 @@ The first parser/client interop batch has been applied:
 The following should remain separate follow-up work:
 
 - TCP fallback race/hang fixes from the 1.2.x line.
-- UDP port binding transient stalls/failures from 1.11.0-alpha01, once stable or required by UDP acceptance.
+- UDP port binding transient stalls/failures from 1.11.0-alpha01 are now backported and covered by
+  preparation retry tests.
 
 These are useful for third-party RTSP servers, but should not be mixed with the packet-reader correctness patch.
 
@@ -223,6 +224,39 @@ Renderer and load-control changes should not be mixed into the RTSP module patch
 - LoadControl default changes can affect non-RTSP playback and should first be expressed through Cast-SDK player configuration.
 - Stuck-player detection is conceptually useful, but Media3 1.9.0 also raises `minSdk` to 23. Do not import its framework wholesale into the Android 4.4 fork.
 
+## 2026-08-09 Broad ExoPlayer Playback Backport Review
+
+Scope changed from RTSP-only to all ExoPlayer-related normal playback fixes that are valuable for
+the fork while keeping Android 4.4+ support and avoiding Media3 module migration.
+
+Implemented first batch:
+
+| Priority | Media3 source | Area | Local decision | Status |
+| --- | --- | --- | --- | --- |
+| P0 | commit `8bf3b5c78191c4129e7318c9587cfc3b400387d3` | RTSP UDP port binding transient stalls/failures | Backport small RTSP-only diff. Retry `BindException` during preparation and preserve the original bind failure if channel creation fails before `dataChannel` is assigned. | Implemented. Covered by full RTSP unit tests, focused `RtpDataLoadableTest`, and `RtspMediaPeriodTest` preparation retry integration coverage. |
+| P0/P1 | commit `d32189df0f8a59c8992b37ceff02f5d3ceb2f822` | `DefaultLoadControl` OOM guard for `prioritizeTimeOverSizeThresholds` | Backport heap-headroom guard into existing 2.19.1 single-player `DefaultLoadControl`. Preserve fork `setMinBufferFloorMs(int)` behavior. | Implemented. Covered by existing `DefaultLoadControlTest`; Media3 upstream did not add a deterministic heap-pressure unit test. |
+| P1 | commit `6be48df57df0493868175b05050b9767965b61c4`, issue `androidx/media#3207` | `DefaultAudioSink` AudioTrack initialization retry | Media3 patch depends on newer `AudioOutputProvider`; manually ported the retry policy to 2.19.1 `AudioTrack` construction. On initialization failure, retry by halving down to the max of 1-second audio buffer and platform min buffer. | Implemented. Covered by threshold calculation, retry ordering, eventual success, frame alignment, suppressed failure, and terminal failure tests in `DefaultAudioSinkTest`. |
+
+Deferred next batch:
+
+- `16cb8176055bf5680e1e54b918ee347e5f28c1cc`: audio session id update concurrency. High-value
+  normal playback stability fix, but touches `ExoPlayerImpl`, `ExoPlayerImplInternal`, and
+  `RendererHolder`; should be isolated in the next core-stability batch.
+- `d1a3251ca412f98af19f1e5b6b45c92ca356f64d`: `MediaCodec` operating-rate fallback. Useful for
+  streams without reliable frame-rate metadata, including RTSP, but touches renderer/codec logic.
+- `59ace1a2bc0149073c1e3600845422d905c2a45b`: Surface immediate-render decision. Useful for
+  surface replacement/rebuild scenarios, but should be validated with renderer tests.
+- `fd8a6b2c5750729120bee3b9bb52a8603c96da1d`: `VideoFrameReleaseHelper` duplicate callback
+  prevention. Performance/power improvement, not current latency correctness P0.
+- `f5d86b271ad6931a8606b97f6104a20968f82416`: video joining dropped/skipped counter fix. Useful
+  for diagnostics accuracy, not playback correctness P0.
+
+Do not merge now:
+
+- Ktor, Session, UI, Transformer, IMA, Cast, Compose, downloads, inspector, and preload modules.
+- HLS `Format.selectionPriority` / SCORE unless Cast-SDK has a matching HLS requirement.
+- MPEG-PS, MP3 gapless, Dolby Vision profile-specific fixes unless product playback scope expands.
+
 ## Recommended Implementation Order
 
 1. Done: Backport `RtpReaderUtils` timestamp wraparound and add focused tests.
@@ -230,8 +264,13 @@ Renderer and load-control changes should not be mixed into the RTSP module patch
 3. Done: Add H.265 Aggregation Packet support with positive and malformed packet tests.
 4. Done: Apply low-risk P1 parser/factory hardening for SDP, RTP header extension, and `rtspt://`.
 5. Done: Backport RTSP redirect, setup-state, keepalive timeout, OPTIONS Public, invalid SDP media, and encoded user-info interop fixes.
-6. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
-7. Later: Only after RTSP module stabilizes, decide whether renderer/load-control changes need separate evidence-driven patches.
+6. Done: Backport first broad ExoPlayer playback batch: RTSP UDP bind retry, `DefaultLoadControl`
+   OOM guard, and `DefaultAudioSink` AudioTrack retry down to 1-second threshold.
+7. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
+8. Next core-stability batch: audio session id concurrency, `MediaCodec` operating-rate fallback,
+   and Surface immediate-render decision.
+9. Later: `VideoFrameReleaseHelper`, joining counter correctness, and product-specific HLS/file
+   extractor fixes.
 
 ## Android 4.4 Compatibility
 
@@ -275,3 +314,23 @@ Verification status:
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:test` passed.
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest` passed after the third P1 interop batch.
 - The earlier `:exoplayer-rtsp:test` command was invalid for this checkout; the correct Gradle target is `:library-rtsp:test`.
+
+2026-08-09 first broad ExoPlayer playback backport batch:
+
+- Implemented RTSP UDP bind retry during preparation and fixed `RtpDataLoadable` cleanup so a
+  channel-open failure before `dataChannel` assignment preserves the original `IOException`.
+- Implemented Media3 `DefaultLoadControl` heap-headroom guard for
+  `prioritizeTimeOverSizeThresholds`, adapted to this fork's configurable `minBufferFloorUs`.
+- Implemented `DefaultAudioSink` AudioTrack initialization retry down to a 1-second audio buffer
+  threshold, adapted from newer Media3 `AudioOutputProvider` code back to ExoPlayer 2.19.1
+  `AudioTrack` construction.
+- Added focused tests:
+  - `RtpDataLoadableTest`
+  - `DefaultAudioSinkTest`
+
+Verification status:
+
+- `ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-rtsp:testDebugUnitTest`
+  passed.
+- `ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:testDebugUnitTest --tests com.google.android.exoplayer2.DefaultLoadControlTest --tests com.google.android.exoplayer2.audio.DefaultAudioSinkTest`
+  passed.

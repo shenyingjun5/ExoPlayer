@@ -1083,7 +1083,7 @@ Publication:
 
 ## T88 Broad Media3 ExoPlayer Playback Backport Batch 1
 
-Status: Implemented and release-verified locally; pending `2.19.1-labi.30` publication.
+Status: Implemented, verified, and published as `2.19.1-labi.30`.
 
 Scope:
 
@@ -1144,3 +1144,20 @@ Next recommended Media3 backport batch:
 - Audio session id concurrency fix: `16cb8176055bf5680e1e54b918ee347e5f28c1cc`.
 - `MediaCodec` operating-rate fallback: `d1a3251ca412f98af19f1e5b6b45c92ca356f64d`.
 - Surface immediate-render decision fix: `59ace1a2bc0149073c1e3600845422d905c2a45b`.
+
+Publication:
+
+- Source commit/tag: `ca9c8d4dbb1910f2c4f78c3e6f87f5e753d776a6`,
+  `exoplayer-rtsp-2.19.1-labi.30`.
+- GitHub Pages commit: `1b02ba1f5fe7b5eb621eecbc8a981936a96c2bbc`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote core/HLS/RTSP metadata reports `latest/release=2.19.1-labi.30`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: core AAR
+  `83207e7250f8156c6da49cfe6b57587adff5e7107a3d5349d1872f94af3c2c71`, core POM
+  `817e6e599a77d5a1b58501483101d2bc35159659c59cbaabdec060ab30a9ee90`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `966ea52d3cc5b95fc80bfdb186861ef028e1b3b901f4ec513c5f74e92cf64319`, RTSP AAR
+  `cbd22f1e184c1a72a9d228dd3a5742fd98b6e218623b76797338955835bfc9a4`, and RTSP POM
+  `75fa5f8801359f7f0d08caec40308a8c2c24b004ca9b6de253ebd672c313ac8f`.

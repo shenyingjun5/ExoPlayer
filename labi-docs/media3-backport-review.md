@@ -231,6 +231,9 @@ the fork while keeping Android 4.4+ support and avoiding Media3 module migration
 
 Implemented first batch:
 
+Release status: published as the immutable full-module artifact set `2.19.1-labi.30` from source
+commit `ca9c8d4dbb` and tag `exoplayer-rtsp-2.19.1-labi.30`.
+
 | Priority | Media3 source | Area | Local decision | Status |
 | --- | --- | --- | --- | --- |
 | P0 | commit `8bf3b5c78191c4129e7318c9587cfc3b400387d3` | RTSP UDP port binding transient stalls/failures | Backport small RTSP-only diff. Retry `BindException` during preparation and preserve the original bind failure if channel creation fails before `dataChannel` is assigned. | Implemented. Covered by full RTSP unit tests, focused `RtpDataLoadableTest`, and `RtspMediaPeriodTest` preparation retry integration coverage. |

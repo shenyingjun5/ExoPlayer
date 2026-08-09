@@ -909,7 +909,11 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
         }
       }
     }
-    flushCodec();
+    // Some codecs stop accepting samples if flushed before receiving their first input buffer.
+    // There is no codec state to clear in that case, so leave the codec untouched.
+    if (codecReceivedBuffers) {
+      flushCodec();
+    }
     return false;
   }
 

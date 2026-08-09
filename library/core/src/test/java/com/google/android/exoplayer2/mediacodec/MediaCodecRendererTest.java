@@ -19,10 +19,17 @@ import static com.google.android.exoplayer2.decoder.DecoderReuseEvaluation.REUSE
 import static com.google.android.exoplayer2.testutil.FakeSampleStream.FakeSampleStreamItem.END_OF_STREAM_ITEM;
 import static com.google.android.exoplayer2.testutil.FakeSampleStream.FakeSampleStreamItem.oneByteSample;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import android.media.MediaCodec;
 import android.media.MediaCrypto;
 import android.media.MediaFormat;
 import android.os.SystemClock;
@@ -51,6 +58,64 @@ import org.mockito.InOrder;
 /** Unit tests for {@link MediaCodecRenderer} */
 @RunWith(AndroidJUnit4.class)
 public class MediaCodecRendererTest {
+
+  @Test
+  public void resetPosition_withoutBuffersReceived_doesNotFlushCodec() throws Exception {
+    MediaCodecAdapter codecAdapter = mock(MediaCodecAdapter.class);
+    when(codecAdapter.dequeueInputBufferIndex()).thenReturn(MediaCodec.INFO_TRY_AGAIN_LATER);
+    when(codecAdapter.dequeueOutputBufferIndex(any()))
+        .thenReturn(MediaCodec.INFO_TRY_AGAIN_LATER);
+    TestRenderer renderer = new TestRenderer(configuration -> codecAdapter);
+    renderer.init(/* index= */ 0, PlayerId.UNSET);
+    Format format = new Format.Builder().setSampleMimeType(MimeTypes.AUDIO_AAC).build();
+    FakeSampleStream sampleStream = createFakeSampleStream(format, /* sampleTimesUs...= */ 0);
+    renderer.enable(
+        RendererConfiguration.DEFAULT,
+        new Format[] {format},
+        sampleStream,
+        /* positionUs= */ 0,
+        /* joining= */ false,
+        /* mayRenderStartOfStream= */ true,
+        /* startPositionUs= */ 0,
+        /* offsetUs= */ 0);
+    renderer.start();
+    renderer.render(/* positionUs= */ 0, SystemClock.elapsedRealtime());
+
+    renderer.resetPosition(/* positionUs= */ 0);
+
+    verify(codecAdapter, never()).flush();
+  }
+
+  @Test
+  public void resetPosition_withBuffersReceived_flushesCodec() throws Exception {
+    MediaCodecAdapter codecAdapter = mock(MediaCodecAdapter.class);
+    when(codecAdapter.dequeueInputBufferIndex())
+        .thenReturn(0)
+        .thenReturn(MediaCodec.INFO_TRY_AGAIN_LATER);
+    when(codecAdapter.getInputBuffer(0)).thenReturn(ByteBuffer.allocate(1024));
+    when(codecAdapter.dequeueOutputBufferIndex(any()))
+        .thenReturn(MediaCodec.INFO_TRY_AGAIN_LATER);
+    TestRenderer renderer = new TestRenderer(configuration -> codecAdapter);
+    renderer.init(/* index= */ 0, PlayerId.UNSET);
+    Format format = new Format.Builder().setSampleMimeType(MimeTypes.AUDIO_AAC).build();
+    FakeSampleStream sampleStream = createFakeSampleStream(format, /* sampleTimesUs...= */ 0);
+    renderer.enable(
+        RendererConfiguration.DEFAULT,
+        new Format[] {format},
+        sampleStream,
+        /* positionUs= */ 0,
+        /* joining= */ false,
+        /* mayRenderStartOfStream= */ true,
+        /* startPositionUs= */ 0,
+        /* offsetUs= */ 0);
+    renderer.start();
+    renderer.render(/* positionUs= */ 0, SystemClock.elapsedRealtime());
+    verify(codecAdapter).queueInputBuffer(eq(0), anyInt(), anyInt(), anyLong(), anyInt());
+
+    renderer.resetPosition(/* positionUs= */ 0);
+
+    verify(codecAdapter).flush();
+  }
 
   @Test
   public void render_withReplaceStream_triggersOutputCallbacksInCorrectOrder() throws Exception {
@@ -345,9 +410,13 @@ public class MediaCodecRendererTest {
   private static class TestRenderer extends MediaCodecRenderer {
 
     public TestRenderer() {
+      this(MediaCodecAdapter.Factory.DEFAULT);
+    }
+
+    public TestRenderer(MediaCodecAdapter.Factory mediaCodecAdapterFactory) {
       super(
           C.TRACK_TYPE_AUDIO,
-          MediaCodecAdapter.Factory.DEFAULT,
+          mediaCodecAdapterFactory,
           /* mediaCodecSelector= */ (mimeType, requiresSecureDecoder, requiresTunnelingDecoder) ->
               Collections.singletonList(
                   MediaCodecInfo.newInstance(

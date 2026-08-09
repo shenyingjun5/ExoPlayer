@@ -240,19 +240,21 @@ commit `ca9c8d4dbb` and tag `exoplayer-rtsp-2.19.1-labi.30`.
 | P0/P1 | commit `d32189df0f8a59c8992b37ceff02f5d3ceb2f822` | `DefaultLoadControl` OOM guard for `prioritizeTimeOverSizeThresholds` | Backport heap-headroom guard into existing 2.19.1 single-player `DefaultLoadControl`. Preserve fork `setMinBufferFloorMs(int)` behavior. | Implemented. Covered by existing `DefaultLoadControlTest`; Media3 upstream did not add a deterministic heap-pressure unit test. |
 | P1 | commit `6be48df57df0493868175b05050b9767965b61c4`, issue `androidx/media#3207` | `DefaultAudioSink` AudioTrack initialization retry | Media3 patch depends on newer `AudioOutputProvider`; manually ported the retry policy to 2.19.1 `AudioTrack` construction. On initialization failure, retry by halving down to the max of 1-second audio buffer and platform min buffer. | Implemented. Covered by threshold calculation, retry ordering, eventual success, frame alignment, suppressed failure, and terminal failure tests in `DefaultAudioSinkTest`. |
 
-Deferred next batch:
+Second core-stability batch:
 
-- `16cb8176055bf5680e1e54b918ee347e5f28c1cc`: audio session id update concurrency. High-value
-  normal playback stability fix, but touches `ExoPlayerImpl`, `ExoPlayerImplInternal`, and
-  `RendererHolder`; should be isolated in the next core-stability batch.
-- `d1a3251ca412f98af19f1e5b6b45c92ca356f64d`: `MediaCodec` operating-rate fallback. Useful for
-  streams without reliable frame-rate metadata, including RTSP, but touches renderer/codec logic.
-- `59ace1a2bc0149073c1e3600845422d905c2a45b`: Surface immediate-render decision. Useful for
-  surface replacement/rebuild scenarios, but should be validated with renderer tests.
-- `fd8a6b2c5750729120bee3b9bb52a8603c96da1d`: `VideoFrameReleaseHelper` duplicate callback
-  prevention. Performance/power improvement, not current latency correctness P0.
-- `f5d86b271ad6931a8606b97f6104a20968f82416`: video joining dropped/skipped counter fix. Useful
-  for diagnostics accuracy, not playback correctness P0.
+| Media3 source | Decision for ExoPlayer 2.19.1 | Status |
+| --- | --- | --- |
+| `da867c6b1ac93a6ce86413664bb02fa3df8a4058` | Applicable. ExoPlayer 2.19.1 unconditionally calls `MediaCodec.flush()` before the codec has necessarily received an input buffer. Some platform codecs then swallow subsequent samples. Skip only this empty flush; preserve every release/workaround and normal flush path. | Implemented. `MediaCodecRendererTest` covers both empty and non-empty codec reset paths. Planned for `2.19.1-labi.31`. |
+| `16cb8176055bf5680e1e54b918ee347e5f28c1cc` | Not applicable. The Media3 race comes from constructor-time background-looper access to `ExoPlayerImpl.period`. ExoPlayer 2.19.1 initializes and dispatches the audio session ID synchronously on the application thread, and `setAudioSessionId` verifies that thread. | No code change. |
+| `d1a3251ca412f98af19f1e5b6b45c92ca356f64d` | Defer. The upstream change is not just a frame-rate fallback: it also changes the global policy from codec reinitialization to retaining an old operating rate when a new rate is unknown, and relies on newer renderer callbacks. Normal 1x RTSP playback does not benefit enough to justify this cross-renderer behavior change without a reproduction. | Evidence-driven only. |
+| `59ace1a2bc0149073c1e3600845422d905c2a45b` | Not applicable as written. The fixed forced `join(renderNextFrameImmediately=true)` behavior belongs to newer `VideoFrameReleaseControl`; 2.19.1 surface replacement only sets a joining deadline and does not force the next frame to render immediately. | No code change. |
+| `fd8a6b2c5750729120bee3b9bb52a8603c96da1d` | Not applicable as written. Media3 uses per-helper samplers and display callbacks that can enqueue duplicates. ExoPlayer 2.19.1 uses one shared `VSyncSampler`; only the observer-count transition from zero to one posts a callback, and display changes do not post another sampler callback. | No code change. |
+| `f5d86b271ad6931a8606b97f6104a20968f82416` | Not applicable as written. It depends on Media3's newer decoder-input dropping and `VideoFrameReleaseControl` joining architecture, which 2.19.1 does not have. | No code change. |
+
+The one-line skipped-input counter change bundled in Media3 commit `59ace1a...` was also excluded.
+In 2.19.1 the relevant non-key sample is already filtered by the older `SampleQueue`/renderer path in
+the tested scenario, so adding a renderer-only counter would not provide a complete or reliable
+metric.
 
 Do not merge now:
 
@@ -269,11 +271,11 @@ Do not merge now:
 5. Done: Backport RTSP redirect, setup-state, keepalive timeout, OPTIONS Public, invalid SDP media, and encoded user-info interop fixes.
 6. Done: Backport first broad ExoPlayer playback batch: RTSP UDP bind retry, `DefaultLoadControl`
    OOM guard, and `DefaultAudioSink` AudioTrack retry down to 1-second threshold.
-7. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
-8. Next core-stability batch: audio session id concurrency, `MediaCodec` operating-rate fallback,
-   and Surface immediate-render decision.
-9. Later: `VideoFrameReleaseHelper`, joining counter correctness, and product-specific HLS/file
-   extractor fixes.
+7. In progress: Backport the applicable empty-codec flush fix as the isolated `labi.31`
+   core-stability release.
+8. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
+9. Later and evidence-driven: operating-rate behavior, frame-rate-change codec selection, and
+   product-specific HLS/file extractor fixes.
 
 ## Android 4.4 Compatibility
 

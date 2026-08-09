@@ -1161,3 +1161,41 @@ Publication:
   `966ea52d3cc5b95fc80bfdb186861ef028e1b3b901f4ec513c5f74e92cf64319`, RTSP AAR
   `cbd22f1e184c1a72a9d228dd3a5742fd98b6e218623b76797338955835bfc9a4`, and RTSP POM
   `75fa5f8801359f7f0d08caec40308a8c2c24b004ca9b6de253ebd672c313ac8f`.
+
+## T89 Broad Media3 ExoPlayer Playback Backport Batch 2
+
+Status: Implemented and verified; pending publication as `2.19.1-labi.31`.
+
+Scope:
+
+- Backported Media3 commit `da867c6b1ac93a6ce86413664bb02fa3df8a4058` to
+  `MediaCodecRenderer.flushOrReleaseCodec()`.
+- If a codec has been created but has not received any input buffer, position reset no longer calls
+  `MediaCodec.flush()`. Some device codecs can swallow every later sample after this empty flush.
+- Once any codec input has been queued, the existing flush behavior is unchanged. Codec release,
+  drain actions, DRM update, EOS and device workaround conditions remain ahead of the new guard and
+  retain their existing semantics.
+
+Performance and compatibility review:
+
+- The steady-state codec path adds no work. The reset/disable path adds one primitive boolean
+  branch and no allocation, logging, lock or callback.
+- No public API changed. The fix applies to audio and video codec renderers and does not depend on
+  RTSP diagnostics or low-latency policy.
+- No new Android API is used, so Android 4.4 compatibility is unchanged.
+- Media3 audio-session concurrency, operating-rate fallback, Surface immediate-render,
+  `VideoFrameReleaseHelper` callback and joining-counter commits were reviewed separately. They are
+  either architecturally absent from 2.19.1 or require broader global behavior changes, so they are
+  not included in this batch.
+
+Verification:
+
+- Targeted `MediaCodecRendererTest`: passed, including new assertions that reset before the first
+  queued input does not flush and reset after queued input still flushes.
+- Full `:library-rtsp:testDebugUnitTest`: `333 tests`, `0 failures`, `0 errors`.
+- Full `:library-core:testDebugUnitTest` executed `4,868 tests`: `4,856` passed, `10` skipped, and
+  the same two unrelated network-error expectation tests recorded for `labi.30` timed out at
+  `runUntilError(...)`: `ExoPlayerTest.onEvents_correspondToListenerCalls` and
+  `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`.
+- `:library-core:lint`, `:library-rtsp:lint`, `:library-core:assembleRelease`,
+  `:library-hls:assembleRelease`, and `:library-rtsp:assembleRelease` passed.

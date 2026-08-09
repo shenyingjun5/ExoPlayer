@@ -1164,7 +1164,7 @@ Publication:
 
 ## T89 Broad Media3 ExoPlayer Playback Backport Batch 2
 
-Status: Implemented and verified; pending publication as `2.19.1-labi.31`.
+Status: Implemented, verified, and published as `2.19.1-labi.31`.
 
 Scope:
 
@@ -1199,3 +1199,19 @@ Verification:
   `DefaultAnalyticsCollectorTest.onEvents_isReportedWithCorrectEventTimes`.
 - `:library-core:lint`, `:library-rtsp:lint`, `:library-core:assembleRelease`,
   `:library-hls:assembleRelease`, and `:library-rtsp:assembleRelease` passed.
+
+Publication:
+
+- Source commit/tag: `53998610c7`, `exoplayer-rtsp-2.19.1-labi.31`.
+- GitHub Pages commit: `c4fc783`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote core/HLS/RTSP metadata reports `latest/release=2.19.1-labi.31`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: core AAR
+  `b3c4ec2241a8ced41d85a058df86fcf7c69954ff68f1a3589c6d8fb980a48dc5`, core POM
+  `ad1d55e7f04012c541ad10ad9eaed8dde2dc1e498fee61821fbd1e79aedf2352`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `e5b19b16e76a9e07d3d8a5863fd7b6e77beff56686569ac3d2e62e22b6929856`, RTSP AAR
+  `cbd22f1e184c1a72a9d228dd3a5742fd98b6e218623b76797338955835bfc9a4`, and RTSP POM
+  `f4a434f3c39c7e841ee7ac57edf5801d20964f149dbc9897f1eaddf028b6b825`.

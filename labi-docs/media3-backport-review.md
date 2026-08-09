@@ -244,7 +244,7 @@ Second core-stability batch:
 
 | Media3 source | Decision for ExoPlayer 2.19.1 | Status |
 | --- | --- | --- |
-| `da867c6b1ac93a6ce86413664bb02fa3df8a4058` | Applicable. ExoPlayer 2.19.1 unconditionally calls `MediaCodec.flush()` before the codec has necessarily received an input buffer. Some platform codecs then swallow subsequent samples. Skip only this empty flush; preserve every release/workaround and normal flush path. | Implemented. `MediaCodecRendererTest` covers both empty and non-empty codec reset paths. Planned for `2.19.1-labi.31`. |
+| `da867c6b1ac93a6ce86413664bb02fa3df8a4058` | Applicable. ExoPlayer 2.19.1 unconditionally calls `MediaCodec.flush()` before the codec has necessarily received an input buffer. Some platform codecs then swallow subsequent samples. Skip only this empty flush; preserve every release/workaround and normal flush path. | Implemented and published as `2.19.1-labi.31` from source commit `53998610c7` and tag `exoplayer-rtsp-2.19.1-labi.31`. `MediaCodecRendererTest` covers both empty and non-empty codec reset paths. |
 | `16cb8176055bf5680e1e54b918ee347e5f28c1cc` | Not applicable. The Media3 race comes from constructor-time background-looper access to `ExoPlayerImpl.period`. ExoPlayer 2.19.1 initializes and dispatches the audio session ID synchronously on the application thread, and `setAudioSessionId` verifies that thread. | No code change. |
 | `d1a3251ca412f98af19f1e5b6b45c92ca356f64d` | Defer. The upstream change is not just a frame-rate fallback: it also changes the global policy from codec reinitialization to retaining an old operating rate when a new rate is unknown, and relies on newer renderer callbacks. Normal 1x RTSP playback does not benefit enough to justify this cross-renderer behavior change without a reproduction. | Evidence-driven only. |
 | `59ace1a2bc0149073c1e3600845422d905c2a45b` | Not applicable as written. The fixed forced `join(renderNextFrameImmediately=true)` behavior belongs to newer `VideoFrameReleaseControl`; 2.19.1 surface replacement only sets a joining deadline and does not force the next frame to render immediately. | No code change. |
@@ -271,7 +271,7 @@ Do not merge now:
 5. Done: Backport RTSP redirect, setup-state, keepalive timeout, OPTIONS Public, invalid SDP media, and encoded user-info interop fixes.
 6. Done: Backport first broad ExoPlayer playback batch: RTSP UDP bind retry, `DefaultLoadControl`
    OOM guard, and `DefaultAudioSink` AudioTrack retry down to 1-second threshold.
-7. In progress: Backport the applicable empty-codec flush fix as the isolated `labi.31`
+7. Done: Backport the applicable empty-codec flush fix as the isolated `labi.31`
    core-stability release.
 8. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
 9. Later and evidence-driven: operating-rate behavior, frame-rate-change codec selection, and

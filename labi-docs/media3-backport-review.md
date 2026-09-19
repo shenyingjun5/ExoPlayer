@@ -609,8 +609,8 @@ Verification:
 
 ### Priority summary
 
-| Rank | Batch | Why | Suggested release |
+| Rank | Batch | Why | Release |
 | --- | --- | --- | --- |
-| 1 | B, implemented (`bc0652cb5471`, `4c95cd96b53e`) | Directly targets the `STATE_BUFFERING` stall and A/V drift under weak network; small and isolated in `library/core` audio. `be15915b6abc` dropped with a structural reason. | `labi.32` candidate |
-| 2 | A, implemented (`31fce52a2de2`, `c103d65280a6`, `c93d54c1ceef`, `cef7def9263c`, `d0ad9729a784`) | Contains a genuine `IllegalStateException` crash path and the rapid-scrub seek desync; shipped as one atomic batch. Three of the nine mutation probes survived — see the coverage-gap list | `labi.33` candidate |
+| 1 | B, implemented and published (`bc0652cb5471`, `4c95cd96b53e`) | Directly targets the `STATE_BUFFERING` stall and A/V drift under weak network; small and isolated in `library/core` audio. `be15915b6abc` dropped with a structural reason. | `labi.32`, published (tag `exoplayer-rtsp-2.19.1-labi.32`, gh-pages `8928449f38`) |
+| 2 | A, implemented and published (`31fce52a2de2`, `c103d65280a6`, `c93d54c1ceef`, `cef7def9263c`, `d0ad9729a784`) | Contains a genuine `IllegalStateException` crash path and the rapid-scrub seek desync; shipped as one atomic batch. Five of eleven mutation probes survived — see the coverage-gap list. | `labi.33`, published (tag `exoplayer-rtsp-2.19.1-labi.33`, gh-pages `d55f204921`) |
 | 3 | C | Behaviour changes without local reproduction | Evidence-driven only |

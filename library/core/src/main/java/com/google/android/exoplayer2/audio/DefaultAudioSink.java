@@ -628,7 +628,8 @@ public final class DefaultAudioSink implements AudioSink {
     if (!isAudioTrackInitialized() || startMediaTimeUsNeedsInit) {
       return CURRENT_POSITION_NOT_SET;
     }
-    long positionUs = audioTrackPositionTracker.getCurrentPositionUs(sourceEnded);
+    long positionUs =
+        audioTrackPositionTracker.getCurrentPositionUs(sourceEnded, getWrittenFrames());
     positionUs = min(positionUs, configuration.framesToDurationUs(getWrittenFrames()));
     return applySkipping(applyMediaPositionParameters(positionUs));
   }
@@ -1316,7 +1317,8 @@ public final class DefaultAudioSink implements AudioSink {
   @Override
   public boolean hasPendingData() {
     return isAudioTrackInitialized()
-        && audioTrackPositionTracker.hasPendingData(getWrittenFrames());
+        && (outputBuffer != null
+            || audioTrackPositionTracker.hasPendingData(getWrittenFrames()));
   }
 
   @Override

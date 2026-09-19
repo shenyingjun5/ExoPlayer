@@ -159,6 +159,13 @@ import java.lang.reflect.Method;
 
   private static final long FORCE_RESET_WORKAROUND_TIMEOUT_MS = 200;
 
+  /**
+   * The minimum distance between the previous and current raw playback head position to treat a
+   * decrease in position as a 32-bit unsigned integer wrap-around rather than an unexpected
+   * position decrease or reset.
+   */
+  private static final long MIN_RAW_PLAYBACK_HEAD_POSITION_WRAP_DISTANCE = 1L << 31;
+
   private static final int MAX_PLAYHEAD_OFFSET_COUNT = 10;
   private static final int MIN_PLAYHEAD_OFFSET_SAMPLE_INTERVAL_US = 30_000;
   private static final int MIN_LATENCY_SAMPLE_INTERVAL_US = 50_0000;
@@ -271,7 +278,14 @@ import java.lang.reflect.Method;
     resetSyncParams();
   }
 
-  public long getCurrentPositionUs(boolean sourceEnded) {
+  /**
+   * Returns the current playback position estimate in microseconds.
+   *
+   * @param sourceEnded Whether the source has ended.
+   * @param writtenFrames The total number of audio frames written to the audio track so far.
+   * @return The current playback position estimate in microseconds.
+   */
+  public long getCurrentPositionUs(boolean sourceEnded, long writtenFrames) {
     if (checkNotNull(this.audioTrack).getPlayState() == PLAYSTATE_PLAYING) {
       maybeSampleSyncParams();
     }
@@ -305,6 +319,18 @@ import java.lang.reflect.Method;
       if (!sourceEnded) {
         positionUs = max(0, positionUs - latencyUs);
       }
+    }
+
+    long maxPositionUs = sampleCountToDurationUs(writtenFrames, outputSampleRate);
+    if (positionUs >= maxPositionUs) {
+      // During an audio underrun, the timestamp poller can extrapolate the position beyond the
+      // frames that were actually written. Streaming that position out causes an artificial jump
+      // forward and a subsequent snap backward once playback recovers. Clamp it and discard the
+      // extrapolation state so the next sample is taken from the recovering playback head.
+      positionUs = maxPositionUs;
+      resetSyncParams();
+      audioTimestampPoller.reset();
+      return positionUs;
     }
 
     if (lastSampleUsedGetTimestampMode != useGetTimestampMode) {
@@ -431,7 +457,7 @@ import java.lang.reflect.Method;
    * @return Whether the audio track has any pending data to play out.
    */
   public boolean hasPendingData(long writtenFrames) {
-    long currentPositionUs = getCurrentPositionUs(/* sourceEnded= */ false);
+    long currentPositionUs = getCurrentPositionUs(/* sourceEnded= */ false, writtenFrames);
     return writtenFrames > durationUsToSampleCount(currentPositionUs, outputSampleRate)
         || forceHasPendingData();
   }
@@ -643,8 +669,20 @@ import java.lang.reflect.Method;
     }
 
     if (this.rawPlaybackHeadPosition > rawPlaybackHeadPosition) {
-      // The value must have wrapped around.
-      rawPlaybackHeadWrapCount++;
+      if (this.rawPlaybackHeadPosition - rawPlaybackHeadPosition
+          >= MIN_RAW_PLAYBACK_HEAD_POSITION_WRAP_DISTANCE) {
+        // The value must have wrapped around.
+        rawPlaybackHeadWrapCount++;
+      } else {
+        // The playback head position decreased or was reset by an amount that is far too small to
+        // be a 32-bit unsigned integer wrap-around. Treat the sampled offsets and timestamp as
+        // stale instead of accounting for a wrap, which would shift the reported position forward
+        // by 2^32 frames and permanently break pending-data detection.
+        resetSyncParams();
+        if (audioTimestampPoller != null) {
+          audioTimestampPoller.reset();
+        }
+      }
     }
     this.rawPlaybackHeadPosition = rawPlaybackHeadPosition;
   }

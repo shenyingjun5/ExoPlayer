@@ -79,3 +79,6 @@ extensions/cronet/libs/*
 
 # MIDI extension
 extensions/midi/lib
+
+# Agent workspace data (session memory and local tooling state)
+.workbuddy

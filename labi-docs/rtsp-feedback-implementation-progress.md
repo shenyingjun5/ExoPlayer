@@ -1215,3 +1215,146 @@ Publication:
   `e5b19b16e76a9e07d3d8a5863fd7b6e77beff56686569ac3d2e62e22b6929856`, RTSP AAR
   `cbd22f1e184c1a72a9d228dd3a5742fd98b6e218623b76797338955835bfc9a4`, and RTSP POM
   `f4a434f3c39c7e841ee7ac57edf5801d20964f149dbc9897f1eaddf028b6b825`.
+
+## T90 Media3 Audio Underrun Backport Batch
+
+Status: Implemented, verified, and published as `2.19.1-labi.32`.
+
+Scope:
+
+- Backported unreleased Media3 `4c95cd96b53e` (#3407): an unexpected `AudioTrack` playback head
+  position decrease is no longer counted as a 32-bit wrap. `updateRawPlaybackHeadPosition` now
+  requires a decrease of at least `1L << 31` frames to bump `rawPlaybackHeadWrapCount`; anything
+  smaller resets the sync params and the timestamp poller instead. Previously the count jumped by
+  2^32 frames (~24.8 h at 48 kHz) on any position reset, which permanently broke
+  `hasPendingData()` and stalled playback in `STATE_BUFFERING`.
+- Backported Media3 `bc0652cb5471` (#3210, 1.11.0): `AudioTrackPositionTracker.getCurrentPositionUs`
+  now clamps the reported position against the frames actually written, so the timestamp poller can
+  no longer extrapolate past `writtenFrames` and then snap backwards on recovery.
+- Deliberately not backported: `be15915b6abc` (#3210, 100 ms ready grace period). 2.19.1 still ORs
+  the decoder state into `isReady()`, which makes the grace branch unreachable; loosening the
+  condition would instead suppress the buffering indicator while the RTSP feed is genuinely stalled.
+  Recorded with the reachability argument in `labi-docs/media3-backport-review.md`.
+
+Performance and compatibility review:
+
+- `getCurrentPositionUs` gains one comparison against `writtenFrames`; the wrap path adds one
+  primitive comparison and only runs when the raw playback head moves backwards.
+- No public API changed. No new Android API is used, so Android 4.4 compatibility is unchanged.
+- The tracker keeps its `sourceEnded` parameter, which Media3 dropped, because 2.19.1 uses it for
+  latency adjustment. `DefaultAudioSink.hasPendingData()` keeps delegating to the tracker and gains
+  an `outputBuffer != null` guard, because 2.19.1 has no `AudioOutput` abstraction.
+
+Verification:
+
+- `:library-core:testDebugUnitTest --tests com.google.android.exoplayer2.audio.*`: `2395 tests`,
+  0 failures.
+- New `AudioTrackPositionTrackerTest` (4 tests) covers a genuine wrap-around, an unexpected
+  decrease, a residual position resetting to zero, and the written-frames clamp.
+- Mutation check: setting the wrap distance to `0` and disabling the clamp failed exactly the three
+  expected tests while the genuine wrap-around test still passed, confirming the tests bind to the
+  fix rather than passing incidentally.
+- `:library-core:assembleRelease`, `:library-hls:assembleRelease`, `:library-rtsp:assembleRelease`
+  and the lint tasks in the publish graph passed.
+
+Publication:
+
+- Source commit/tag: `21d44e11e6`, `exoplayer-rtsp-2.19.1-labi.32`.
+- GitHub Pages commit: `8928449f38`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote core/HLS/RTSP metadata reports `latest/release=2.19.1-labi.32`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: core AAR
+  `07902daafb2d75c40cd9ac1b2700b3549b884300f72cc84f285fefa6c3b87331`, core POM
+  `f949522494df114a5c571ab0a7f0012c7ca71970b14b2faf8df208234078eacb`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `bec7d582644268a07b511434250bfe34acb2d75e0ff2cc371e95bc05a415e4c7`, RTSP AAR
+  `cbd22f1e184c1a72a9d228dd3a5742fd98b6e218623b76797338955835bfc9a4`, and RTSP POM
+  `aec2f2804781607a2c8c756d711204f08cbc2c37b81257d3477734fa6ddd6718`.
+- Change-scope evidence: the `labi.32` RTSP AAR is byte-identical to the `labi.31` RTSP AAR
+  (`cbd22f1e...`), which confirms that publishing the audio batch from a clean tree did not leak the
+  then-uncommitted RTSP seek changes into this version.
+
+## T91 Media3 RTSP Seek State Machine Backport Batch
+
+Status: Implemented, verified, and published as `2.19.1-labi.33`.
+
+Scope:
+
+- Backported the unreleased Media3 RTSP seek / stale-response series as one atomic batch:
+  `31fce52a2de2`, `c103d65280a6`, `c93d54c1ceef`, `cef7def9263c`, `d0ad9729a784`.
+- The batch is order-dependent and cannot be split: `c93d54c1ceef` removes the
+  `IllegalStateException` for `RTSP_STATE_UNINITIALIZED` / `RTSP_STATE_INIT` in
+  `RtspMediaPeriod.seekToUs`, and that path only becomes reachable once `c103d65280a6` makes
+  `close()` reset the client state.
+- `close()` now sends TEARDOWN whenever a session was established, even if playback never started,
+  and then resets `rtspState`, nulls `sessionId`, and clears `pendingSetupRtpLoadInfos`,
+  `pendingRequests` and the fork-private `currentSetupRtpLoadInfo`.
+- `pendingRequests.clear()` is now called in all three places `31fce52a2de2` touches:
+  `sendSetupRequest`, `sendTeardownRequest` and the 302/301 `Location` branch.
+- The pending-seek branch of `seekToUs` records `requestedSeekPositionUs` and re-seeks every loader
+  wrapper, and `onPlaybackStarted` clears `requestedSeekPositionUs` before re-entering `seekToUs`.
+- Both UDP-first-packet guards gained `!prepared`, so seeking to 0 on an already prepared period no
+  longer triggers a false UDP -> TCP fallback during rapid scrubbing.
+- Not taken: the `TrackSetupInfo` refactor of `31fce52a2de2`, which only decouples modules in the
+  Media3 graph.
+
+Performance and compatibility review:
+
+- All changes are in `library/rtsp`. No framework API change, no new Android API, so Android 4.4
+  compatibility is unchanged.
+- The seek path adds one loader-wrapper loop, which only runs on a pending seek, and the UDP path
+  adds one boolean test. No allocation, logging, lock or callback is added to steady-state packet
+  handling.
+
+Test infrastructure fix carried by this batch:
+
+- The local `RtspTestUtils` formatted RTP-Info urls as absolute urls with a hard-coded port, which
+  never matched the track uri derived from `Content-Base`. `RtpDataLoadable` therefore never applied
+  the timestamp and the seek paths under test were never actually exercised; three ported tests
+  failed with `expected: 640000 but was: 0`. Urls are now relative and resolved against the session
+  uri, as upstream does.
+- Buffered-position assertions use "advanced past the seek position" rather than a fixed value,
+  because `RtpPacketReorderingQueue` flushes on wall-clock time and the exact position is not
+  deterministic.
+
+Verification:
+
+- `:library-rtsp:test` (debug and release): `32 classes`, `341 tests`, `0 failures`, `0 skipped`.
+- Seven new seek tests in `RtspMediaPeriodTest`, plus `close_serverWithoutDescribeSupport_
+  clearsPendingRequestAndPreventsError` ported from `c103d65280a6` into `RtspClientTest`.
+- Baseline stability gate: the 20-test `RtspMediaPeriodTest` set was run 5 times back to back with
+  zero flaky tests before mutation probing.
+- Mutation matrix: 11 probes, 6 `KILLED`, 5 `SURVIVED`. The survivors are recorded as explicit
+  coverage gaps in `labi-docs/media3-backport-review.md`; the three `pendingRequests.clear()`
+  insertions of `31fce52a2de2` have no assertion at all, because every mutation only matters when a
+  response arrives after a state reset and `RtspServer.ResponseProvider` answers synchronously.
+- `:library-rtsp:assembleRelease` and the lint tasks in the publish graph passed.
+
+Publication:
+
+- Source commit/tag: `234eba957d`, `exoplayer-rtsp-2.19.1-labi.33`.
+- GitHub Pages commit: `d55f204921`.
+- Published modules: common, container, database, datasource, decoder, extractor, core, HLS, and
+  RTSP.
+- Remote core/HLS/RTSP metadata reports `latest/release=2.19.1-labi.33`; all six AAR/POM requests
+  returned HTTP 200.
+- Remote SHA256: core AAR
+  `07902daafb2d75c40cd9ac1b2700b3549b884300f72cc84f285fefa6c3b87331`, core POM
+  `0156cbc28c54dd141c9d2aa217a72e89b1707f5bcf2e96afcfd343aba4b8ce62`, HLS AAR
+  `e922c1bf2762abaf1fe738518fb2243bbb23cd26354ed2c5e3fcd6bc916793aa`, HLS POM
+  `b387c06d9e378e60f4285cd569cbb642bd49d78affccb97e732925d745c17639`, RTSP AAR
+  `6d902329dbdb033407fc574c138a5f821685e4569cc60ea5c62816444dc789c3`, and RTSP POM
+  `375d129d8c908949ee0f780f3b06e040bf526ab97cde82d6d801c0bb60533f8d`.
+- Change-scope evidence: the `labi.33` core AAR is byte-identical to the `labi.32` core AAR
+  (`07902daa...`), and the RTSP AAR changed from `cbd22f1e...` to `6d902329...`. The two releases
+  therefore isolate cleanly, and Cast-SDK can take the audio fix without the RTSP seek changes.
+
+Repository notes for the next release:
+
+- `constants.gradle` still defaults to `2.19.1-labi.7`; every release passes
+  `-PreleaseVersionOverride=2.19.1-labi.N` explicitly.
+- The local `gh-pages` ref was three versions behind `origin/gh-pages` at the start of this release
+  (`labi.29` vs `labi.31`) and had a stale worktree registration. Fetch `origin/gh-pages` before
+  publishing, and prune stale worktrees.

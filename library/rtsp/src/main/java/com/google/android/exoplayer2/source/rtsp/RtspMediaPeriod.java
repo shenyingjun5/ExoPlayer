@@ -486,39 +486,47 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     advanceSampleQueueRecoveryBoundary();
 
     // TODO(internal: b/213153670) Handle dropped seek position.
-    if (getBufferedPositionUs() == 0 && !isUsingRtpTcp) {
+    if (getBufferedPositionUs() == 0 && !prepared && !isUsingRtpTcp) {
       // Stores the seek position for later, if no RTP packet is received when using UDP.
       pendingSeekPositionUsForTcpRetry = positionUs;
       return positionUs;
     }
 
     discardBuffer(positionUs, /* toKeyframe= */ false);
-    requestedSeekPositionUs = positionUs;
 
     if (isSeekPending()) {
+      requestedSeekPositionUs = positionUs;
       switch (rtspClient.getState()) {
         case RtspClient.RTSP_STATE_READY:
           // PLAY request is sent, yet to receive the response. requestedSeekPositionUs stores the
           // new position to do another seek upon receiving the PLAY response.
-          return positionUs;
+          break;
         case RtspClient.RTSP_STATE_PLAYING:
-          // Pending PAUSE response, updates client with the newest seek position for the following
-          // PLAY request.
-          pendingSeekPositionUs = positionUs;
-          rtspClient.seekToUs(pendingSeekPositionUs);
-          return positionUs;
+        // Pending PAUSE response, updates client with the newest seek position for the following
+        // PLAY request.
         case RtspClient.RTSP_STATE_UNINITIALIZED:
         case RtspClient.RTSP_STATE_INIT:
+          // Pending SETUP response, updates client with the newest seek position for the PLAY
+          // request.
+          pendingSeekPositionUs = positionUs;
+          rtspClient.seekToUs(pendingSeekPositionUs);
+          break;
         default:
-          // Never happens.
           throw new IllegalStateException();
       }
+      // Resets the loader wrappers with the new seek position before returning, otherwise the
+      // sample queues keep the previous seek position and discard samples that precede it.
+      for (int i = 0; i < rtspLoaderWrappers.size(); i++) {
+        rtspLoaderWrappers.get(i).seekTo(positionUs);
+      }
+      return positionUs;
     }
 
     if (seekInsideBufferUs(positionUs)) {
       return positionUs;
     }
 
+    requestedSeekPositionUs = positionUs;
     pendingSeekPositionUs = positionUs;
 
     if (loadingFinished) {
@@ -1220,7 +1228,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     @Override
     public void onLoadCompleted(
         RtpDataLoadable loadable, long elapsedRealtimeMs, long loadDurationMs) {
-      if (getBufferedPositionUs() == 0) {
+      if (getBufferedPositionUs() == 0 && !prepared) {
         if (!isUsingRtpTcp) {
           // Retry playback with TCP if no sample has been received so far, and we are not already
           // using TCP. Retrying will setup new loadables, so will not retry with the current
@@ -1341,9 +1349,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           pendingSeekPositionUs = C.TIME_UNSET;
           requestedSeekPositionUs = C.TIME_UNSET;
         } else {
-          // Resets pendingSeekPositionUs to perform a fresh RTSP seek.
+          // Resets pendingSeekPositionUs to perform a fresh RTSP seek. Clears
+          // requestedSeekPositionUs first, so that the re-entrant seekToUs call is not mistaken
+          // for a seek request issued after this pending seek.
+          long seekPositionUs = requestedSeekPositionUs;
           pendingSeekPositionUs = C.TIME_UNSET;
-          seekToUs(requestedSeekPositionUs);
+          requestedSeekPositionUs = C.TIME_UNSET;
+          seekToUs(seekPositionUs);
         }
       } else if (pendingSeekPositionUsForTcpRetry != C.TIME_UNSET && isUsingRtpTcp) {
         seekToUs(pendingSeekPositionUsForTcpRetry);

@@ -273,9 +273,16 @@ Do not merge now:
    OOM guard, and `DefaultAudioSink` AudioTrack retry down to 1-second threshold.
 7. Done: Backport the applicable empty-codec flush fix as the isolated `labi.31`
    core-stability release.
-8. Next: Review TCP fallback race/hang as a separate fallback-stability batch.
+8. Superseded by the 2026-09-19 sweep: the TCP fallback race/hang item is now covered by Batch A
+   below, together with four related RTSP seek/stale-response state-machine fixes.
 9. Later and evidence-driven: operating-rate behavior, frame-rate-change codec selection, and
    product-specific HLS/file extractor fixes.
+10. Done: 2026-09-19 Batch B implemented — `AudioTrackPositionTracker` wrap-distance threshold and
+    `writtenFrames` clamp, plus the `DefaultAudioSink` `outputBuffer` guard. `be15915b6abc` reviewed
+    and dropped as not applicable as written. New `AudioTrackPositionTrackerTest`; full
+    `com.google.android.exoplayer2.audio.*` suite (2395 tests) passed.
+11. Next: implement Batch A (RTSP seek stability, five commits as one batch) as the `labi.33`
+    candidate.
 
 ## Android 4.4 Compatibility
 
@@ -339,3 +346,271 @@ Verification status:
   passed.
 - `ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:testDebugUnitTest --tests com.google.android.exoplayer2.DefaultLoadControlTest --tests com.google.android.exoplayer2.audio.DefaultAudioSinkTest`
   passed.
+
+## 2026-09-19 Upstream Watch: Media3 1.11.0 / 1.11.1 / `main`
+
+Sweep boundary: everything after the 2026-08-09 review, which stopped at `1.11.0-alpha01`
+(2026-06-23). New material reviewed:
+
+- `release` branch RELEASENOTES: `1.11.0` (2026-08-05), `1.11.1` (2026-09-10).
+- `main` branch RELEASENOTES `Unreleased changes` (future `1.12.0`).
+- Commit-level diffs by path: `libraries/exoplayer_rtsp`, `.../audio/*`, `.../video/*`,
+  `.../ExoPlayerImpl.java`.
+
+Method note: the GitHub mirror's default branch is `release`, which is cut per release. Fixes that
+are merged but not yet shipped only exist on `main`, so a path-scoped commit query must pass
+`sha=main`. Querying the default branch silently returns nothing for post-release fixes.
+
+### Already covered by this fork (verified, no action)
+
+| Upstream item | Where it appears | Fork status |
+| --- | --- | --- |
+| `DefaultLoadControl` OOM guard | 1.11.0 note | Backported in `labi.30` |
+| `AudioTrack` init retry down to 1 s (`#3207`) | 1.11.0 note | Backported in `labi.30` |
+| Codec swallowing samples after empty flush | 1.11.0 note | Backported in `labi.31` |
+| Audio session ID race (`#3241`) | 1.11.0 note | Assessed not applicable |
+| RTSP UDP port binding retry | 1.11.0 RTSP section | Backported (commit `8bf3b5c78191`) |
+| Operating-rate fallback, scrub-mode frames, joining-drop accounting, `VideoFrameReleaseHelper` display changes | 1.11.0 video notes | Assessed not applicable / evidence-driven |
+
+The 1.11.0 RTSP extension section contains only the already-backported UDP bind retry, so the RTSP
+release notes for 1.11.0/1.11.1 add nothing new. The valuable RTSP work is all still unreleased on
+`main`.
+
+### Batch A — RTSP seek / stale-response state machine (5 commits, unreleased)
+
+All five are on `main` only and belong to one state-machine fix series. Local line numbers below
+refer to the current working tree at `eddd9003ff`.
+
+| Order | Commit | Date | Subject | Local gap |
+| --- | --- | --- | --- | --- |
+| 1 | `31fce52a2de2` | 2026-08-18 | Clear pending RTSP requests when resetting state to INIT | `sendSetupRequest`, `sendTeardownRequest` and the 302 `Location` branch never call `pendingRequests.clear()`. A reply that arrives after a state reset is matched against a stale request. |
+| 2 | `c103d65280a6` | 2026-07-22 | Prevent `RtspClient` from processing stale RTSP responses post `close()` | `close()` only closes `keepAliveMonitor` + `messageChannel`. It never resets `rtspState`, nulls `sessionId`, or clears `pendingSetupRtpLoadInfos` / `pendingRequests`, and it only sends TEARDOWN when `keepAliveMonitor != null`. |
+| 3 | `c93d54c1ceef` | 2026-08-19 | Handle pending RTSP seeks during init states | **Real crash path.** `RtspMediaPeriod.seekToUs` still has `case RTSP_STATE_UNINITIALIZED: case RTSP_STATE_INIT: default: throw new IllegalStateException();` with the comment `// Never happens.` Combined with fix 2 making `close()` always reset to `UNINITIALIZED`, a seek arriving after close/reconnect now hits this throw. |
+| 4 | `cef7def9263c` | 2026-09-17 | Reset RTSP loader wrappers when updating pending seek position | Three separate gaps: `requestedSeekPositionUs` is assigned before the `isSeekPending()` test; the pending branch never calls `rtspLoaderWrappers.get(i).seekTo(...)` (only the non-pending path does); and `onPlaybackStarted` re-enters `seekToUs(requestedSeekPositionUs)` while also clearing the same field. Result: loadable target position diverges from the pending seek position, which is the reported backward-seek audio dropout / video freeze. |
+| 5 | `d0ad9729a784` | 2026-07-27 | Prevent accidental RTSP TCP fallback when rapid scrubbing | Both guards miss `!prepared`: `seekToUs` line 489 (`getBufferedPositionUs() == 0 && !isUsingRtpTcp`) and `onLoadCompleted` line 1223 (`getBufferedPositionUs() == 0`). On an already-prepared period, seeking to 0 falsely triggers the UDP→TCP fallback. |
+
+Adaptation notes:
+
+- Commit 3 (`31fce52a2de2`) also refactors `setupSelectedTracks` to take a new `TrackSetupInfo`
+  carrier instead of `RtpLoadInfo`. That refactor only exists to decouple the RTSP module from
+  `RtspMediaPeriod` in Media3's module graph. It is not needed here; backport only the three
+  `pendingRequests.clear()` insertions.
+- Commit 2 (`c103d65280a6`) must additionally clear this fork's own `currentSetupRtpLoadInfo` field,
+  which does not exist upstream.
+- Backporting order matters. Commit 3 only becomes reachable once commit 2 resets the state on
+  close, so applying commit 3 alone leaves the state reset inconsistent. Keep the batch atomic.
+
+Risk: low on Android API surface (all `library/rtsp`, no framework API changes), medium on behaviour
+because it rewrites the seek state machine. Upstream ships `RtspMediaPeriodTest` and `RtspClientTest`
+cases with these commits; port them rather than writing new coverage from scratch.
+
+#### Batch A implementation status
+
+Implemented from source commit `eddd9003ff`. All five commits were applied in one change set, as
+required; nothing in `library/rtsp` was partially applied.
+
+| File | Change |
+| --- | --- |
+| `library/rtsp/src/main/java/com/google/android/exoplayer2/source/rtsp/RtspClient.java` | `close()` now sends TEARDOWN whenever `sessionId != null`, then resets `rtspState` to `RTSP_STATE_UNINITIALIZED`, nulls `sessionId`, and clears `pendingSetupRtpLoadInfos`, `currentSetupRtpLoadInfo` and `pendingRequests`. `retryWithRtpTcp()` no longer nulls `sessionId` itself. `pendingRequests.clear()` added in all three places `31fce52a2de2` touches: `sendSetupRequest`, `sendTeardownRequest` and the 302/301 `Location` branch. |
+| `library/rtsp/src/main/java/com/google/android/exoplayer2/source/rtsp/RtspMediaPeriod.java` | `seekToUs` no longer throws for `RTSP_STATE_UNINITIALIZED` / `RTSP_STATE_INIT`; the pending-seek branch now records `requestedSeekPositionUs` and re-seeks every `RtpLoadWrapper`. Both UDP-first-packet guards gained `!prepared`. `onPlaybackStarted` clears `requestedSeekPositionUs` before re-entering `seekToUs`. |
+| `library/rtsp/src/test/java/com/google/android/exoplayer2/source/rtsp/RtspMediaPeriodTest.java` | Extended by 570 added / 6 removed lines: seven new seek tests plus a `TestResponseProvider`, a `FakeRtpDataChannel` that can be made to finish its load, and a `FakeRtpDataChannelFactory` that records whether the TCP fallback was used. `PAUSE` support added to the server double. |
+| `library/rtsp/src/test/java/com/google/android/exoplayer2/source/rtsp/RtspClientTest.java` | Ported `close_serverWithoutDescribeSupport_clearsPendingRequestAndPreventsError` from `c103d65280a6`. |
+| `library/rtsp/src/test/java/com/google/android/exoplayer2/source/rtsp/RtspTestUtils.java` | RTP-Info urls changed from absolute (`rtsp://localhost/test/...`) to relative. See the deviation note below. |
+| `library/rtsp/src/test/java/com/google/android/exoplayer2/source/rtsp/RtspServer.java` | Added `RtspServer.ResponseProvider#getPauseResponse` and a `METHOD_PAUSE` branch. |
+
+Adaptation notes for this fork:
+
+- `31fce52a2de2` brings three `pendingRequests.clear()` insertions only. Its `TrackSetupInfo`
+  refactor was dropped, because it exists solely to break the `rtsp` → `RtspMediaPeriod` dependency
+  in Media3's module graph.
+- `c103d65280a6` also clears the fork-private `currentSetupRtpLoadInfo`, which has no upstream
+  counterpart.
+- `default: throw new IllegalStateException()` is kept in `seekToUs` for genuinely impossible states;
+  only the two init states were moved into the pending-seek branch.
+
+Verification:
+
+- All five commits were re-diffed against upstream during review. Four matched on inspection; the
+  `pendingRequests.clear()` insertions of `31fce52a2de2` had only landed in `sendSetupRequest`, so
+  the `sendTeardownRequest` and 302/301 `Location` insertions were added and the whole suite re-run.
+  Both are now in place, so `RtspClient.java` tracks `31fce52a2de2` + `c103d65280a6` line-for-line
+  (plus the fork-private `currentSetupRtpLoadInfo` clear).
+- `git diff --check` clean.
+- `:library-rtsp:test` (`testDebugUnitTest` + `testReleaseUnitTest`) → 32 classes, 341 tests,
+  0 failures, 0 skipped in both variants.
+- Baseline stability gate: the whole 20-test `RtspMediaPeriodTest` set was run 5 times back to back
+  with zero flaky tests before any mutation probing, and the full class was run 8 times during
+  de-flaking.
+- All mutations were reverted and the tree re-verified afterwards (`git diff --check`, full suite).
+
+#### Batch A deliberate test deviations
+
+Two assertions differ from the upstream tests on purpose. Both are consequences of the fork's own
+test doubles, not of the production code.
+
+- **Relative RTP-Info urls.** The pre-existing local `RtspTestUtils` formatted RTP-Info as
+  `url=rtsp://localhost/test/%s;...` with a hard-coded port, while `RtspMediaTrack` derives its uri
+  from the `Content-Base` header, which uses a different port. The two never matched, so
+  `RtpDataLoadable` never applied the timestamp and the seek paths under test were never actually
+  exercised — three ported tests failed with `expected: 640000 but was: 0`. The url is now relative
+  and resolved against the session uri by `RtspTrackTiming.resolveUri`, which is what upstream does
+  and what a real server sends. This was a latent test-infrastructure bug, not a product bug.
+- **`> SEEK_POSITION_US` instead of `640_000`.** `RtpPacketReorderingQueue` flushes against wall-clock
+  time while the dump is indexed by RTP timestamps, so the exact buffered position at the moment the
+  assertion runs is genuinely non-deterministic — the same test was observed returning `640000` and
+  `6037000` on different runs. The three affected tests assert that the buffered position advanced
+  past the seek position instead of comparing with a fixed value; a position that stays at the seek
+  position, or at 0, still fails. The in-buffer test compares against a value captured in the same
+  run, so it is not weakened at all.
+
+#### Batch A mutation matrix and coverage gaps
+
+Eleven mutations were applied to the production code, one group at a time, and the target test set was
+re-run for each, against the clean baseline above. The `RtspMediaPeriod` probes were run against the
+full 20-test class; the client-side `pendingRequests.clear()` probes were run against the RTSP test
+classes, and the combined M6b+M6c run against the whole `com.google.android.exoplayer2.source.rtsp.*`
+package.
+
+| # | Mutation | Result |
+| --- | --- | --- |
+| M1 | Pending-seek branch no longer records `requestedSeekPositionUs` | KILLED |
+| M2 | Pending-seek branch no longer re-seeks the loader wrappers | KILLED |
+| M3a | Drop `!prepared` from the UDP first-packet guard in `seekToUs` | KILLED |
+| M3b | Drop `!prepared` from the guard in `onLoadCompleted` | KILLED by `onLoadCompleted_afterPrepare_doesNotTriggerTcpFallback` |
+| M4 | `seekToUs` throws again for `RTSP_STATE_UNINITIALIZED` / `RTSP_STATE_INIT` | KILLED |
+| M5a | `close()` does not clear `pendingRequests` | KILLED by `close_serverWithoutDescribeSupport_clearsPendingRequestAndPreventsError` |
+| M5b | `close()` does not reset `rtspState` / null `sessionId` | **SURVIVED** |
+| M6a | `sendSetupRequest` does not clear `pendingRequests` | **SURVIVED** |
+| M6b | 302/301 `Location` branch does not clear `pendingRequests` | **SURVIVED** |
+| M6c | `sendTeardownRequest` does not clear `pendingRequests` | **SURVIVED** |
+| M7 | `onPlaybackStarted` re-enters `seekToUs` with the field still set | **SURVIVED** |
+
+Five probes are bound to a test. The survivors are honest gaps and should not be read as verified:
+
+- **M6a/M6b/M6c — none of the three `31fce52a2de2` insertions is covered by any assertion.** The
+  structural reason is that every mutation only matters when a response arrives *after* a state
+  reset, and neither test double can hold a response back: `RtspServer.ResponseProvider` answers
+  synchronously inside `handleRtspMessage`. Upstream's own test for this commit,
+  `setupSelectedTracks_withDelayedPlayResponse_clearsPendingRequestAndPreventsError`, is built on the
+  `TrackSetupInfo` carrier that this fork deliberately did not take — it injects a transport string
+  directly instead of waiting for a live `RtpDataLoadable` to populate one. So it cannot be ported as
+  written. Closing this gap needs either `TrackSetupInfo` or a server double with a response latch.
+- **M6c is additionally redundant today.** `sendTeardownRequest` has exactly one caller in this fork
+  — `close()` — and `close()` clears `pendingRequests` itself a few lines later. The insertion is
+  kept so the fork tracks upstream line-for-line (it matters as soon as any other path tears a
+  session down), not because it changes current behaviour.
+- **M5b** is only partly covered: the ported client test asserts the reset state, but not the
+  `sessionId` nulling that makes a stale TEARDOWN impossible.
+- **M7** is guarded by the `requestedSeekPositionUs` bookkeeping around the re-entrant call. The
+  current tests do not distinguish the two orderings.
+
+None of these is a common-path behaviour difference, so they do not block the batch. They are listed
+so a later reader does not mistake a green suite for full coverage.
+
+### Batch B — audio underrun false buffering and media clock snap
+
+Two of the three commits are applicable and implemented. The third is not applicable as written; the
+reasoning is given below the table.
+
+| Commit | Date | Released in | Subject | Local status |
+| --- | --- | --- | --- | --- |
+| `4c95cd96b53e` | 2026-09-18 | unreleased (`#3407`) | Do not treat unexpected `AudioTrack` position decrease as overflow | Applicable. Lines 645-648 are exactly the code being fixed: `if (this.rawPlaybackHeadPosition > rawPlaybackHeadPosition) { rawPlaybackHeadWrapCount++; }`. Any position reset or decrease is counted as a 32-bit wrap, jumping the position by 2^32 frames (~24.8 h at 48 kHz), which permanently breaks `hasPendingData()` and stalls playback in `STATE_BUFFERING`. Implemented. |
+| `bc0652cb5471` | 2026-05-29 | 1.11.0 | Fix media clock snap during audio underruns (`#3210`) | Applicable. `AudioTrackPositionTracker.getCurrentPositionUs` had no clamp against `writtenFrames`, so the timestamp poller could extrapolate past the frames actually written and then snap back on recovery. Implemented. |
+| `be15915b6abc` | 2026-05-27 | 1.11.0 | Fix transient buffering during audio underruns (`#3210`) | **Not applicable as written.** See below. |
+
+#### Why `be15915b6abc` is not applicable as written
+
+The upstream patch replaces a sink-only readiness check with a 100 ms grace period:
+
+```java
+// Media3 1.11.0 DecoderAudioRenderer / MediaCodecAudioRenderer
+public boolean isReady() {
+  boolean isReady = audioSink.hasPendingData();
+  if (isReady) { ...; return true; }
+  if (hasBeenReady && isStarted && isSourceReady() && !hasReadStreamToEnd()) { /* 100 ms grace */ }
+  return false;
+}
+```
+
+Media3 could drop everything else because by 1.11.0 both audio renderers report readiness from the
+sink alone. 2.19.1 still ORs in the decoder state, and that changes the reachability of the grace
+branch:
+
+- `MediaCodecAudioRenderer.isReady()` line 638 is `audioSink.hasPendingData() || super.isReady()`.
+- `DecoderAudioRenderer.isReady()` line 565 is
+  `audioSink.hasPendingData() || (inputFormat != null && (isSourceReady() || outputBuffer != null))`.
+- `MediaCodecRenderer.isReady()` line 1721 is
+  `inputFormat != null && (isSourceReady() || hasOutputBuffer() || codecHotswapDeadlineMs ...)`.
+
+The grace branch requires `isSourceReady()` to be true, but it is only reached after the sink check
+and the OR-ed decoder check both returned false. With `inputFormat != null`, `isSourceReady() == true`
+implies `MediaCodecRenderer.isReady() == true`, so the branch is unreachable. The only combination
+that reaches it is `inputFormat == null`, which `onDisabled()` sets, and that is incidental to the
+patch's bookkeeping rather than the downstream-underrun scenario it targets.
+
+The remaining case, sink empty and source not ready, is genuine upstream starvation. Debouncing it
+would suppress the buffering indicator on a receiver whose RTSP feed has stalled, which is exactly
+the signal the product needs. Porting it as written would therefore be dead code, and porting it
+with a loosened condition would be a behaviour change in the wrong direction. No code change.
+
+#### Batch B adaptation notes
+
+- `bc0652cb5471` changes `getCurrentPositionUs()` to take a `writtenFrames` argument. 2.19.1 keeps
+  the `sourceEnded` parameter because it is used for the latency adjustment, so the local signature
+  became `getCurrentPositionUs(boolean sourceEnded, long writtenFrames)`. The call sites are
+  `DefaultAudioSink.getCurrentPositionUs` (passes `getWrittenFrames()`) and the tracker's own
+  `hasPendingData(writtenFrames)`.
+- `4c95cd96b53e` needs `MIN_RAW_PLAYBACK_HEAD_POSITION_WRAP_DISTANCE = 1L << 31` plus an `else`
+  branch calling `resetSyncParams()` and resetting the timestamp poller — both helpers already exist
+  locally. The poller is null-guarded locally, unlike upstream.
+- The `DefaultAudioSink.hasPendingData()` hunk assumes Media3's `AudioOutput` abstraction. 2.19.1
+  delegates to `audioTrackPositionTracker.hasPendingData(getWrittenFrames())`, so the guard was
+  re-expressed as `outputBuffer != null || audioTrackPositionTracker.hasPendingData(...)`. Without
+  it, the new clamp would report "no pending data" while a buffer is still queued for the AudioTrack.
+- The existing sink-level `min(positionUs, configuration.framesToDurationUs(getWrittenFrames()))` in
+  `DefaultAudioSink.getCurrentPositionUs` is now redundant but was deliberately kept, to avoid an
+  unrelated behaviour change in the same patch.
+
+#### Batch B implementation status
+
+Implemented from source commit `eddd9003ff`:
+
+| File | Change |
+| --- | --- |
+| `library/core/src/main/java/com/google/android/exoplayer2/audio/AudioTrackPositionTracker.java` | Wrap distance threshold and stale-offset reset in `updateRawPlaybackHeadPosition`; `writtenFrames` clamp with state reset in `getCurrentPositionUs`. |
+| `library/core/src/main/java/com/google/android/exoplayer2/audio/DefaultAudioSink.java` | Passes `getWrittenFrames()` to the tracker; `outputBuffer` guard in `hasPendingData()`. |
+| `library/core/src/test/java/com/google/android/exoplayer2/audio/AudioTrackPositionTrackerTest.java` | New. Four tests covering a genuine wrap-around, an unexpected decrease, a residual position resetting to zero, and the written-frames clamp. |
+
+Verification:
+
+- `:library-core:testDebugUnitTest --tests com.google.android.exoplayer2.audio.*` passed.
+- `AudioTrackPositionTrackerTest` 4/4 and the pre-existing `DefaultAudioSinkTest` 37/37 passed.
+- Mutation check: setting the wrap distance to `0` and disabling the clamp made exactly the three
+  expected tests fail, while the genuine wrap-around test still passed. This confirms the tests bind
+  to the fix rather than passing incidentally.
+- Test-runtime note: Robolectric does not virtualise `System.nanoTime()`, and the tracker smooths
+  playback head samples against it, so a reported position carries a sub-millisecond jitter around
+  the exact frame duration (measured 113-662 µs). Assertions therefore discriminate on the 2^32
+  frame order-of-magnitude gap instead of exact values, and the "no wrap" cases use a written frame
+  count above 2^32 (`5_000_000_000`) so the mistaken jump is not clamped away before it is observed.
+
+
+### Batch C — watch only, do not backport
+
+| Upstream | Content | Decision |
+| --- | --- | --- |
+| 1.11.0 ExoPlayer | Dynamic scheduling enabled by default, plus the follow-up `#3286` stale-position fix | 2.19.1 has no dynamic scheduling. Enabling it is a global behaviour change. Skip. |
+| 1.11.0 Video | `MediaCodecVideoRenderer.Builder.setMaxEarlyUsThreshold()` (50 ms default) | No equivalent builder in 2.19.1. Defer unless evidence points at early-frame scheduling. |
+| 1.11.0 / 1.11.1 / `main` video | Dropped-vs-skipped accounting, identical release timestamps, stale frames after a skipped flush | Already evaluated as not applicable; upstream restructured these onto `VideoFrameReleaseControl`, which 2.19.1 lacks. |
+| 1.11.1 | Pre-warm stalls, and Surface return to the primary renderer when a seek resets both renderers | Secondary-renderer prewarm path. The receiver plays a single video stream. |
+| 1.11.0 Extractors | AVI audio OOM, MP4 empty `ilst` OOB, Matroska tracks after clusters, MPEG-TS last frame | Unrelated to the RTSP live path unless a matching container shows up in the field. |
+| `main` | `setLoadOnlySelectedTracks(true)` default on | `ProgressiveMediaSource` / `DefaultMediaSourceFactory` path only. RTSP does not use it. |
+| `main` | Multiple `VideoFrameMetadataListener`, central `Flags` registry, playlist ID | API evolution on Media3 surfaces. Not applicable. |
+
+### Priority summary
+
+| Rank | Batch | Why | Suggested release |
+| --- | --- | --- | --- |
+| 1 | B, implemented (`bc0652cb5471`, `4c95cd96b53e`) | Directly targets the `STATE_BUFFERING` stall and A/V drift under weak network; small and isolated in `library/core` audio. `be15915b6abc` dropped with a structural reason. | `labi.32` candidate |
+| 2 | A, implemented (`31fce52a2de2`, `c103d65280a6`, `c93d54c1ceef`, `cef7def9263c`, `d0ad9729a784`) | Contains a genuine `IllegalStateException` crash path and the rapid-scrub seek desync; shipped as one atomic batch. Three of the nine mutation probes survived — see the coverage-gap list | `labi.33` candidate |
+| 3 | C | Behaviour changes without local reproduction | Evidence-driven only |

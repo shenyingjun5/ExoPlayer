@@ -305,12 +305,24 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   @Override
   public void close() throws IOException {
     if (keepAliveMonitor != null) {
-      // Playback has started. We have to stop the periodic keep alive and send a TEARDOWN so that
-      // the RTSP server stops sending RTP packets and frees up resources.
+      // Playback has started. We have to stop the periodic keep alive so that no further keep alive
+      // is sent after the session is torn down.
       keepAliveMonitor.close();
       keepAliveMonitor = null;
-      messageSender.sendTeardownRequest(uri, checkNotNull(sessionId));
     }
+    if (sessionId != null) {
+      // Sends a TEARDOWN so that the RTSP server stops sending RTP packets and frees up resources.
+      // A TEARDOWN can be sent as long as a session has been established, even if playback never
+      // started.
+      messageSender.sendTeardownRequest(uri, sessionId);
+    }
+    // Resets the client state, so that delayed responses for requests that were sent before close()
+    // are no longer processed, and a subsequent start() begins from a clean state.
+    rtspState = RTSP_STATE_UNINITIALIZED;
+    sessionId = null;
+    pendingSetupRtpLoadInfos.clear();
+    currentSetupRtpLoadInfo = null;
+    pendingRequests.clear();
     messageChannel.close();
   }
 
@@ -324,7 +336,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       close();
       messageChannel = new RtspMessageChannel(new MessageListener());
       messageChannel.open(getSocket(uri));
-      sessionId = null;
       receivedAuthorizationRequest = false;
       rtspAuthenticationInfo = null;
     } catch (IOException e) {
@@ -461,6 +472,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     public void sendSetupRequest(Uri trackUri, String transport, @Nullable String sessionId) {
       rtspState = RTSP_STATE_INIT;
+      // Resetting the state to INIT invalidates all outstanding requests. Delayed responses to
+      // them would otherwise be processed against the new state and report spurious errors.
+      pendingRequests.clear();
       sendRequest(
           getRequestWithCommonHeaders(
               METHOD_SETUP,
@@ -488,6 +502,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       }
 
       rtspState = RTSP_STATE_INIT;
+      // Resetting the state to INIT invalidates all outstanding requests, including a delayed
+      // response to the PLAY request that triggered this teardown.
+      pendingRequests.clear();
       sendRequest(
           getRequestWithCommonHeaders(
               METHOD_TEARDOWN, sessionId, /* additionalHeaders= */ ImmutableMap.of(), uri));
@@ -651,6 +668,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             if (rtspState != RTSP_STATE_UNINITIALIZED) {
               rtspState = RTSP_STATE_INIT;
             }
+            // Restarting from the redirect target invalidates the requests sent to the previous uri.
+            pendingRequests.clear();
             @Nullable String redirectionUriString = response.headers.get(RtspHeaders.LOCATION);
             if (redirectionUriString == null) {
               sessionInfoListener.onSessionTimelineRequestFailed(

@@ -225,11 +225,16 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   }
 
   @Override
-  public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {}
+  public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    // Use the RTP-Info origin supplied by the extractor, as the audio readers do. The first
+    // received video packet may be later than that origin and must keep its A/V offset.
+    firstReceivedTimestamp = timestamp;
+  }
 
   @Override
   public void onReceivingFirstPacket(
       long timestamp, int sequenceNumber, long arrivalElapsedRealtimeMs) {
+    onReceivingFirstPacket(timestamp, sequenceNumber);
     firstRtpPacketArrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
   }
 

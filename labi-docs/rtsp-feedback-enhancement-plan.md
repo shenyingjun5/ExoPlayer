@@ -49,6 +49,14 @@ Cast-SDK Android 接收端需要在 Android 4.4+ 设备上播放自家发送端�
 
 ## 当前实施状态
 
+### 2026-10-08 H.264/AAC 起始时间映射修复
+
+- 目标：修复 H.264 忽略 RTP-Info 起点而 AAC 保留起点，导致首包晚于声明起点时固定音画偏移。
+- 范围：仅 H.264 reader 的两个首包通知入口；保留无 RTP-Info 首包回退、Seek 重映射与恢复流程，不改 core/renderer/发送端。
+- 验收：真实 RtpExtractor/reader 的双轨时间戳一致；覆盖有无 diagnostics、有无 RTP-Info、独立非零起点、回绕、Seek/非零 NPT 和重建新会话。
+- 验证：`:library-rtsp:testDebugUnitTest :library-rtsp:lintDebug :library-rtsp:assembleRelease`；Cast-SDK 播放器回归、边界检查和同版本 5G Debug 验收。
+- 状态：修复完成，350 项 RTSP 单测（新增 9 项）/lintDebug/assembleRelease 通过；Cast-SDK 消费端 183 项单测/Lint 通过。内部制品 `2.19.1-labi.33-avsync-local-20261008` 仅写本地 Maven，未发布或占用正式 labi.N；同版本 Debug `20261008-160243-7fd8e9c0` 已在 5G 运行，用户于 2026-10-08 重投后确认“现在正确了”，实际音画同步验收通过。
+
 截至 2026-07-03，当前分支已包含两个本地提交：
 
 - `dd3af995c7 feat(rtsp): backport Media3 live fixes`

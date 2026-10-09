@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkState;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
@@ -38,6 +37,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  *     migration guide</a> for more details, including a script to help with the migration.
  */
 /* package */ public final class RtpAc3Reader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
 
   /** AC3 frame types defined in RFC4184 Section 4.1.1. */
   private static final int AC3_FRAME_TYPE_COMPLETE_FRAME = 0;
@@ -74,6 +75,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     checkState(firstReceivedTimestamp == C.TIME_UNSET);
     firstReceivedTimestamp = timestamp;
   }
@@ -101,7 +103,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     int numOfFrames = data.readUnsignedByte() & 0xFF;
 
     long sampleTimeUs =
-        toSampleTimeUs(
+        timestampAdjuster.toSampleTimeUs(
             startTimeOffsetUs, timestamp, firstReceivedTimestamp, payloadFormat.clockRate);
 
     switch (frameType) {
@@ -132,6 +134,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;
   }

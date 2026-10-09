@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkStateNotNull;
 
@@ -43,6 +42,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  */
 @Deprecated
 /* package */ final class RtpOpusReader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
   private static final String TAG = "RtpOpusReader";
   /* Opus uses a fixed 48KHz media clock RFC7845 Section 4. */
   private static final int MEDIA_CLOCK_FREQUENCY = 48_000;
@@ -79,6 +80,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     this.firstReceivedTimestamp = timestamp;
   }
 
@@ -121,7 +123,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       int size = data.bytesLeft();
       trackOutput.sampleData(data, size);
       long timeUs =
-          toSampleTimeUs(
+          timestampAdjuster.toSampleTimeUs(
               startTimeOffsetUs, timestamp, firstReceivedTimestamp, MEDIA_CLOCK_FREQUENCY);
       trackOutput.sampleMetadata(
           timeUs, C.BUFFER_FLAG_KEY_FRAME, size, /* offset*/ 0, /* cryptoData*/ null);
@@ -131,6 +133,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;
   }

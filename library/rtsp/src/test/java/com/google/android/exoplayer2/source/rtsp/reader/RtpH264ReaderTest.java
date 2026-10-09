@@ -135,7 +135,7 @@ public final class RtpH264ReaderTest {
     assertThat(diagnosticsListener.accessUnitReadyStats).hasSize(2);
     assertThat(diagnosticsListener.accessUnitReadyStats.get(0).sampleTimeUs).isEqualTo(0);
     assertThat(diagnosticsListener.accessUnitReadyStats.get(1).sampleTimeUs)
-        .isEqualTo(RtpReaderUtils.toSampleTimeUs(0, 100, 0xFFFF_FF00L, 90_000));
+        .isEqualTo(3955L);
   }
 
   @Test

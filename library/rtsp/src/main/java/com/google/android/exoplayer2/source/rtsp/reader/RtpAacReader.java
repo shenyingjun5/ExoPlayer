@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 
 import com.google.android.exoplayer2.C;
@@ -40,6 +39,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 @Deprecated
 /* package */ final class RtpAacReader implements RtpPayloadReader {
 
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
+
   /** AAC low bit rate mode, RFC3640 Section 3.3.5. */
   private static final String AAC_LOW_BITRATE_MODE = "AAC-lbr";
   /** AAC high bit rate mode, RFC3640 Section 3.3.6. */
@@ -53,6 +54,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final int auSizeFieldBitSize;
   private final int auIndexFieldBitSize;
   private final int numBitsInAuHeader;
+  private final int samplesPerAccessUnit;
 
   private long firstReceivedTimestamp;
   private @MonotonicNonNull TrackOutput trackOutput;
@@ -62,6 +64,19 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     this.payloadFormat = payloadFormat;
     this.auHeaderScratchBit = new ParsableBitArray();
     this.sampleRate = this.payloadFormat.clockRate;
+    // The current MPEG4-GENERIC format path configures AAC-LC (1024 samples). An explicit
+    // RFC 3640 constantDuration, when present, is expressed in RTP clock ticks.
+    String constantDuration = null;
+    for (java.util.Map.Entry<String, String> parameter : payloadFormat.fmtpParameters.entrySet()) {
+      if (Ascii.equalsIgnoreCase(parameter.getKey(), "constantDuration")) {
+        constantDuration = parameter.getValue();
+        break;
+      }
+    }
+    samplesPerAccessUnit = constantDuration == null ? 1024 : Integer.parseInt(constantDuration);
+    if (samplesPerAccessUnit <= 0) {
+      throw new IllegalArgumentException("AAC constantDuration must be positive");
+    }
 
     // mode attribute is mandatory. See RFC3640 Section 4.1.
     String mode = checkNotNull(payloadFormat.fmtpParameters.get("mode"));
@@ -88,6 +103,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     this.firstReceivedTimestamp = timestamp;
   }
 
@@ -116,7 +132,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     int auHeadersBitLength = data.readShort();
     int auHeaderCount = auHeadersBitLength / numBitsInAuHeader;
     long sampleTimeUs =
-        toSampleTimeUs(startTimeOffsetUs, timestamp, firstReceivedTimestamp, sampleRate);
+        timestampAdjuster.toSampleTimeUs(startTimeOffsetUs, timestamp, firstReceivedTimestamp, sampleRate);
 
     // Points to the start of the AU-headers (right past the AU-headers-length).
     auHeaderScratchBit.reset(data);
@@ -133,23 +149,23 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     } else {
       // Skips the AU-headers section to the data section, accounts for the possible padding bits.
       data.skipBytes((auHeadersBitLength + 7) / 8);
+      long firstSampleTimeUs = sampleTimeUs;
       for (int i = 0; i < auHeaderCount; i++) {
         int auSize = auHeaderScratchBit.readBits(auSizeFieldBitSize);
         auHeaderScratchBit.skipBits(auIndexFieldBitSize);
 
         trackOutput.sampleData(data, auSize);
         outputSampleMetadata(trackOutput, sampleTimeUs, auSize);
-        // The sample time of the  of the i-th AU (RFC3640 Page 17):
-        // (timestamp-of-the-first-AU) + i * (access-unit-duration)
-        sampleTimeUs +=
-            Util.scaleLargeTimestamp(
-                auHeaderCount, /* multiplier= */ C.MICROS_PER_SECOND, /* divisor= */ sampleRate);
+        // Scale the total sample offset, avoiding accumulated microsecond rounding error.
+        sampleTimeUs = firstSampleTimeUs + Util.scaleLargeTimestamp(
+            (long) (i + 1) * samplesPerAccessUnit, C.MICROS_PER_SECOND, sampleRate);
       }
     }
   }
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;
   }

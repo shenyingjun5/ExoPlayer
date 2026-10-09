@@ -27,8 +27,11 @@ import com.google.android.exoplayer2.extractor.ExtractorOutput;
 import com.google.android.exoplayer2.extractor.PositionHolder;
 import com.google.android.exoplayer2.upstream.DataSourceUtil;
 import com.google.android.exoplayer2.upstream.Loader;
+import com.google.android.exoplayer2.util.ConditionVariable;
 import com.google.android.exoplayer2.util.Util;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 /**
@@ -84,6 +87,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final RtcpFeedbackPolicy rtcpFeedbackPolicy;
   private final RtspBacklogRecoveryPolicy rtspBacklogRecoveryPolicy;
   private final boolean rtspPacketDiagnosticsEnabled;
+  private final ConditionVariable playbackTimingReady = new ConditionVariable();
 
   @Nullable private RtpDataChannel dataChannel;
   private @MonotonicNonNull RtpExtractor extractor;
@@ -179,9 +183,15 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     return extractor == null ? C.INDEX_UNSET : extractor.getLastSsrc();
   }
 
+  /** Releases RTP extraction only after the PLAY response has configured every track's timing. */
+  public void onPlaybackStarted() {
+    playbackTimingReady.open();
+  }
+
   @Override
   public void cancelLoad() {
     loadCancelled = true;
+    playbackTimingReady.open();
   }
 
   @Override
@@ -195,6 +205,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       if (dataChannel == null) {
         dataChannel = rtpDataChannelFactory.createAndOpenDataChannel(trackId);
         dataChannel.setRtspDiagnosticsListener(rtspDiagnosticsListener);
+        dataChannel.onPlaybackTimingPending();
         String transport = dataChannel.getTransport();
         @RtspTransportMode.Mode
         int transportMode =
@@ -203,9 +214,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 : RtspTransportMode.UDP;
 
         RtpDataChannel finalDataChannel = dataChannel;
-        playbackThreadHandler.post(
-            () -> eventListener.onTransportReady(transport, finalDataChannel));
-
         extractorInput =
             new DefaultExtractorInput(
                 checkNotNull(dataChannel), /* position= */ 0, /* length= */ C.LENGTH_UNSET);
@@ -220,8 +228,30 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
                 rtspBacklogRecoveryPolicy,
                 rtspPacketDiagnosticsEnabled);
         extractor.init(output);
+        playbackTimingReady.close();
+        // Publish the initialized extractor before SETUP/PLAY can deliver timestamp configuration.
+        playbackThreadHandler.post(
+            () -> eventListener.onTransportReady(transport, finalDataChannel));
       }
 
+      // Only the dedicated RTP loader waits. RTSP response delivery and packet producers remain
+      // independent; TCP startup buffering is separately bounded by its data channel. A missing PLAY response fails
+      // instead of choosing an arbitrary per-track origin. Missing RTP-Info is explicitly released
+      // by onPlaybackStarted and retains the existing first-packet fallback.
+      if (!loadCancelled) {
+        try {
+          if (!playbackTimingReady.block(RtspMediaSource.DEFAULT_TIMEOUT_MS) && !loadCancelled) {
+            throw new SocketTimeoutException("RTSP PLAY timing not received before RTP startup timeout");
+          }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new InterruptedIOException("Interrupted waiting for RTSP PLAY timing");
+        }
+      }
+
+      if (!loadCancelled) {
+        checkNotNull(dataChannel).onPlaybackTimingReady();
+      }
       while (!loadCancelled) {
         maybeNotifyDataChannelDiscontinuity();
         if (pendingSeekPositionUs != C.TIME_UNSET) {

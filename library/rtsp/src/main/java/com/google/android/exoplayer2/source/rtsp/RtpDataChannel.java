@@ -50,6 +50,12 @@ import java.io.IOException;
     }
   }
 
+  /** Starts the bounded pre-PLAY buffering interval, before transport listeners are published. */
+  default void onPlaybackTimingPending() {}
+
+  /** Ends pre-PLAY buffering; implementations may fail if their bounded startup budget overflowed. */
+  default void onPlaybackTimingReady() throws IOException {}
+
   /** Returns the RTSP transport header for this {@link RtpDataChannel} */
   String getTransport();
 

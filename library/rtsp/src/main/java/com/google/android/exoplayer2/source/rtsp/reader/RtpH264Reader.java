@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkStateNotNull;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
@@ -50,6 +49,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
  */
 @Deprecated
 /* package */ final class RtpH264Reader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
   private static final int MEDIA_CLOCK_FREQUENCY = 90_000;
 
   /** Offset of payload data within a FU type A payload. */
@@ -226,6 +227,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     // Use the RTP-Info origin supplied by the extractor, as the audio readers do. The first
     // received video packet may be later than that origin and must keep its A/V offset.
     firstReceivedTimestamp = timestamp;
@@ -304,7 +306,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       boolean shouldSubmitAccessUnit = shouldSubmitAccessUnit();
       if (shouldSubmitAccessUnit) {
         long timeUs =
-            toSampleTimeUs(
+            timestampAdjuster.toSampleTimeUs(
                 startTimeOffsetUs, timestamp, firstReceivedTimestamp, MEDIA_CLOCK_FREQUENCY);
         trackOutput.sampleMetadata(
             timeUs,
@@ -330,6 +332,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     previousTimestamp = C.TIME_UNSET;
     resetReaderStateForNewAccessUnit();

@@ -31,6 +31,8 @@ import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.util.Util;
 import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
+import java.io.IOException;
 
 /**
  * An {@link RtpDataChannel} that transfers received data in-memory.
@@ -46,6 +48,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 
   private static final String DEFAULT_TCP_TRANSPORT_FORMAT =
       "RTP/AVP/TCP;unicast;interleaved=%d-%d";
+
+  private static final long STARTUP_BUFFER_BUDGET_BYTES = 4 * 1024 * 1024;
+  private static final int STARTUP_PACKET_OVERHEAD_BYTES = 128;
+  // -1 disables startup accounting. A value above the budget permanently rejects startup packets
+  // until the loader observes the overflow and fails. The CAS handshake avoids losing
+  // an overflow that races with PLAY completion; no RTSP producer waits for the loader.
+  private final AtomicLong startupBufferBytes = new AtomicLong(-1);
 
   @Nullable private final LinkedBlockingQueue<byte[]> packetQueue;
   @Nullable private final LinkedBlockingQueue<PacketEnvelope> packetEnvelopeQueue;
@@ -107,6 +116,35 @@ import java.util.concurrent.LinkedBlockingQueue;
     lastReadCompletionElapsedRealtimeMs = C.TIME_UNSET;
     clearUnreadDataOnNextRead = false;
     pendingDiscontinuityReason = RtcpFeedbackReason.UNKNOWN;
+  }
+
+  @Override
+  public void onPlaybackTimingPending() {
+    startupBufferBytes.set(0);
+  }
+
+  @Override
+  public void onPlaybackTimingReady() throws IOException {
+    while (true) {
+      long current = startupBufferBytes.get();
+      if (current > STARTUP_BUFFER_BUDGET_BYTES) {
+        // Remain closed to incoming packets until the failed loadable is released.
+        throw new IOException("RTP startup buffer exceeded 4 MiB before PLAY timing was available");
+      }
+      if (startupBufferBytes.compareAndSet(current, -1)) return;
+    }
+  }
+
+  private boolean reserveStartupPacket(int payloadBytes) {
+    while (true) {
+      long current = startupBufferBytes.get();
+      if (current < 0) return true;
+      if (current > STARTUP_BUFFER_BUDGET_BYTES) return false;
+      long next = current + payloadBytes + STARTUP_PACKET_OVERHEAD_BYTES;
+      if (startupBufferBytes.compareAndSet(current, next)) {
+        return next <= STARTUP_BUFFER_BUDGET_BYTES;
+      }
+    }
   }
 
   @Override
@@ -216,6 +254,7 @@ import java.util.concurrent.LinkedBlockingQueue;
   @Override
   public void onInterleavedBinaryDataReceived(byte[] data) {
     if (packetEnvelopeQueue == null) {
+      if (!reserveStartupPacket(data.length)) return;
       checkNotNull(packetQueue).add(data);
       return;
     }
@@ -225,6 +264,7 @@ import java.util.concurrent.LinkedBlockingQueue;
   @VisibleForTesting
   /* package */ void onInterleavedBinaryDataReceived(byte[] data, long arrivalElapsedRealtimeMs) {
     checkState(packetEnvelopeQueue != null);
+    if (!reserveStartupPacket(data.length)) return;
     packetEnvelopeQueue.add(new PacketEnvelope(data, arrivalElapsedRealtimeMs));
     lastPacketArrivalElapsedRealtimeMs = arrivalElapsedRealtimeMs;
     maybeFlushBacklog(arrivalElapsedRealtimeMs);

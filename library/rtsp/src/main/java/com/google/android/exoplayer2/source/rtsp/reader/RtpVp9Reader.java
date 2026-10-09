@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkState;
@@ -43,6 +42,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  */
 @Deprecated
 /* package */ final class RtpVp9Reader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
 
   private static final String TAG = "RtpVp9Reader";
 
@@ -98,6 +99,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     checkState(firstReceivedTimestamp == C.TIME_UNSET);
     firstReceivedTimestamp = timestamp;
   }
@@ -131,7 +133,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         fragmentedSampleSizeBytes += currentFragmentSizeBytes;
       }
       fragmentedSampleTimeUs =
-          toSampleTimeUs(
+          timestampAdjuster.toSampleTimeUs(
               startTimeOffsetUs, timestamp, firstReceivedTimestamp, MEDIA_CLOCK_FREQUENCY);
 
       if (rtpMarker) {
@@ -143,6 +145,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     fragmentedSampleSizeBytes = C.LENGTH_UNSET;
     startTimeOffsetUs = timeUs;

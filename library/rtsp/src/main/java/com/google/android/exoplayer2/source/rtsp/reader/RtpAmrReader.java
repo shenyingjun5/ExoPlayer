@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 import static com.google.android.exoplayer2.util.Assertions.checkStateNotNull;
@@ -42,6 +41,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  */
 @Deprecated
 /* package */ final class RtpAmrReader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
   private static final String TAG = "RtpAmrReader";
   /**
    * The frame size in bytes, including header (1 byte), for each of the 16 frame types for AMR-NB
@@ -123,6 +124,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     this.firstReceivedTimestamp = timestamp;
   }
 
@@ -165,7 +167,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     checkArgument(sampleSize == frameSize, "compound payload not supported currently");
     trackOutput.sampleData(data, sampleSize);
     long sampleTimeUs =
-        toSampleTimeUs(startTimeOffsetUs, timestamp, firstReceivedTimestamp, sampleRate);
+        timestampAdjuster.toSampleTimeUs(startTimeOffsetUs, timestamp, firstReceivedTimestamp, sampleRate);
     trackOutput.sampleMetadata(
         sampleTimeUs, C.BUFFER_FLAG_KEY_FRAME, sampleSize, /* offset= */ 0, /* cryptoData= */ null);
 
@@ -174,6 +176,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;
   }

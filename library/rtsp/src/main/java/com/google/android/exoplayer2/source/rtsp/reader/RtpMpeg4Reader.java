@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkStateNotNull;
 import static com.google.android.exoplayer2.util.Util.castNonNull;
 
@@ -41,6 +40,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  */
 @Deprecated
 /* package */ final class RtpMpeg4Reader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
   private static final String TAG = "RtpMpeg4Reader";
 
   private static final int MEDIA_CLOCK_FREQUENCY = 90_000;
@@ -76,7 +77,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   }
 
   @Override
-  public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {}
+  public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();}
 
   @Override
   public void consume(
@@ -110,7 +112,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       }
 
       long timeUs =
-          toSampleTimeUs(
+          timestampAdjuster.toSampleTimeUs(
               startTimeOffsetUs, timestamp, firstReceivedTimestamp, MEDIA_CLOCK_FREQUENCY);
       trackOutput.sampleMetadata(timeUs, bufferFlags, sampleLength, 0, null);
       sampleLength = 0;
@@ -120,6 +122,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;
     sampleLength = 0;

@@ -1,5 +1,14 @@
 # RTSP Feedback Enhancement Plan
 
+## 2026-10-09：2.19.1-labi.35 正式收口
+
+范围：Android 普通 RTSP 和 Video 镜像共同路径。PLAY 响应安装全部轨道时间信息后才允许 RTP loader 读首包，等待有 8 秒超时和取消释放，PLAY 前 TCP 队列有 4 MiB 预算。AAC 聚合帧按 1024 samples 或 constantDuration 换算；每轨相邻 signed32 RTP 增量与 long 累计支持负 preroll、真实回绕、长时播放和 seek 重置。
+
+仅修改 library/rtsp 业务与独立测试；不包含本地详细时钟/首包 anchor 诊断，不修改 core renderer，不修改 Android 4.4 基线。九模块按同一版本发布，旧 Maven 版本不可变。验证包括 RTSP Debug/Release 单测、Lint、产物诊断排除核验、公开 Maven 全文件 SHA 复验及 Cast-SDK 无覆盖消费构建。
+
+实机诊断版本的普通 RTSP 已恢复约 30 次视频提交/秒，最终镜像起播基准一致；孤立 109.2 ms 提交间隔与物理声画联合测量仍待完成，本次依赖收口不替代物理验收。
+
+
 ## 背景
 
 Cast-SDK Android 接收端需要在 Android 4.4+ 设备上播放自家发送端的 RTSP live 流。发送端已经支持 TCP interleaved / UDP RTP、RTCP PLI/FIR 解析、收到 PLI/FIR 后强制 IDR 和低延迟/平滑模式。

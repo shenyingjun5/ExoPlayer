@@ -17,6 +17,7 @@ package com.google.android.exoplayer2.source.rtsp;
 
 import static com.google.android.exoplayer2.testutil.TestUtil.buildTestData;
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import com.google.android.exoplayer2.C;
@@ -30,6 +31,53 @@ import org.junit.runner.RunWith;
 public class TransferRtpDataChannelTest {
 
   private static final long POLL_TIMEOUT_MS = 8000;
+
+  @Test
+  public void startupBudget_overflowFailsAndKeepsRejecting_forBothQueueModes() throws Exception {
+    for (boolean recovery : new boolean[] {false, true}) {
+      TransferRtpDataChannel channel = new TransferRtpDataChannel(0, 0, null,
+          recovery ? new RtspBacklogRecoveryPolicy.Builder().setEnabled(true)
+              .setTcpInterleavedBacklogResetPackets(100000)
+              .setTcpInterleavedBacklogDepthResetMinAgeMs(60000).build()
+              : RtspBacklogRecoveryPolicy.DISABLED);
+      channel.onPlaybackTimingPending();
+      byte[] packet = new byte[65535];
+      for (int i = 0; i < 100; i++) channel.onInterleavedBinaryDataReceived(packet);
+      assertThrows(java.io.IOException.class, channel::onPlaybackTimingReady);
+      for (int i = 0; i < 100; i++) channel.onInterleavedBinaryDataReceived(packet);
+      byte[] buffer = new byte[65535];
+      int packets = 0;
+      while (channel.read(buffer, 0, buffer.length) != C.RESULT_END_OF_INPUT) packets++;
+      assertThat(packets).isEqualTo(63);
+    }
+  }
+
+  @Test
+  public void startupBudget_emptyPacketsAlsoConsumeBoundedMemoryBudget() throws Exception {
+    TransferRtpDataChannel channel = new TransferRtpDataChannel(0);
+    channel.onPlaybackTimingPending();
+    byte[] empty = new byte[0];
+    for (int i = 0; i < 40000; i++) channel.onInterleavedBinaryDataReceived(empty);
+    assertThrows(java.io.IOException.class, channel::onPlaybackTimingReady);
+    int packets = 0;
+    byte[] buffer = new byte[1];
+    while (channel.read(buffer, 0, 1) != C.RESULT_END_OF_INPUT) packets++;
+    assertThat(packets).isEqualTo(32768);
+  }
+
+  @Test
+  public void startupBudget_readyPreservesQueuedPacketsAndNormalPlayback() throws Exception {
+    TransferRtpDataChannel channel = new TransferRtpDataChannel(0);
+    channel.onPlaybackTimingPending();
+    channel.onInterleavedBinaryDataReceived(new byte[] {1});
+    channel.onPlaybackTimingReady();
+    channel.onInterleavedBinaryDataReceived(new byte[] {2});
+    byte[] buffer = new byte[1];
+    assertThat(channel.read(buffer, 0, 1)).isEqualTo(1);
+    assertThat(buffer[0]).isEqualTo((byte) 1);
+    assertThat(channel.read(buffer, 0, 1)).isEqualTo(1);
+    assertThat(buffer[0]).isEqualTo((byte) 2);
+  }
 
   @Test
   public void getInterleavedBinaryDataListener_returnsAnInterleavedBinaryDataListener() {

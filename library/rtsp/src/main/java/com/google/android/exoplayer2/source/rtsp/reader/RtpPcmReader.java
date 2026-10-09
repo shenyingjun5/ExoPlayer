@@ -15,7 +15,6 @@
  */
 package com.google.android.exoplayer2.source.rtsp.reader;
 
-import static com.google.android.exoplayer2.source.rtsp.reader.RtpReaderUtils.toSampleTimeUs;
 import static com.google.android.exoplayer2.util.Assertions.checkNotNull;
 
 import android.util.Log;
@@ -38,6 +37,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
  *     migration guide</a> for more details, including a script to help with the migration.
  */
 /* package */ public final class RtpPcmReader implements RtpPayloadReader {
+
+  private final RtpTimestampAdjuster timestampAdjuster = new RtpTimestampAdjuster();
 
   private static final String TAG = "RtpPcmReader";
   private final RtpPayloadFormat payloadFormat;
@@ -63,6 +64,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void onReceivingFirstPacket(long timestamp, int sequenceNumber) {
+    timestampAdjuster.reset();
     firstReceivedTimestamp = timestamp;
   }
 
@@ -82,7 +84,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     }
 
     long sampleTimeUs =
-        toSampleTimeUs(
+        timestampAdjuster.toSampleTimeUs(
             startTimeOffsetUs, timestamp, firstReceivedTimestamp, payloadFormat.clockRate);
     int size = data.bytesLeft();
     trackOutput.sampleData(data, size);
@@ -94,6 +96,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
   @Override
   public void seek(long nextRtpTimestamp, long timeUs) {
+    timestampAdjuster.reset();
     // TODO(b/198620566) Rename firstReceivedTimestamp to timestampBase for all RtpPayloadReaders.
     firstReceivedTimestamp = nextRtpTimestamp;
     startTimeOffsetUs = timeUs;

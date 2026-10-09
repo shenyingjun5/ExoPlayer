@@ -1343,6 +1343,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         }
       }
 
+      // All available track timings (and any pending initial seek) are installed before any
+      // loader can consume its first packet. Tracks absent from RTP-Info retain fallback behavior,
+      // but only after the PLAY response explicitly established that timing is unavailable.
+      for (int i = 0; i < selectedLoadInfos.size(); i++) {
+        selectedLoadInfos.get(i).loadable.onPlaybackStarted();
+      }
+
       if (isSeekPending()) {
         if (pendingSeekPositionUs == requestedSeekPositionUs) {
           // No seek request was made after the current pending seek.

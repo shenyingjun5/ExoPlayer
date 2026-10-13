@@ -305,6 +305,65 @@ public class MediaCodecVideoRendererTest {
   }
 
   @Test
+  public void amlogicR34a0AvcRotationOutput_requiresExactUnprotectedRotatedPath() {
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, false, false))
+        .isTrue();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                false, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 19, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "other", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.hevc.decoder.awesome",
+                MimeTypes.VIDEO_H265, 90, false, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 0, false, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, true, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, true, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcRotationOutput(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, 90, false, false, true))
+        .isFalse();
+  }
+
+  @Test
+  public void amlogicR34a0AvcRotationOutput_convertsClockwiseFormatToEffectAngle() {
+    assertThat(MediaCodecVideoRenderer.getAmlogicR34a0RotationEffectDegrees(90))
+        .isEqualTo(-90f);
+    assertThat(MediaCodecVideoRenderer.getAmlogicR34a0RotationEffectDegrees(180))
+        .isEqualTo(-180f);
+    assertThat(MediaCodecVideoRenderer.getAmlogicR34a0RotationEffectDegrees(270))
+        .isEqualTo(-270f);
+  }
+
+  @Test
   @Config(sdk = 22)
   public void qcExternalRotationOwner_omitsCodecRotationAndReportsUnapplied() throws Exception {
     Format portraitAvc = VIDEO_H264.buildUpon().setRotationDegrees(90).build();

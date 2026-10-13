@@ -1152,7 +1152,7 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
     if (codecOperatingRate <= assumedMinimumCodecOperatingRate) {
       codecOperatingRate = CODEC_OPERATING_RATE_UNSET;
     }
-    onReadyToInitializeCodec(inputFormat);
+    onReadyToInitializeCodec(inputFormat, codecInfo);
     codecInitializingTimestamp = SystemClock.elapsedRealtime();
     MediaCodecAdapter.Configuration configuration =
         getMediaCodecConfiguration(codecInfo, inputFormat, crypto, codecOperatingRate);
@@ -1455,6 +1455,17 @@ public abstract class MediaCodecRenderer extends BaseRenderer {
    */
   protected void onReadyToInitializeCodec(Format format) throws ExoPlaybackException {
     // Do nothing.
+  }
+
+  /**
+   * Called immediately before configuring the selected codec.
+   *
+   * <p>The default implementation calls {@link #onReadyToInitializeCodec(Format)} to preserve
+   * existing subclasses.
+   */
+  protected void onReadyToInitializeCodec(Format format, MediaCodecInfo codecInfo)
+      throws ExoPlaybackException {
+    onReadyToInitializeCodec(format);
   }
 
   /**

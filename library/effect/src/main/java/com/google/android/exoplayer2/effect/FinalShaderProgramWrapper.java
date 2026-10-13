@@ -367,7 +367,12 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         renderTimeNs == VideoFrameProcessor.RENDER_OUTPUT_FRAME_IMMEDIATELY
             ? System.nanoTime()
             : renderTimeNs);
-    EGL14.eglSwapBuffers(eglDisplay, outputEglSurface);
+    GlUtil.checkGlException(
+        EGL14.eglSwapBuffers(eglDisplay, outputEglSurface), "eglSwapBuffers failed");
+    videoFrameProcessorListenerExecutor.execute(
+        () ->
+            videoFrameProcessorListener.onOutputFrameRenderedToSurface(
+                presentationTimeUs, outputSurfaceInfo.surface));
     DebugTraceUtil.recordFrameRenderedToVideoFrameProcessorOutput();
   }
 

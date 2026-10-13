@@ -161,6 +161,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   private boolean codecHandlesHdr10PlusOutOfBandMetadata;
 
   @Nullable private Surface displaySurface;
+  private Size displaySurfaceSize;
   @Nullable private PlaceholderSurface placeholderSurface;
   private boolean haveReportedFirstFrameRenderedForCurrentSurface;
   private @C.VideoScalingMode int scalingMode;
@@ -188,8 +189,10 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   @Nullable private VideoFrameMetadataListener frameMetadataListener;
   private boolean disableLowLatencyHintAfterInitializationFailure;
   private final boolean enableAmlogicR34a0AvcUnappliedRotation;
+  private final boolean enableAmlogicR34a0AvcRotationOutput;
   // Kept for the selected codec so MediaFormat and VideoSize agree on the rotation owner.
   private boolean codecRotationUnappliedForSelectedDecoder;
+  private boolean amlogicR34a0AvcRotationOutputActive;
 
   /**
    * @param context A context.
@@ -371,9 +374,37 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         eventHandler,
         eventListener,
         maxDroppedFramesToNotify,
+        mediaCodecLowLatencyProfile,
+        enableAmlogicR34a0AvcUnappliedRotation,
+        /* enableAmlogicR34a0AvcRotationOutput= */ false);
+  }
+
+  /** Creates a renderer with separate QC metadata and GPU rotation opt-ins. */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile,
+      boolean enableAmlogicR34a0AvcUnappliedRotation,
+      boolean enableAmlogicR34a0AvcRotationOutput) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
         /* assumedMinimumCodecOperatingRate= */ 30,
         mediaCodecLowLatencyProfile,
-        enableAmlogicR34a0AvcUnappliedRotation);
+        enableAmlogicR34a0AvcUnappliedRotation,
+        enableAmlogicR34a0AvcRotationOutput);
   }
 
   /**
@@ -464,6 +495,35 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       float assumedMinimumCodecOperatingRate,
       MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile,
       boolean enableAmlogicR34a0AvcUnappliedRotation) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
+        assumedMinimumCodecOperatingRate,
+        mediaCodecLowLatencyProfile,
+        enableAmlogicR34a0AvcUnappliedRotation,
+        /* enableAmlogicR34a0AvcRotationOutput= */ false);
+  }
+
+  /** Creates a renderer with separate QC metadata and GPU rotation opt-ins. */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      float assumedMinimumCodecOperatingRate,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile,
+      boolean enableAmlogicR34a0AvcUnappliedRotation,
+      boolean enableAmlogicR34a0AvcRotationOutput) {
     super(
         C.TRACK_TYPE_VIDEO,
         codecAdapterFactory,
@@ -474,6 +534,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     this.maxDroppedFramesToNotify = maxDroppedFramesToNotify;
     this.mediaCodecLowLatencyProfile = mediaCodecLowLatencyProfile;
     this.enableAmlogicR34a0AvcUnappliedRotation = enableAmlogicR34a0AvcUnappliedRotation;
+    this.enableAmlogicR34a0AvcRotationOutput = enableAmlogicR34a0AvcRotationOutput;
     this.context = context.getApplicationContext();
     frameReleaseHelper = new VideoFrameReleaseHelper(this.context);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
@@ -483,6 +544,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     joiningDeadlineMs = C.TIME_UNSET;
     scalingMode = C.VIDEO_SCALING_MODE_DEFAULT;
     decodedVideoSize = VideoSize.UNKNOWN;
+    displaySurfaceSize = Size.UNKNOWN;
     tunnelingAudioSessionId = C.AUDIO_SESSION_ID_UNSET;
     clearReportedVideoSize();
   }
@@ -772,6 +834,10 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       if (videoFrameProcessorManager.isEnabled()) {
         videoFrameProcessorManager.reset();
       }
+      if (amlogicR34a0AvcRotationOutputActive) {
+        videoFrameProcessorManager.clearInternalVideoEffects();
+        amlogicR34a0AvcRotationOutputActive = false;
+      }
       if (placeholderSurface != null) {
         releasePlaceholderSurface();
       }
@@ -810,10 +876,27 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       case MSG_SET_VIDEO_EFFECTS:
         @SuppressWarnings("unchecked")
         List<Effect> videoEffects = (List<Effect>) checkNotNull(message);
+        if (amlogicR34a0AvcRotationOutputActive) {
+          // A caller-provided processing chain takes ownership of the output. Reconfigure the
+          // codec after its internal QC processor has been released.
+          if (getCodec() != null) {
+            releaseCodec();
+          } else {
+            if (videoFrameProcessorManager.isEnabled()) {
+              videoFrameProcessorManager.reset();
+            }
+            videoFrameProcessorManager.clearInternalVideoEffects();
+            amlogicR34a0AvcRotationOutputActive = false;
+          }
+          videoFrameProcessorManager.setVideoEffects(videoEffects);
+          maybeInitCodecOrBypass();
+          break;
+        }
         videoFrameProcessorManager.setVideoEffects(videoEffects);
         break;
       case MSG_SET_VIDEO_OUTPUT_RESOLUTION:
         Size outputResolution = (Size) checkNotNull(message);
+        displaySurfaceSize = outputResolution;
         if (outputResolution.getWidth() != 0
             && outputResolution.getHeight() != 0
             && displaySurface != null) {
@@ -876,7 +959,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         // When VideoFrameProcessorManager is enabled, set VideoFrameProcessorManager's display
         // surface and an unknown size.
         if (videoFrameProcessorManager.isEnabled()) {
-          videoFrameProcessorManager.setOutputSurfaceInfo(displaySurface, Size.UNKNOWN);
+          videoFrameProcessorManager.setOutputSurfaceInfo(displaySurface, displaySurfaceSize);
         }
       } else {
         // The display surface has been removed.
@@ -918,7 +1001,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     }
     String codecMimeType = codecInfo.codecMimeType;
     codecRotationUnappliedForSelectedDecoder =
-        shouldUseUnappliedRotationForCodec(codecInfo, format);
+        amlogicR34a0AvcRotationOutputActive
+            || shouldUseUnappliedRotationForCodec(codecInfo, format);
     codecMaxValues = getCodecMaxValues(codecInfo, format, getStreamFormats());
     MediaFormat mediaFormat =
         getMediaFormat(
@@ -1099,9 +1183,29 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
   @CallSuper
   @Override
-  protected void onReadyToInitializeCodec(Format format) throws ExoPlaybackException {
+  protected void onReadyToInitializeCodec(Format format, MediaCodecInfo codecInfo)
+      throws ExoPlaybackException {
+    super.onReadyToInitializeCodec(format, codecInfo);
+    // A failed codec initialization may retry or select a fallback decoder. Discard the old
+    // processor before its input Surface can be reused with a different rotation owner.
+    if (amlogicR34a0AvcRotationOutputActive) {
+      if (videoFrameProcessorManager.isEnabled()) {
+        videoFrameProcessorManager.reset();
+      }
+      videoFrameProcessorManager.clearInternalVideoEffects();
+      amlogicR34a0AvcRotationOutputActive = false;
+    }
+    if (shouldUseRotationOutputForCodec(codecInfo, format)) {
+      videoFrameProcessorManager.setInternalVideoEffects();
+      amlogicR34a0AvcRotationOutputActive = true;
+    }
     if (!videoFrameProcessorManager.isEnabled()) {
       videoFrameProcessorManager.maybeEnable(format, getOutputStreamOffsetUs());
+    }
+    if (videoFrameProcessorManager.isEnabled()
+        && displaySurface != null
+        && displaySurface != placeholderSurface) {
+      videoFrameProcessorManager.setOutputSurfaceInfo(displaySurface, displaySurfaceSize);
     }
   }
 
@@ -1124,6 +1228,13 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   @Override
   protected void onCodecReleased(String name) {
     codecRotationUnappliedForSelectedDecoder = false;
+    if (amlogicR34a0AvcRotationOutputActive) {
+      // MediaCodec.release() has completed before this callback. Only now may the decoder input
+      // SurfaceTexture and its Surface be destroyed.
+      videoFrameProcessorManager.reset();
+      videoFrameProcessorManager.clearInternalVideoEffects();
+      amlogicR34a0AvcRotationOutputActive = false;
+    }
     eventDispatcher.decoderReleased(name);
   }
 
@@ -2049,6 +2160,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
     /** Whether the last frame of the current stream is released to the output {@link Surface}. */
     private boolean releasedLastFrame;
+    private long lastFrameAwaitingSurfaceSwapUs;
 
     private long lastCodecBufferPresentationTimestampUs;
     private VideoSize processedFrameSize;
@@ -2071,6 +2183,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       lastCodecBufferPresentationTimestampUs = C.TIME_UNSET;
       processedFrameSize = VideoSize.UNKNOWN;
       pendingOutputSizeChangeNotificationTimeUs = C.TIME_UNSET;
+      lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
       initialStreamOffsetUs = C.TIME_UNSET;
     }
 
@@ -2082,6 +2195,22 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       }
       this.videoEffects.clear();
       this.videoEffects.addAll(videoEffects);
+    }
+
+    public boolean hasVideoEffects() {
+      return videoEffects != null;
+    }
+
+    public void setInternalVideoEffects() {
+      checkState(videoEffects == null);
+      videoEffects = new CopyOnWriteArrayList<>();
+      canEnableFrameProcessing = true;
+    }
+
+    public void clearInternalVideoEffects() {
+      videoEffects = null;
+      currentSurfaceAndSize = null;
+      canEnableFrameProcessing = true;
     }
 
     /** Returns whether video frame processing is enabled. */
@@ -2117,6 +2246,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         registeredLastFrame = false;
         processedLastFrame = false;
         releasedLastFrame = false;
+        lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
       }
     }
 
@@ -2149,11 +2279,15 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
           renderer.experimentalGetVideoFrameProcessorColorConfiguration(inputFormat.colorInfo);
       try {
         // TODO(b/243036513): Set rotation in setInputFormat() after supporting changing effects.
-        if (!codecAppliesRotation() && inputFormat.rotationDegrees != 0) {
+        if ((!codecAppliesRotation() || renderer.amlogicR34a0AvcRotationOutputActive)
+            && inputFormat.rotationDegrees != 0) {
           // Insert as the first effect as if the decoder has applied the rotation.
           videoEffects.add(
               /* index= */ 0,
-              VideoFrameProcessorAccessor.createRotationEffect(inputFormat.rotationDegrees));
+              VideoFrameProcessorAccessor.createRotationEffect(
+                  renderer.amlogicR34a0AvcRotationOutputActive
+                      ? getAmlogicR34a0RotationEffectDegrees(inputFormat.rotationDegrees)
+                      : inputFormat.rotationDegrees));
         }
 
         videoFrameProcessor =
@@ -2199,6 +2333,19 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
                           // Report the size change on releasing this frame.
                           pendingOutputSizeChange = false;
                           pendingOutputSizeChangeNotificationTimeUs = presentationTimeUs;
+                        }
+                      }
+
+                      @Override
+                      public void onOutputFrameRenderedToSurface(
+                          long presentationTimeUs, Surface outputSurface) {
+                        if (renderer.amlogicR34a0AvcRotationOutputActive
+                            && renderer.displaySurface == outputSurface) {
+                          renderer.maybeNotifyRenderedFirstFrame();
+                          if (lastFrameAwaitingSurfaceSwapUs == presentationTimeUs) {
+                            lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
+                            releasedLastFrame = true;
+                          }
                         }
                       }
 
@@ -2271,6 +2418,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
           && currentSurfaceAndSize.second.equals(outputResolution)) {
         return;
       }
+      if (currentSurfaceAndSize != null
+          && currentSurfaceAndSize.first != outputSurface
+          && lastFrameAwaitingSurfaceSwapUs != C.TIME_UNSET) {
+        lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
+        releasedLastFrame = true;
+      }
       currentSurfaceAndSize = Pair.create(outputSurface, outputResolution);
       if (isEnabled()) {
         checkNotNull(videoFrameProcessor)
@@ -2289,6 +2442,10 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     public void clearOutputSurfaceInfo() {
       checkNotNull(videoFrameProcessor).setOutputSurfaceInfo(null);
       currentSurfaceAndSize = null;
+      if (lastFrameAwaitingSurfaceSwapUs != C.TIME_UNSET) {
+        lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
+        releasedLastFrame = true;
+      }
     }
 
     /**
@@ -2447,6 +2604,19 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         videoEffects.clear();
       }
       processedFramesTimestampsUs.clear();
+      pendingFrameFormats.clear();
+      currentFrameFormat = null;
+      inputFormat = null;
+      registeredLastFrame = false;
+      processedLastFrame = false;
+      releasedLastFrame = false;
+      lastCodecBufferPresentationTimestampUs = C.TIME_UNSET;
+      lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
+      processedFrameSize = VideoSize.UNKNOWN;
+      pendingOutputSizeChange = false;
+      pendingOutputSizeChangeNotificationTimeUs = C.TIME_UNSET;
+      initialStreamOffsetUs = C.TIME_UNSET;
+      videoFrameProcessorMaxPendingFrameCount = C.LENGTH_UNSET;
       canEnableFrameProcessing = true;
     }
 
@@ -2454,14 +2624,23 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       // VideoFrameProcessor renders to its output surface using
       // VideoFrameProcessor.renderOutputFrame, to release the MediaCodecVideoRenderer frame.
       checkStateNotNull(videoFrameProcessor);
+      long presentationTimeUs = checkNotNull(processedFramesTimestampsUs.peek());
       videoFrameProcessor.renderOutputFrame(releaseTimeNs);
       processedFramesTimestampsUs.remove();
       renderer.lastRenderRealtimeUs = SystemClock.elapsedRealtime() * 1000;
       if (releaseTimeNs != VideoFrameProcessor.DROP_OUTPUT_FRAME) {
-        renderer.maybeNotifyRenderedFirstFrame();
+        if (!renderer.amlogicR34a0AvcRotationOutputActive) {
+          renderer.maybeNotifyRenderedFirstFrame();
+        }
       }
       if (isLastFrame) {
-        releasedLastFrame = true;
+        if (renderer.amlogicR34a0AvcRotationOutputActive
+            && releaseTimeNs != VideoFrameProcessor.DROP_OUTPUT_FRAME
+            && currentSurfaceAndSize != null) {
+          lastFrameAwaitingSurfaceSwapUs = presentationTimeUs;
+        } else {
+          releasedLastFrame = true;
+        }
       }
     }
 
@@ -2596,6 +2775,57 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
   private static boolean codecAppliesRotation() {
     return Util.SDK_INT >= 21;
+  }
+
+  /* package */ static float getAmlogicR34a0RotationEffectDegrees(int clockwiseRotationDegrees) {
+    // Format.rotationDegrees and the QC probe are clockwise. ScaleAndRotateTransformation's
+    // setRotationDegrees API is counterclockwise.
+    return -clockwiseRotationDegrees;
+  }
+
+  /* package */ boolean shouldUseRotationOutputForCodec(MediaCodecInfo codecInfo, Format format) {
+    @Nullable ColorInfo colorInfo = format.colorInfo;
+    boolean unsupportedColor =
+        colorInfo != null
+            && (ColorInfo.isTransferHdr(colorInfo)
+                || (colorInfo.colorSpace != Format.NO_VALUE
+                    && colorInfo.colorSpace != C.COLOR_SPACE_BT709)
+                || (colorInfo.colorRange != Format.NO_VALUE
+                    && colorInfo.colorRange != C.COLOR_RANGE_LIMITED));
+    return shouldUseAmlogicR34a0AvcRotationOutput(
+        enableAmlogicR34a0AvcRotationOutput,
+        Util.SDK_INT,
+        Util.MANUFACTURER,
+        Util.DEVICE,
+        codecInfo.name,
+        format.sampleMimeType,
+        format.rotationDegrees,
+        codecInfo.secure || format.drmInitData != null || unsupportedColor,
+        tunneling,
+        videoFrameProcessorManager.hasVideoEffects());
+  }
+
+  /* package */ static boolean shouldUseAmlogicR34a0AvcRotationOutput(
+      boolean enabled,
+      int sdkInt,
+      String manufacturer,
+      String device,
+      String codecName,
+      @Nullable String sampleMimeType,
+      int rotationDegrees,
+      boolean protectedOrUnsupportedColor,
+      boolean tunneling,
+      boolean callerFrameProcessingEnabled) {
+    return enabled
+        && sdkInt == 22
+        && "amlogic".equalsIgnoreCase(manufacturer)
+        && "r34a0".equals(device)
+        && "OMX.amlogic.avc.decoder.awesome".equals(codecName)
+        && MimeTypes.VIDEO_H264.equals(sampleMimeType)
+        && rotationDegrees != 0
+        && !protectedOrUnsupportedColor
+        && !tunneling
+        && !callerFrameProcessingEnabled;
   }
 
   /* package */ boolean shouldUseUnappliedRotationForCodec(MediaCodecInfo codecInfo, Format format) {

@@ -111,6 +111,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
   private boolean enableOffload;
   private MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile;
   private boolean enableAmlogicR34a0AvcUnappliedRotation;
+  private boolean enableAmlogicR34a0AvcRotationOutput;
 
   /**
    * @param context A {@link Context}.
@@ -325,6 +326,19 @@ public class DefaultRenderersFactory implements RenderersFactory {
     return this;
   }
 
+  /**
+   * Enables renderer-owned GPU rotation for the verified QC Amlogic r34a0 AVC decoder.
+   *
+   * <p>This option is disabled by default and requires the matching {@code exoplayer-effect}
+   * artifact at runtime. It applies only to nonsecure AVC with nonzero rotation on the exact device
+   * and decoder, without tunneling or caller-supplied video effects.
+   */
+  @CanIgnoreReturnValue
+  public DefaultRenderersFactory setEnableAmlogicR34a0AvcRotationOutput(boolean enabled) {
+    this.enableAmlogicR34a0AvcRotationOutput = enabled;
+    return this;
+  }
+
   @Override
   public Renderer[] createRenderers(
       Handler eventHandler,
@@ -408,7 +422,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
             eventListener,
             MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
             mediaCodecLowLatencyProfile,
-            enableAmlogicR34a0AvcUnappliedRotation);
+            enableAmlogicR34a0AvcUnappliedRotation,
+            enableAmlogicR34a0AvcRotationOutput);
     out.add(videoRenderer);
 
     if (extensionRendererMode == EXTENSION_RENDERER_MODE_OFF) {

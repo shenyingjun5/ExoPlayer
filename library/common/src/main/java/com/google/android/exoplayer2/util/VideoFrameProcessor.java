@@ -135,6 +135,14 @@ public interface VideoFrameProcessor {
     void onOutputFrameAvailableForRendering(long presentationTimeUs);
 
     /**
+     * Called after an output frame has been submitted successfully to the current output surface.
+     *
+     * <p>The default implementation preserves existing listener implementations. This callback is
+     * not invoked for a dropped frame or when no output surface is set.
+     */
+    default void onOutputFrameRenderedToSurface(long presentationTimeUs, Surface outputSurface) {}
+
+    /**
      * Called when an exception occurs during asynchronous video frame processing.
      *
      * <p>If an error occurred, consuming and producing further frames will not work as expected and

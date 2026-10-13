@@ -1844,8 +1844,10 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     MediaFormatUtil.maybeSetFloat(mediaFormat, MediaFormat.KEY_FRAME_RATE, format.frameRate);
     MediaFormatUtil.maybeSetInteger(mediaFormat, MediaFormat.KEY_ROTATION, format.rotationDegrees);
     MediaFormatUtil.maybeSetColorInfo(mediaFormat, format.colorInfo);
-    if (MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType)) {
-      // Some phones require the profile to be set on the codec.
+    if (MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType)
+        && MimeTypes.VIDEO_DOLBY_VISION.equals(codecMimeType)) {
+      // Some Dolby Vision codecs require the Dolby Vision profile. Do not pass it to an AVC or HEVC
+      // decoder selected for a compatible base layer: those codecs use different profile constants.
       // See https://github.com/google/ExoPlayer/pull/5438.
       Pair<Integer, Integer> codecProfileAndLevel = MediaCodecUtil.getCodecProfileAndLevel(format);
       if (codecProfileAndLevel != null) {

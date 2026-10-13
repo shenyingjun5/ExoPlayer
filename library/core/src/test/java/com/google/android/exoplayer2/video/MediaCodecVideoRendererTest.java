@@ -80,6 +80,7 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
+import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowDisplay;
 import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowSystemClock;
@@ -175,6 +176,87 @@ public class MediaCodecVideoRendererTest {
   @After
   public void cleanUp() {
     surface.release();
+  }
+
+  @Test
+  public void getMediaFormat_nativeDolbyVisionDecoder_setsDolbyVisionProfile() {
+    Format format =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+            .setCodecs("hev1.08.04")
+            .setWidth(1920)
+            .setHeight(1080)
+            .build();
+
+    MediaFormat mediaFormat =
+        mediaCodecVideoRenderer.getMediaFormat(
+            format,
+            MimeTypes.VIDEO_DOLBY_VISION,
+            new MediaCodecVideoRenderer.CodecMaxValues(1920, 1080, C.LENGTH_UNSET),
+            /* codecOperatingRate= */ -1,
+            /* deviceNeedsNoPostProcessWorkaround= */ false,
+            C.AUDIO_SESSION_ID_UNSET);
+
+    assertThat(mediaFormat.getString(MediaFormat.KEY_MIME))
+        .isEqualTo(MimeTypes.VIDEO_DOLBY_VISION);
+    assertThat(mediaFormat.getInteger(MediaFormat.KEY_PROFILE))
+        .isEqualTo(CodecProfileLevel.DolbyVisionProfileDvheSt);
+  }
+
+  @Test
+  @Config(sdk = 19)
+  public void getMediaFormat_dolbyVisionHevcBaseLayer_omitsDolbyVisionProfile() {
+    Format format =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+            .setCodecs("hev1.08.04")
+            .setWidth(1920)
+            .setHeight(1080)
+            .setColorInfo(
+                new ColorInfo(
+                    C.COLOR_SPACE_BT2020,
+                    C.COLOR_RANGE_LIMITED,
+                    C.COLOR_TRANSFER_HLG,
+                    /* hdrStaticInfo= */ null))
+            .build();
+
+    MediaFormat mediaFormat =
+        mediaCodecVideoRenderer.getMediaFormat(
+            format,
+            MimeTypes.VIDEO_H265,
+            new MediaCodecVideoRenderer.CodecMaxValues(1920, 1080, C.LENGTH_UNSET),
+            /* codecOperatingRate= */ -1,
+            /* deviceNeedsNoPostProcessWorkaround= */ false,
+            C.AUDIO_SESSION_ID_UNSET);
+
+    assertThat(mediaFormat.getString(MediaFormat.KEY_MIME)).isEqualTo(MimeTypes.VIDEO_H265);
+    assertThat(mediaFormat.containsKey(MediaFormat.KEY_PROFILE)).isFalse();
+    assertThat(mediaFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD))
+        .isEqualTo(C.COLOR_SPACE_BT2020);
+    assertThat(mediaFormat.getInteger(MediaFormat.KEY_COLOR_TRANSFER)).isEqualTo(C.COLOR_TRANSFER_HLG);
+  }
+
+  @Test
+  public void getMediaFormat_dolbyVisionAvcBaseLayer_omitsDolbyVisionProfile() {
+    Format format =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+            .setCodecs("dvav.09.01")
+            .setWidth(1920)
+            .setHeight(1080)
+            .build();
+
+    MediaFormat mediaFormat =
+        mediaCodecVideoRenderer.getMediaFormat(
+            format,
+            MimeTypes.VIDEO_H264,
+            new MediaCodecVideoRenderer.CodecMaxValues(1920, 1080, C.LENGTH_UNSET),
+            /* codecOperatingRate= */ -1,
+            /* deviceNeedsNoPostProcessWorkaround= */ false,
+            C.AUDIO_SESSION_ID_UNSET);
+
+    assertThat(mediaFormat.getString(MediaFormat.KEY_MIME)).isEqualTo(MimeTypes.VIDEO_H264);
+    assertThat(mediaFormat.containsKey(MediaFormat.KEY_PROFILE)).isFalse();
   }
 
   @Test

@@ -187,6 +187,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   /* package */ @Nullable OnFrameRenderedListenerV23 tunnelingOnFrameRenderedListener;
   @Nullable private VideoFrameMetadataListener frameMetadataListener;
   private boolean disableLowLatencyHintAfterInitializationFailure;
+  private final boolean enableAmlogicR34a0AvcUnappliedRotation;
+  // Kept for the selected codec so MediaFormat and VideoSize agree on the rotation owner.
+  private boolean codecRotationUnappliedForSelectedDecoder;
 
   /**
    * @param context A context.
@@ -347,6 +350,32 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         mediaCodecLowLatencyProfile);
   }
 
+  /** Creates a renderer with an opt-in, device-scoped external rotation ownership mode. */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile,
+      boolean enableAmlogicR34a0AvcUnappliedRotation) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
+        /* assumedMinimumCodecOperatingRate= */ 30,
+        mediaCodecLowLatencyProfile,
+        enableAmlogicR34a0AvcUnappliedRotation);
+  }
+
   /**
    * Creates a new instance.
    *
@@ -408,6 +437,33 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       int maxDroppedFramesToNotify,
       float assumedMinimumCodecOperatingRate,
       MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile) {
+    this(
+        context,
+        codecAdapterFactory,
+        mediaCodecSelector,
+        allowedJoiningTimeMs,
+        enableDecoderFallback,
+        eventHandler,
+        eventListener,
+        maxDroppedFramesToNotify,
+        assumedMinimumCodecOperatingRate,
+        mediaCodecLowLatencyProfile,
+        /* enableAmlogicR34a0AvcUnappliedRotation= */ false);
+  }
+
+  /** Creates a renderer with an opt-in, device-scoped external rotation ownership mode. */
+  public MediaCodecVideoRenderer(
+      Context context,
+      MediaCodecAdapter.Factory codecAdapterFactory,
+      MediaCodecSelector mediaCodecSelector,
+      long allowedJoiningTimeMs,
+      boolean enableDecoderFallback,
+      @Nullable Handler eventHandler,
+      @Nullable VideoRendererEventListener eventListener,
+      int maxDroppedFramesToNotify,
+      float assumedMinimumCodecOperatingRate,
+      MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile,
+      boolean enableAmlogicR34a0AvcUnappliedRotation) {
     super(
         C.TRACK_TYPE_VIDEO,
         codecAdapterFactory,
@@ -417,6 +473,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     this.allowedJoiningTimeMs = allowedJoiningTimeMs;
     this.maxDroppedFramesToNotify = maxDroppedFramesToNotify;
     this.mediaCodecLowLatencyProfile = mediaCodecLowLatencyProfile;
+    this.enableAmlogicR34a0AvcUnappliedRotation = enableAmlogicR34a0AvcUnappliedRotation;
     this.context = context.getApplicationContext();
     frameReleaseHelper = new VideoFrameReleaseHelper(this.context);
     eventDispatcher = new EventDispatcher(eventHandler, eventListener);
@@ -697,6 +754,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     clearRenderedFirstFrame();
     haveReportedFirstFrameRenderedForCurrentSurface = false;
     tunnelingOnFrameRenderedListener = null;
+    codecRotationUnappliedForSelectedDecoder = false;
     try {
       super.onDisabled();
     } finally {
@@ -859,6 +917,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       releasePlaceholderSurface();
     }
     String codecMimeType = codecInfo.codecMimeType;
+    codecRotationUnappliedForSelectedDecoder =
+        shouldUseUnappliedRotationForCodec(codecInfo, format);
     codecMaxValues = getCodecMaxValues(codecInfo, format, getStreamFormats());
     MediaFormat mediaFormat =
         getMediaFormat(
@@ -1063,6 +1123,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
   @Override
   protected void onCodecReleased(String name) {
+    codecRotationUnappliedForSelectedDecoder = false;
     eventDispatcher.decoderReleased(name);
   }
 
@@ -1136,7 +1197,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
               : mediaFormat.getInteger(MediaFormat.KEY_HEIGHT);
     }
     pixelWidthHeightRatio = format.pixelWidthHeightRatio;
-    if (codecAppliesRotation()) {
+    if (codecAppliesRotation() && !codecRotationUnappliedForSelectedDecoder) {
       // On API level 21 and above the decoder applies the rotation when rendering to the surface.
       // Hence currentUnappliedRotation should always be 0. For 90 and 270 degree rotations, we need
       // to flip the width, height and pixel aspect ratio to reflect the rotation that was applied.
@@ -1842,7 +1903,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     MediaFormatUtil.setCsdBuffers(mediaFormat, format.initializationData);
     // Set format parameters that may be unset.
     MediaFormatUtil.maybeSetFloat(mediaFormat, MediaFormat.KEY_FRAME_RATE, format.frameRate);
-    MediaFormatUtil.maybeSetInteger(mediaFormat, MediaFormat.KEY_ROTATION, format.rotationDegrees);
+    if (!codecRotationUnappliedForSelectedDecoder) {
+      MediaFormatUtil.maybeSetInteger(mediaFormat, MediaFormat.KEY_ROTATION, format.rotationDegrees);
+    }
     MediaFormatUtil.maybeSetColorInfo(mediaFormat, format.colorInfo);
     if (MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType)
         && MimeTypes.VIDEO_DOLBY_VISION.equals(codecMimeType)) {
@@ -2533,6 +2596,37 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
   private static boolean codecAppliesRotation() {
     return Util.SDK_INT >= 21;
+  }
+
+  /* package */ boolean shouldUseUnappliedRotationForCodec(MediaCodecInfo codecInfo, Format format) {
+    return shouldUseAmlogicR34a0AvcUnappliedRotation(
+        enableAmlogicR34a0AvcUnappliedRotation,
+        Util.SDK_INT,
+        Util.MANUFACTURER,
+        Util.DEVICE,
+        codecInfo.name,
+        format.sampleMimeType,
+        tunneling,
+        videoFrameProcessorManager.isEnabled());
+  }
+
+  /* package */ static boolean shouldUseAmlogicR34a0AvcUnappliedRotation(
+      boolean enabled,
+      int sdkInt,
+      String manufacturer,
+      String device,
+      String codecName,
+      @Nullable String sampleMimeType,
+      boolean tunneling,
+      boolean frameProcessingEnabled) {
+    return enabled
+        && sdkInt == 22
+        && "amlogic".equalsIgnoreCase(manufacturer)
+        && "r34a0".equals(device)
+        && "OMX.amlogic.avc.decoder.awesome".equals(codecName)
+        && MimeTypes.VIDEO_H264.equals(sampleMimeType)
+        && !tunneling
+        && !frameProcessingEnabled;
   }
 
   /**

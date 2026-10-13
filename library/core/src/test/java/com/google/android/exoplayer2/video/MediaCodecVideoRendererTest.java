@@ -84,6 +84,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowDisplay;
 import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowSystemClock;
+import org.robolectric.util.ReflectionHelpers;
 
 /** Unit test for {@link MediaCodecVideoRenderer}. */
 @RunWith(AndroidJUnit4.class)
@@ -257,6 +258,140 @@ public class MediaCodecVideoRendererTest {
 
     assertThat(mediaFormat.getString(MediaFormat.KEY_MIME)).isEqualTo(MimeTypes.VIDEO_H264);
     assertThat(mediaFormat.containsKey(MediaFormat.KEY_PROFILE)).isFalse();
+  }
+
+  @Test
+  public void amlogicR34a0AvcUnappliedRotation_onlyMatchesExplicitQcPath() {
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, false))
+        .isTrue();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                false, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 19, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "amlogic", "other", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "other", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.hevc.decoder.awesome",
+                MimeTypes.VIDEO_H265, false, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, true, false))
+        .isFalse();
+    assertThat(
+            MediaCodecVideoRenderer.shouldUseAmlogicR34a0AvcUnappliedRotation(
+                true, 22, "amlogic", "r34a0", "OMX.amlogic.avc.decoder.awesome",
+                MimeTypes.VIDEO_H264, false, true))
+        .isFalse();
+  }
+
+  @Test
+  @Config(sdk = 22)
+  public void qcExternalRotationOwner_omitsCodecRotationAndReportsUnapplied() throws Exception {
+    Format portraitAvc = VIDEO_H264.buildUpon().setRotationDegrees(90).build();
+    MediaCodecVideoRenderer renderer = createRotationTestRenderer(portraitAvc, true);
+    MediaCodecInfo codecInfo = createQcAvcCodecInfo();
+    MediaCodecAdapter.Configuration configuration =
+        renderer.getMediaCodecConfiguration(codecInfo, portraitAvc, null, -1);
+
+    assertThat(configuration.mediaFormat.containsKey(MediaFormat.KEY_ROTATION)).isFalse();
+    renderer.onOutputFormatChanged(
+        portraitAvc, MediaFormat.createVideoFormat(MimeTypes.VIDEO_H264, 1920, 1080));
+    VideoSize videoSize = ReflectionHelpers.getField(renderer, "decodedVideoSize");
+    assertThat(videoSize.width).isEqualTo(1920);
+    assertThat(videoSize.height).isEqualTo(1080);
+    assertThat(videoSize.unappliedRotationDegrees).isEqualTo(90);
+  }
+
+  @Test
+  @Config(sdk = 22)
+  public void defaultRotationOwner_keepsCodecRotationAndReportsApplied() throws Exception {
+    Format portraitAvc = VIDEO_H264.buildUpon().setRotationDegrees(90).build();
+    MediaCodecVideoRenderer renderer = createRotationTestRenderer(portraitAvc, false);
+    MediaCodecInfo codecInfo = createQcAvcCodecInfo();
+    MediaCodecAdapter.Configuration configuration =
+        renderer.getMediaCodecConfiguration(codecInfo, portraitAvc, null, -1);
+
+    assertThat(configuration.mediaFormat.getInteger(MediaFormat.KEY_ROTATION)).isEqualTo(90);
+    renderer.onOutputFormatChanged(
+        portraitAvc, MediaFormat.createVideoFormat(MimeTypes.VIDEO_H264, 1920, 1080));
+    VideoSize videoSize = ReflectionHelpers.getField(renderer, "decodedVideoSize");
+    assertThat(videoSize.width).isEqualTo(1080);
+    assertThat(videoSize.height).isEqualTo(1920);
+    assertThat(videoSize.unappliedRotationDegrees).isEqualTo(0);
+  }
+
+  private MediaCodecVideoRenderer createRotationTestRenderer(Format format, boolean externalOwner)
+      throws Exception {
+    MediaCodecVideoRenderer renderer =
+        new MediaCodecVideoRenderer(
+            ApplicationProvider.getApplicationContext(),
+            MediaCodecAdapter.Factory.DEFAULT,
+            mediaCodecSelector,
+            /* allowedJoiningTimeMs= */ 0,
+            /* enableDecoderFallback= */ false,
+            new Handler(testMainLooper),
+            eventListener,
+            /* maxDroppedFramesToNotify= */ 1,
+            MediaCodecLowLatencyProfile.DISABLED,
+            /* enableAmlogicR34a0AvcUnappliedRotation= */ externalOwner) {
+          @Override
+          boolean shouldUseUnappliedRotationForCodec(MediaCodecInfo codecInfo, Format format) {
+            return externalOwner;
+          }
+        };
+    renderer.handleMessage(Renderer.MSG_SET_VIDEO_OUTPUT, surface);
+    FakeSampleStream sampleStream =
+        new FakeSampleStream(
+            new DefaultAllocator(/* trimOnReset= */ true, /* individualAllocationSize= */ 1024),
+            /* mediaSourceEventDispatcher= */ null,
+            DrmSessionManager.DRM_UNSUPPORTED,
+            new DrmSessionEventListener.EventDispatcher(),
+            /* initialFormat= */ format,
+            ImmutableList.of(END_OF_STREAM_ITEM));
+    sampleStream.writeData(/* startPositionUs= */ 0);
+    renderer.enable(
+        RendererConfiguration.DEFAULT,
+        new Format[] {format},
+        sampleStream,
+        /* positionUs= */ 0,
+        /* joining= */ false,
+        /* mayRenderStartOfStream= */ true,
+        /* startPositionUs= */ 0,
+        /* offsetUs= */ 0);
+    return renderer;
+  }
+
+  private static MediaCodecInfo createQcAvcCodecInfo() {
+    return MediaCodecInfo.newInstance(
+        /* name= */ "OMX.amlogic.avc.decoder.awesome",
+        /* mimeType= */ MimeTypes.VIDEO_H264,
+        /* codecMimeType= */ MimeTypes.VIDEO_H264,
+        /* capabilities= */ null,
+        /* hardwareAccelerated= */ true,
+        /* softwareOnly= */ false,
+        /* vendor= */ true,
+        /* forceDisableAdaptive= */ false,
+        /* forceSecure= */ false);
   }
 
   @Test

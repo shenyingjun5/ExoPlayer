@@ -110,6 +110,7 @@ public class DefaultRenderersFactory implements RenderersFactory {
   private boolean enableAudioTrackPlaybackParams;
   private boolean enableOffload;
   private MediaCodecLowLatencyProfile mediaCodecLowLatencyProfile;
+  private boolean enableAmlogicR34a0AvcUnappliedRotation;
 
   /**
    * @param context A {@link Context}.
@@ -310,6 +311,20 @@ public class DefaultRenderersFactory implements RenderersFactory {
     return this;
   }
 
+  /**
+   * Enables reporting AVC display-matrix rotation as unapplied for the QC Amlogic r34a0 decoder.
+   *
+   * <p>This option is disabled by default. It only changes codec rotation configuration and video
+   * size metadata for the exact API 22 device and decoder. The caller must supply and verify an
+   * output-surface transform that applies {@code VideoSize.unappliedRotationDegrees} to the pixels.
+   * Enabling this option alone does not rotate the picture.
+   */
+  @CanIgnoreReturnValue
+  public DefaultRenderersFactory setEnableAmlogicR34a0AvcUnappliedRotation(boolean enabled) {
+    this.enableAmlogicR34a0AvcUnappliedRotation = enabled;
+    return this;
+  }
+
   @Override
   public Renderer[] createRenderers(
       Handler eventHandler,
@@ -392,7 +407,8 @@ public class DefaultRenderersFactory implements RenderersFactory {
             eventHandler,
             eventListener,
             MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY,
-            mediaCodecLowLatencyProfile);
+            mediaCodecLowLatencyProfile,
+            enableAmlogicR34a0AvcUnappliedRotation);
     out.add(videoRenderer);
 
     if (extensionRendererMode == EXTENSION_RENDERER_MODE_OFF) {

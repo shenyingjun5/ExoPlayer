@@ -97,6 +97,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
   private final Queue<Pair<GlTextureInfo, Long>> availableFrames;
   private final TexturePool outputTexturePool;
   private final Queue<Long> outputTextureTimestamps; // Synchronized with outputTexturePool.
+  private final int[] queriedOutputSize;
   @Nullable private final DefaultVideoFrameProcessor.TextureOutputListener textureOutputListener;
 
   private int inputWidth;
@@ -161,6 +162,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     boolean useHighPrecisionColorComponents = ColorInfo.isTransferHdr(outputColorInfo);
     outputTexturePool = new TexturePool(useHighPrecisionColorComponents, textureOutputCapacity);
     outputTextureTimestamps = new ArrayDeque<>(textureOutputCapacity);
+    queriedOutputSize = new int[2];
   }
 
   @Override
@@ -356,8 +358,8 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         eglDisplay,
         eglContext,
         outputEglSurface,
-        outputSurfaceInfo.width,
-        outputSurfaceInfo.height);
+        outputWidth,
+        outputHeight);
     GlUtil.clearOutputFrame();
     defaultShaderProgram.drawFrame(inputTexture.getTexId(), presentationTimeUs);
 
@@ -434,15 +436,6 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
       return false;
     }
 
-    outputWidth =
-        outputSurfaceInfo == null
-            ? outputSizeBeforeSurfaceTransformation.getWidth()
-            : outputSurfaceInfo.width;
-    outputHeight =
-        outputSurfaceInfo == null
-            ? outputSizeBeforeSurfaceTransformation.getHeight()
-            : outputSurfaceInfo.height;
-
     // Allocate or update resources.
     if (outputSurfaceInfo != null && outputEglSurface == null) {
       outputEglSurface =
@@ -453,6 +446,38 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
               // Frames are only rendered automatically when outputting to an encoder.
               /* isEncoderInputSurface= */ renderFramesAutomatically);
     }
+    Size resolvedOutputSize;
+    if (outputSurfaceInfo == null) {
+      resolvedOutputSize = outputSizeBeforeSurfaceTransformation;
+    } else if (outputSurfaceInfo.width > 0 && outputSurfaceInfo.height > 0) {
+      resolvedOutputSize =
+          resolveOutputSize(
+              outputSurfaceInfo.width, outputSurfaceInfo.height, /* eglWidth= */ -1,
+              /* eglHeight= */ -1);
+    } else {
+      // A bare Surface has no viewport size message. Use the actual EGL window size, and keep
+      // waiting if the native window has not acquired positive dimensions yet.
+      EGLSurface eglSurface = checkNotNull(outputEglSurface);
+      if (!EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_WIDTH, queriedOutputSize, 0)
+          || !EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_HEIGHT, queriedOutputSize, 1)) {
+        return false;
+      }
+      resolvedOutputSize =
+          resolveOutputSize(
+              outputSurfaceInfo.width,
+              outputSurfaceInfo.height,
+              queriedOutputSize[0],
+              queriedOutputSize[1]);
+      if (resolvedOutputSize.equals(Size.UNKNOWN)) {
+        return false;
+      }
+    }
+    if (outputWidth != resolvedOutputSize.getWidth()
+        || outputHeight != resolvedOutputSize.getHeight()) {
+      outputSurfaceInfoChanged = true;
+    }
+    outputWidth = resolvedOutputSize.getWidth();
+    outputHeight = resolvedOutputSize.getHeight();
     if (textureOutputListener != null) {
       outputTexturePool.ensureConfigured(outputWidth, outputHeight);
     }
@@ -512,11 +537,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
     Size outputSize = defaultShaderProgram.configure(inputWidth, inputHeight);
     if (outputSurfaceInfo != null) {
-      SurfaceInfo outputSurfaceInfo = checkNotNull(this.outputSurfaceInfo);
-      checkState(outputSize.getWidth() == outputSurfaceInfo.width);
-      checkState(outputSize.getHeight() == outputSurfaceInfo.height);
+      checkState(outputSize.getWidth() == outputWidth);
+      checkState(outputSize.getHeight() == outputHeight);
     }
     return defaultShaderProgram;
+  }
+
+  /* package */ static Size resolveOutputSize(
+      int requestedWidth, int requestedHeight, int eglWidth, int eglHeight) {
+    if (requestedWidth > 0 && requestedHeight > 0) {
+      return new Size(requestedWidth, requestedHeight);
+    }
+    return eglWidth > 0 && eglHeight > 0 ? new Size(eglWidth, eglHeight) : Size.UNKNOWN;
   }
 
   private void renderFrameToDebugSurface(GlTextureInfo inputTexture, long presentationTimeUs) {

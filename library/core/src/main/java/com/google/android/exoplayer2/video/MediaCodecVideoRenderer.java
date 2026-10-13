@@ -896,11 +896,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         break;
       case MSG_SET_VIDEO_OUTPUT_RESOLUTION:
         Size outputResolution = (Size) checkNotNull(message);
-        displaySurfaceSize = outputResolution;
-        if (outputResolution.getWidth() != 0
-            && outputResolution.getHeight() != 0
-            && displaySurface != null) {
-          videoFrameProcessorManager.setOutputSurfaceInfo(displaySurface, outputResolution);
+        displaySurfaceSize =
+            outputResolution.getWidth() > 0 && outputResolution.getHeight() > 0
+                ? outputResolution
+                : Size.UNKNOWN;
+        if (displaySurface != null) {
+          videoFrameProcessorManager.setOutputSurfaceInfo(displaySurface, displaySurfaceSize);
         }
         break;
       case MSG_SET_AUDIO_ATTRIBUTES:
@@ -2222,7 +2223,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
     /** Returns whether {@code VideoFrameProcessorManager} is ready to accept input frames. */
     public boolean isReady() {
-      return currentSurfaceAndSize == null || !currentSurfaceAndSize.second.equals(Size.UNKNOWN);
+      // With a bare Surface the caller may not know the viewport dimensions. The GL processor
+      // queries the EGL window size; its successful first swap proves that the size was resolved.
+      return currentSurfaceAndSize == null
+          || !currentSurfaceAndSize.second.equals(Size.UNKNOWN)
+          || (renderer.amlogicR34a0AvcRotationOutputActive
+              && renderer.renderedFirstFrameAfterReset);
     }
 
     /**

@@ -23,6 +23,8 @@ import static com.google.android.exoplayer2.util.Util.msToUs;
 import static com.google.common.truth.Truth.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -63,8 +65,10 @@ import com.google.android.exoplayer2.mediacodec.SynchronousMediaCodecAdapter;
 import com.google.android.exoplayer2.testutil.FakeSampleStream;
 import com.google.android.exoplayer2.upstream.DefaultAllocator;
 import com.google.android.exoplayer2.util.MimeTypes;
+import com.google.android.exoplayer2.util.VideoFrameProcessor;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.List;
@@ -361,6 +365,31 @@ public class MediaCodecVideoRendererTest {
         .isEqualTo(-180f);
     assertThat(MediaCodecVideoRenderer.getAmlogicR34a0RotationEffectDegrees(270))
         .isEqualTo(-270f);
+  }
+
+  @Test
+  public void videoFrameProcessorReset_invalidatesOldCallbacksBeforeGlRelease() throws Exception {
+    MediaCodecVideoRenderer renderer =
+        new MediaCodecVideoRenderer(
+            ApplicationProvider.getApplicationContext(), mediaCodecSelector);
+    Object manager = ReflectionHelpers.getField(renderer, "videoFrameProcessorManager");
+    VideoFrameProcessor processor = mock(VideoFrameProcessor.class);
+    ReflectionHelpers.setField(manager, "videoFrameProcessor", processor);
+    ReflectionHelpers.setField(manager, "processorGeneration", 7L);
+    doAnswer(
+            invocation -> {
+              Long generation = ReflectionHelpers.getField(manager, "processorGeneration");
+              assertThat(generation).isEqualTo(8L);
+              return null;
+            })
+        .when(processor)
+        .release();
+
+    Method reset = manager.getClass().getDeclaredMethod("reset");
+    reset.setAccessible(true);
+    reset.invoke(manager);
+
+    verify(processor).release();
   }
 
   @Test

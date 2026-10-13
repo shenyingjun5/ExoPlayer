@@ -2146,6 +2146,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
     private int videoFrameProcessorMaxPendingFrameCount;
     private boolean canEnableFrameProcessing;
+    // A timed-out GL release can post callbacks after the next processor has been created.
+    private volatile long processorGeneration;
 
     /**
      * Whether the last frame of the current stream is decoded and registered to {@link
@@ -2274,6 +2276,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
       // Playback thread handler.
       handler = Util.createHandlerForCurrentLooper();
+      final long callbackGeneration = ++processorGeneration;
 
       Pair<ColorInfo, ColorInfo> inputAndOutputColorInfos =
           renderer.experimentalGetVideoFrameProcessorColorConfiguration(inputFormat.colorInfo);
@@ -2303,6 +2306,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
                     new VideoFrameProcessor.Listener() {
                       @Override
                       public void onOutputSizeChanged(int width, int height) {
+                        if (callbackGeneration != processorGeneration) {
+                          return;
+                        }
                         @Nullable Format inputFormat = VideoFrameProcessorManager.this.inputFormat;
                         checkStateNotNull(inputFormat);
                         // TODO(b/264889146): Handle Effect that changes output size based on pts.
@@ -2320,6 +2326,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
                       @Override
                       public void onOutputFrameAvailableForRendering(long presentationTimeUs) {
+                        if (callbackGeneration != processorGeneration) {
+                          return;
+                        }
                         if (registeredLastFrame) {
                           checkState(lastCodecBufferPresentationTimestampUs != C.TIME_UNSET);
                         }
@@ -2339,7 +2348,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
                       @Override
                       public void onOutputFrameRenderedToSurface(
                           long presentationTimeUs, Surface outputSurface) {
-                        if (renderer.amlogicR34a0AvcRotationOutputActive
+                        if (callbackGeneration == processorGeneration
+                            && renderer.amlogicR34a0AvcRotationOutputActive
                             && renderer.displaySurface == outputSurface) {
                           renderer.maybeNotifyRenderedFirstFrame();
                           if (lastFrameAwaitingSurfaceSwapUs == presentationTimeUs) {
@@ -2351,6 +2361,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
                       @Override
                       public void onError(VideoFrameProcessingException exception) {
+                        if (callbackGeneration != processorGeneration) {
+                          return;
+                        }
                         renderer.setPendingPlaybackException(
                             renderer.createRendererException(
                                 exception,
@@ -2360,6 +2373,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
                       @Override
                       public void onEnded() {
+                        if (callbackGeneration != processorGeneration) {
+                          return;
+                        }
                         throw new IllegalStateException();
                       }
                     });
@@ -2595,6 +2611,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
      * calling this method.
      */
     public void reset() {
+      // Invalidate callbacks before release. release() normally drains the GL thread, but returns
+      // after its bounded timeout even if a vendor GL call has not completed.
+      ++processorGeneration;
       checkNotNull(videoFrameProcessor).release();
       videoFrameProcessor = null;
       if (handler != null) {

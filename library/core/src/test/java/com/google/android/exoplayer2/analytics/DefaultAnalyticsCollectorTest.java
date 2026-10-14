@@ -108,10 +108,12 @@ import com.google.android.exoplayer2.source.LoadEventInfo;
 import com.google.android.exoplayer2.source.MediaLoadData;
 import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.MediaSource.MediaPeriodId;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.ads.AdPlaybackState;
 import com.google.android.exoplayer2.testutil.ExoPlayerTestRunner;
 import com.google.android.exoplayer2.testutil.FakeAudioRenderer;
 import com.google.android.exoplayer2.testutil.FakeClock;
+import com.google.android.exoplayer2.testutil.FakeDataSource;
 import com.google.android.exoplayer2.testutil.FakeExoMediaDrm;
 import com.google.android.exoplayer2.testutil.FakeMediaSource;
 import com.google.android.exoplayer2.testutil.FakeRenderer;
@@ -1625,7 +1627,10 @@ public final class DefaultAnalyticsCollectorTest {
     player.play();
     TestPlayerRunHelper.runUntilPositionDiscontinuity(
         player, Player.DISCONTINUITY_REASON_AUTO_TRANSITION);
-    player.setMediaItem(MediaItem.fromUri("http://this-will-throw-an-exception.mp4"));
+    // Preserve loader/error analytics while making failure independent of external DNS/network.
+    player.setMediaSource(
+        new ProgressiveMediaSource.Factory(new FakeDataSource.Factory())
+            .createMediaSource(MediaItem.fromUri("http://this-will-throw-an-exception.mp4")));
     runUntilError(player);
     runMainLooperToNextTask();
     player.release();

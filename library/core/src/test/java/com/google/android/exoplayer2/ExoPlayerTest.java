@@ -122,6 +122,7 @@ import com.google.android.exoplayer2.source.MediaPeriod;
 import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.MediaSource.MediaPeriodId;
 import com.google.android.exoplayer2.source.MediaSourceEventListener;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.ShuffleOrder;
 import com.google.android.exoplayer2.source.SinglePeriodTimeline;
 import com.google.android.exoplayer2.source.TrackGroup;
@@ -11025,7 +11026,10 @@ public final class ExoPlayerTest {
     player.prepare();
     TestPlayerRunHelper.runUntilPlaybackState(player, Player.STATE_READY);
     player.play();
-    player.setMediaItem(MediaItem.fromUri("http://this-will-throw-an-exception.mp4"));
+    // Exercise the real loader/error callbacks without depending on DNS or network timeouts.
+    player.setMediaSource(
+        new ProgressiveMediaSource.Factory(new FakeDataSource.Factory())
+            .createMediaSource(MediaItem.fromUri("http://this-will-throw-an-exception.mp4")));
     TestPlayerRunHelper.runUntilError(player);
     runUntilPendingCommandsAreFullyHandled(player);
     player.release();

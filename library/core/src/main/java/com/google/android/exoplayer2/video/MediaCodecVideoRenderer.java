@@ -2121,6 +2121,29 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     return new MediaCodecVideoDecoderException(cause, codecInfo, displaySurface);
   }
 
+  /** Tracks which processed frame may first report a pending output size. */
+  static final class OutputSizeNotificationGate {
+    private long pendingFramePresentationTimeUs = C.TIME_UNSET;
+
+    public void setPendingFramePresentationTimeUs(long presentationTimeUs) {
+      pendingFramePresentationTimeUs = presentationTimeUs;
+    }
+
+    public boolean consumeForRelease(long framePresentationTimeUs, long releaseTimeNs) {
+      if (releaseTimeNs == VideoFrameProcessor.DROP_OUTPUT_FRAME
+          || pendingFramePresentationTimeUs == C.TIME_UNSET
+          || framePresentationTimeUs < pendingFramePresentationTimeUs) {
+        return false;
+      }
+      pendingFramePresentationTimeUs = C.TIME_UNSET;
+      return true;
+    }
+
+    public void reset() {
+      pendingFramePresentationTimeUs = C.TIME_UNSET;
+    }
+  }
+
   /** Manages {@link VideoFrameProcessor} interactions. */
   private static final class VideoFrameProcessorManager {
 
@@ -2168,8 +2191,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     private long lastCodecBufferPresentationTimestampUs;
     private VideoSize processedFrameSize;
     private boolean pendingOutputSizeChange;
-    /** The presentation time, after which the listener should be notified about the size change. */
-    private long pendingOutputSizeChangeNotificationTimeUs;
+    private final OutputSizeNotificationGate outputSizeNotificationGate;
 
     private long initialStreamOffsetUs;
 
@@ -2185,7 +2207,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       canEnableFrameProcessing = true;
       lastCodecBufferPresentationTimestampUs = C.TIME_UNSET;
       processedFrameSize = VideoSize.UNKNOWN;
-      pendingOutputSizeChangeNotificationTimeUs = C.TIME_UNSET;
+      outputSizeNotificationGate = new OutputSizeNotificationGate();
       lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
       initialStreamOffsetUs = C.TIME_UNSET;
     }
@@ -2347,7 +2369,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
                         if (pendingOutputSizeChange) {
                           // Report the size change on releasing this frame.
                           pendingOutputSizeChange = false;
-                          pendingOutputSizeChangeNotificationTimeUs = presentationTimeUs;
+                          outputSizeNotificationGate.setPendingFramePresentationTimeUs(
+                              presentationTimeUs);
                         }
                       }
 
@@ -2602,10 +2625,6 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         }
         renderer.notifyFrameMetadataListener(
             framePresentationTimeUs, adjustedFrameReleaseTimeNs, currentFrameFormat.second);
-        if (pendingOutputSizeChangeNotificationTimeUs >= bufferPresentationTimeUs) {
-          pendingOutputSizeChangeNotificationTimeUs = C.TIME_UNSET;
-          renderer.maybeNotifyVideoSizeChanged(processedFrameSize);
-        }
         releaseProcessedFrameInternal(adjustedFrameReleaseTimeNs, isLastFrame);
       }
     }
@@ -2639,7 +2658,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       lastFrameAwaitingSurfaceSwapUs = C.TIME_UNSET;
       processedFrameSize = VideoSize.UNKNOWN;
       pendingOutputSizeChange = false;
-      pendingOutputSizeChangeNotificationTimeUs = C.TIME_UNSET;
+      outputSizeNotificationGate.reset();
       initialStreamOffsetUs = C.TIME_UNSET;
       videoFrameProcessorMaxPendingFrameCount = C.LENGTH_UNSET;
       canEnableFrameProcessing = true;
@@ -2650,6 +2669,9 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       // VideoFrameProcessor.renderOutputFrame, to release the MediaCodecVideoRenderer frame.
       checkStateNotNull(videoFrameProcessor);
       long presentationTimeUs = checkNotNull(processedFramesTimestampsUs.peek());
+      if (outputSizeNotificationGate.consumeForRelease(presentationTimeUs, releaseTimeNs)) {
+        renderer.maybeNotifyVideoSizeChanged(processedFrameSize);
+      }
       videoFrameProcessor.renderOutputFrame(releaseTimeNs);
       processedFramesTimestampsUs.remove();
       renderer.lastRenderRealtimeUs = SystemClock.elapsedRealtime() * 1000;

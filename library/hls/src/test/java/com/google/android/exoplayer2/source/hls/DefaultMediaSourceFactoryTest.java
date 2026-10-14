@@ -119,7 +119,13 @@ public class DefaultMediaSourceFactoryTest {
   private static void prepareHlsUrlAndWaitForPrepareError(
       DefaultMediaSourceFactory defaultMediaSourceFactory) throws Exception {
     MediaSource mediaSource =
-        defaultMediaSourceFactory.createMediaSource(MediaItem.fromUri(URI_MEDIA + "/file.m3u8"));
+        defaultMediaSourceFactory.createMediaSource(
+            new MediaItem.Builder()
+                // Exercise the real default data source without relying on an external server.
+                // Invalid playlist bytes produce the expected source preparation error locally.
+                .setUri("data:text/plain,not-an-hls-playlist")
+                .setMimeType(MimeTypes.APPLICATION_M3U8)
+                .build());
     getInstrumentation()
         .runOnMainSync(
             () ->

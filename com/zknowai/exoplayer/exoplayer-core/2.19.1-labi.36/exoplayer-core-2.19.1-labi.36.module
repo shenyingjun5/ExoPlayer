@@ -1,0 +1,160 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.zknowai.exoplayer",
+    "module": "exoplayer-core",
+    "version": "2.19.1-labi.36",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "7.4.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-common",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-container",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-datasource",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-decoder",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-extractor",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-database",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-core-2.19.1-labi.36.aar",
+          "url": "exoplayer-core-2.19.1-labi.36.aar",
+          "size": 1296014,
+          "sha512": "b0708a009d7e8f64f8a980e3ecddc94b055c60bdf2e6ea8e51fcc2baaf2a7257dd8917aa2940ba12182e0fb93d8b3b1c344072f74a9571ade88d08840c4d10ce",
+          "sha256": "bf6d4832060db55a1b0a574b3c445570fcc2e7ca89f067677af7f7668471a6a5",
+          "sha1": "1e161acb886925ad1fb3d33982a6b0beb95351a8",
+          "md5": "1e953fcb518037d38c23d8209b52a7c3"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.annotation",
+          "module": "annotation",
+          "version": {
+            "requires": "1.3.0"
+          }
+        },
+        {
+          "group": "androidx.core",
+          "module": "core",
+          "version": {
+            "requires": "1.8.0"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-common",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-container",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-datasource",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-decoder",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-extractor",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        },
+        {
+          "group": "com.zknowai.exoplayer",
+          "module": "exoplayer-database",
+          "version": {
+            "requires": "2.19.1-labi.36"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "exoplayer-core-2.19.1-labi.36.aar",
+          "url": "exoplayer-core-2.19.1-labi.36.aar",
+          "size": 1296014,
+          "sha512": "b0708a009d7e8f64f8a980e3ecddc94b055c60bdf2e6ea8e51fcc2baaf2a7257dd8917aa2940ba12182e0fb93d8b3b1c344072f74a9571ade88d08840c4d10ce",
+          "sha256": "bf6d4832060db55a1b0a574b3c445570fcc2e7ca89f067677af7f7668471a6a5",
+          "sha1": "1e161acb886925ad1fb3d33982a6b0beb95351a8",
+          "md5": "1e953fcb518037d38c23d8209b52a7c3"
+        }
+      ]
+    }
+  ]
+}

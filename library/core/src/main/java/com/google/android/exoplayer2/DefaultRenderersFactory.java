@@ -339,6 +339,15 @@ public class DefaultRenderersFactory implements RenderersFactory {
     return this;
   }
 
+  /**
+   * Enables finite-video AVC rotation for the verified QC/API22 and RTK/API19 decoder paths.
+   * Disabled by default. The renderer retains exact device, codec, color and protection gates.
+   */
+  @CanIgnoreReturnValue
+  public DefaultRenderersFactory setEnableLegacyAvcRotationOutput(boolean enabled) {
+    return setEnableAmlogicR34a0AvcRotationOutput(enabled);
+  }
+
   @Override
   public Renderer[] createRenderers(
       Handler eventHandler,

@@ -247,9 +247,8 @@ import java.util.concurrent.atomic.AtomicInteger;
     surfaceTexture.getTransformMatrix(textureTransformMatrix);
     externalShaderProgram.setTextureTransformMatrix(textureTransformMatrix);
     long frameTimeNs = surfaceTexture.getTimestamp();
-    long offsetToAddUs = currentFrame.offsetToAddUs;
     // Correct the presentation time so that GlShaderPrograms don't see the stream offset.
-    long presentationTimeUs = (frameTimeNs / 1000) + offsetToAddUs;
+    long presentationTimeUs = currentFrame.resolvePresentationTimeUs(frameTimeNs);
     externalShaderProgram.queueInputFrame(
         new GlTextureInfo(
             externalTexId,

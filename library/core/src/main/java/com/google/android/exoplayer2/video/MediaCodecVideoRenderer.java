@@ -740,6 +740,19 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
   }
 
   @Override
+  protected boolean flushOrReleaseCodec() {
+    if (Util.SDK_INT == 19 && amlogicR34a0AvcRotationOutputActive && getCodec() != null) {
+      // RTK API19 may discard a surface frame on codec flush after it has been registered
+      // with the frame processor. Its flush would then wait forever for that callback.
+      // Release the producer first; onCodecReleased tears down the old processor and
+      // invalidates its callbacks. The caller reinitializes both when playback continues.
+      releaseCodec();
+      return true;
+    }
+    return super.flushOrReleaseCodec();
+  }
+
+  @Override
   protected void onPositionReset(long positionUs, boolean joining) throws ExoPlaybackException {
     super.onPositionReset(positionUs, joining);
     if (videoFrameProcessorManager.isEnabled()) {
@@ -816,7 +829,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
     clearRenderedFirstFrame();
     haveReportedFirstFrameRenderedForCurrentSurface = false;
     tunnelingOnFrameRenderedListener = null;
-    codecRotationUnappliedForSelectedDecoder = false;
+    // Disabling can flush and retain the codec. Keep its rotation owner until the codec is
+    // actually released; otherwise reuse swaps dimensions before the retained GPU effect.
     try {
       super.onDisabled();
     } finally {
@@ -1642,6 +1656,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
    */
   protected boolean shouldDropBuffersToKeyframe(
       long earlyUs, long elapsedRealtimeUs, boolean isLastBuffer) {
+    if (Util.SDK_INT == 19 && amlogicR34a0AvcRotationOutputActive) {
+      // Rebuilding this legacy GL path to catch up can itself make more frames late.
+      // Drain/drop individual late codec outputs instead; keep the final frame/EOS.
+      // Explicit seeks and disable still release the producer and processor together.
+      return false;
+    }
     return isBufferVeryLate(earlyUs) && !isLastBuffer;
   }
 
@@ -2019,10 +2039,8 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       MediaFormatUtil.maybeSetInteger(mediaFormat, MediaFormat.KEY_ROTATION, format.rotationDegrees);
     }
     MediaFormatUtil.maybeSetColorInfo(mediaFormat, format.colorInfo);
-    if (MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType)
-        && MimeTypes.VIDEO_DOLBY_VISION.equals(codecMimeType)) {
-      // Some Dolby Vision codecs require the Dolby Vision profile. Do not pass it to an AVC or HEVC
-      // decoder selected for a compatible base layer: those codecs use different profile constants.
+    if (MimeTypes.VIDEO_DOLBY_VISION.equals(format.sampleMimeType)) {
+      // Some phones require the profile to be set on the codec.
       // See https://github.com/google/ExoPlayer/pull/5438.
       Pair<Integer, Integer> codecProfileAndLevel = MediaCodecUtil.getCodecProfileAndLevel(format);
       if (codecProfileAndLevel != null) {
@@ -2271,6 +2289,12 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
       videoFrameProcessor.flush();
       processedFramesTimestampsUs.clear();
       handler.removeCallbacksAndMessages(/* token= */ null);
+      if (renderer.amlogicR34a0AvcRotationOutputActive) {
+        // A retained processor need not repeat onOutputSizeChanged for an identical input.
+        // Re-arm its known size for the first new output frame, never for an old stream PTS.
+        outputSizeNotificationGate.reset();
+        pendingOutputSizeChange = !processedFrameSize.equals(VideoSize.UNKNOWN);
+      }
 
       if (registeredLastFrame) {
         registeredLastFrame = false;
@@ -2552,6 +2576,18 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
 
       if (videoFrameProcessor.getPendingInputFrameCount()
           < videoFrameProcessorMaxPendingFrameCount) {
+        if (renderer.amlogicR34a0AvcRotationOutputActive && Util.SDK_INT < 21) {
+          // API19 boolean release cannot provide a render timestamp. The verified RTK decoder
+          // stamps SurfaceTexture with monotonic wall time, not media PTS. Preserve the codec
+          // output PTS on this exact registered frame; no extra FIFO or timestamp guessing.
+          videoFrameProcessor.setInputFrameInfo(
+              new FrameInfo.Builder(format.width, format.height)
+                  .setPixelWidthHeightRatio(format.pixelWidthHeightRatio)
+                  .setPresentationTimeOverrideUs(
+                      getCorrectedFramePresentationTimeUs(
+                          presentationTimestampUs, renderer.getOutputStreamOffsetUs()))
+                  .build());
+        }
         videoFrameProcessor.registerInputFrame();
 
         if (currentFrameFormat == null) {
@@ -2839,7 +2875,7 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
                     && colorInfo.colorSpace != C.COLOR_SPACE_BT709)
                 || (colorInfo.colorRange != Format.NO_VALUE
                     && colorInfo.colorRange != C.COLOR_RANGE_LIMITED));
-    return shouldUseAmlogicR34a0AvcRotationOutput(
+    return shouldUseLegacyAvcRotationOutput(
         enableAmlogicR34a0AvcRotationOutput,
         Util.SDK_INT,
         Util.MANUFACTURER,
@@ -2850,6 +2886,23 @@ public class MediaCodecVideoRenderer extends MediaCodecRenderer {
         codecInfo.secure || format.drmInitData != null || unsupportedColor,
         tunneling,
         videoFrameProcessorManager.hasVideoEffects());
+  }
+
+  /* package */ static boolean shouldUseLegacyAvcRotationOutput(
+      boolean enabled, int sdkInt, String manufacturer, String device, String codecName,
+      @Nullable String sampleMimeType, int rotationDegrees, boolean protectedOrUnsupportedColor,
+      boolean tunneling, boolean callerFrameProcessingEnabled) {
+    if (shouldUseAmlogicR34a0AvcRotationOutput(enabled, sdkInt, manufacturer, device, codecName,
+        sampleMimeType, rotationDegrees, protectedOrUnsupportedColor, tunneling,
+        callerFrameProcessingEnabled)) {
+      return true;
+    }
+    // API19 does not apply the container rotation to decoder pixels. The exact RTK path was
+    // verified with independent OES pixel output, not inferred from reported video dimensions.
+    return enabled && sdkInt == 19 && "Konka".equalsIgnoreCase(manufacturer)
+        && "rtd294x_tv035".equals(device) && "OMX.RTK.video.decoder".equals(codecName)
+        && MimeTypes.VIDEO_H264.equals(sampleMimeType) && rotationDegrees != 0
+        && !protectedOrUnsupportedColor && !tunneling && !callerFrameProcessingEnabled;
   }
 
   /* package */ static boolean shouldUseAmlogicR34a0AvcRotationOutput(

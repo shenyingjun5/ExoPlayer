@@ -1,5 +1,17 @@
 # RTSP Feedback Enhancement Plan
 
+## 2026-10-14：2.19.1-labi.36 发布范围
+
+本轮为 H.264 有限视频方向、API19 重播/Seek 生命周期和真实自然结束修复。
+旋转由调用者显式 opt-in，并限定已验证的 QC/API22 amlogic/r34a0 与
+5Y/API19 Konka/rtd294x_tv035 的确切 AVC 解码器；HDR/保护内容/tunneling/调用者 effect 不启用。
+AudioTrack 停止后的 EOS drain 修复是共用逻辑，正常运行时钟保持不变。
+HEVC/Dolby Vision 参数实验已撤回，保留 `.35` 行为，不宣称原始 HEVC/HDR 已修复。
+
+发布十个同版模块：common/container/database/datasource/decoder/extractor/core/hls/rtsp/effect。
+Cast-SDK 必须显式依赖同版 effect；不混用本地候选，不覆盖已发布 `.35`。
+测试源码与工具不进入 AAR；发布不等于所有硬件、角度与性能场景均已完成验收。
+
 ## 2026-10-09：2.19.1-labi.35 正式收口
 
 范围：Android 普通 RTSP 和 Video 镜像共同路径。PLAY 响应安装全部轨道时间信息后才允许 RTP loader 读首包，等待有 8 秒超时和取消释放，PLAY 前 TCP 队列有 4 MiB 预算。AAC 聚合帧按 1024 samples 或 constantDuration 换算；每轨相邻 signed32 RTP 增量与 long 累计支持负 preroll、真实回绕、长时播放和 seek 重置。

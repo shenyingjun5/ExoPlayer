@@ -457,6 +457,12 @@ import java.lang.reflect.Method;
    * @return Whether the audio track has any pending data to play out.
    */
   public boolean hasPendingData(long writtenFrames) {
+    if (stopTimestampUs != C.TIME_UNSET) {
+      // After AudioTrack.stop(), getPlaybackHeadPosition already simulates the remaining drain
+      // up to endPlaybackHeadPosition. Subtracting latency again can keep a fully drained track
+      // pending forever. Keep the normal running-track clock/underrun policy unchanged.
+      return writtenFrames > getPlaybackHeadPosition();
+    }
     long currentPositionUs = getCurrentPositionUs(/* sourceEnded= */ false, writtenFrames);
     return writtenFrames > durationUsToSampleCount(currentPositionUs, outputSampleRate)
         || forceHasPendingData();

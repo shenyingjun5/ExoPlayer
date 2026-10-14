@@ -17,6 +17,7 @@ package com.google.android.exoplayer2.util;
 
 import static com.google.android.exoplayer2.util.Assertions.checkArgument;
 
+import com.google.android.exoplayer2.C;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 
 /**
@@ -37,6 +38,7 @@ public class FrameInfo {
     private int height;
     private float pixelWidthHeightRatio;
     private long offsetToAddUs;
+    private long presentationTimeOverrideUs = C.TIME_UNSET;
 
     /**
      * Creates an instance with default values.
@@ -56,6 +58,7 @@ public class FrameInfo {
       height = frameInfo.height;
       pixelWidthHeightRatio = frameInfo.pixelWidthHeightRatio;
       offsetToAddUs = frameInfo.offsetToAddUs;
+      presentationTimeOverrideUs = frameInfo.presentationTimeOverrideUs;
     }
 
     /** Sets the frame width, in pixels. */
@@ -95,9 +98,21 @@ public class FrameInfo {
       return this;
     }
 
+    /**
+     * Sets an authoritative media timestamp for this registered surface frame. The default,
+     * {@link C#TIME_UNSET}, retains the SurfaceTexture timestamp. Only producers that register
+     * exactly one FrameInfo per released codec frame may set this override.
+     */
+    @CanIgnoreReturnValue
+    public Builder setPresentationTimeOverrideUs(long presentationTimeUs) {
+      presentationTimeOverrideUs = presentationTimeUs;
+      return this;
+    }
+
     /** Builds a {@link FrameInfo} instance. */
     public FrameInfo build() {
-      return new FrameInfo(width, height, pixelWidthHeightRatio, offsetToAddUs);
+      return new FrameInfo(width, height, pixelWidthHeightRatio, offsetToAddUs,
+          presentationTimeOverrideUs);
     }
   }
 
@@ -114,10 +129,18 @@ public class FrameInfo {
    * processing, and is retained in the output timestamps.
    */
   public final long offsetToAddUs;
+  public final long presentationTimeOverrideUs;
+
+  /** Returns the media timestamp for a registered surface frame, including its explicit offset. */
+  public long resolvePresentationTimeUs(long surfaceTimestampNs) {
+    return (presentationTimeOverrideUs == C.TIME_UNSET
+        ? surfaceTimestampNs / 1000 : presentationTimeOverrideUs) + offsetToAddUs;
+  }
 
   // TODO(b/227624622): Add color space information for HDR.
 
-  private FrameInfo(int width, int height, float pixelWidthHeightRatio, long offsetToAddUs) {
+  private FrameInfo(int width, int height, float pixelWidthHeightRatio, long offsetToAddUs,
+      long presentationTimeOverrideUs) {
     checkArgument(width > 0, "width must be positive, but is: " + width);
     checkArgument(height > 0, "height must be positive, but is: " + height);
 
@@ -125,5 +148,6 @@ public class FrameInfo {
     this.height = height;
     this.pixelWidthHeightRatio = pixelWidthHeightRatio;
     this.offsetToAddUs = offsetToAddUs;
+    this.presentationTimeOverrideUs = presentationTimeOverrideUs;
   }
 }

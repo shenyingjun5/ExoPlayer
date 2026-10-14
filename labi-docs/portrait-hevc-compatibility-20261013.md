@@ -1,5 +1,23 @@
 # Portrait HEVC / Dolby Vision base-layer compatibility (2026-10-13)
 
+## Current scope — 2026-10-14 release convergence
+
+The user deferred HEVC/Dolby Vision/HDR. The candidate now restores the baseline Dolby Vision
+profile assignment in `getMediaFormat`; the HEVC profile experiment remains in Git history
+(`c0d7bf127b`), not in the final working-tree implementation. The corresponding profile tests
+now assert baseline behavior. The historical analysis below is evidence, not an active release claim.
+
+Retained scope: opt-in, exact-device AVC SDR rotation, API19 timestamp/flush lifecycle fixes,
+frame-processor callback/size cleanup and actual audio EOS drain completion. The EOS drain change
+is shared by Exo audio playback, and frame-processor infrastructure is shared with existing effects;
+these require regression beyond the two rotation devices. Normal running audio clock is unchanged.
+Receiver preselection additionally restricts API19 Konka/rtd294x_tv035 and API22 amlogic/r34a0.
+The renderer still owns codec/format/angle/color/protection/tunneling/effect eligibility.
+
+The installed `portrait-api19-flush2` APK still contains the earlier HEVC experiment and is only
+historical acceptance evidence. It must not be promoted as the final binary. No formal Maven
+version, published `.35` artifact, or release identity has been replaced by this convergence.
+
 ## Baseline and evidence
 
 - This change starts from immutable tag `exoplayer-rtsp-2.19.1-labi.35`, source commit `89b8f82d22ce302819cc604e1959a5ebd610a17c`. The main checkout has unrelated uncommitted audio and RTSP experiments; this candidate is isolated from them.
@@ -72,7 +90,40 @@ This reaches `library/core`, `library/common`, and `library/effect` because code
 
 The first QC Receiver candidate reached `SetURI` prepare but failed before Play with `VideoFrameProcessingException: width -1 must be positive`. The receiver supplies a bare `Surface`, so Exo sends no `MSG_SET_VIDEO_OUTPUT_RESOLUTION`; the GPU processor received `Size.UNKNOWN=(-1,-1)` and tried to create a `Presentation` with that width. The follow-up keeps the existing receiver `setSurface(Surface)` contract. Only when the processor has an unknown output size, `FinalShaderProgramWrapper` queries the actual EGL window width and height. It waits without creating the presentation shader while either dimension is nonpositive or unavailable, and reconfigures on a later resize. A known positive size retains the caller's viewport. Neither source-video dimensions nor a synthetic `1×1` viewport are substituted. The QC renderer reports ready after its first successful output swap in this unknown-size path. This host-side change still needs the same-device playback check, including Surface replacement and resize; the failed candidate is not evidence of successful pixel rotation.
 
-The next QC run confirmed upright, correctly proportioned moving H.264 frames at the 2 s, 5 s, and 9 s captures. The source also reached natural `COMPLETED` in the later full log; an earlier Receiver debug snapshot with a static 57 ms position was not a direct player-clock measurement. `VideoSize` remained unknown because `VideoFrameProcessorManager.releaseProcessedFrames` skips size notification when it force-renders the first frame before Play, while its normal branch compares the pending frame timestamp in the wrong direction and against a timestamp with `initialStreamOffsetUs` added. This renderer event defect belongs in `library/core`. The follow-up consumes the pending size change once when a non-dropped processed frame is submitted for output, comparing the pending and released timestamps in the same VideoFrameProcessor time domain. It does not change EOS or frame scheduling, and it does not claim the Receiver has consumed the notification until the next device run.
+The next QC run confirmed upright, correctly proportioned moving H.264 frames at the 2 s, 5 s, and 9 s captures. An earlier Receiver debug snapshot with a static 57 ms position was not a direct player-clock measurement. A later `COMPLETED` entry followed a `GetPositionInfo` request, which may trigger the Receiver's cached-position completion fallback; it does not independently prove Exo EOS. `VideoSize` remained unknown because `VideoFrameProcessorManager.releaseProcessedFrames` skips size notification when it force-renders the first frame before Play, while its normal branch compares the pending frame timestamp in the wrong direction and against a timestamp with `initialStreamOffsetUs` added. This renderer event defect belongs in `library/core`. The follow-up consumes the pending size change once when a non-dropped processed frame is submitted for output, comparing the pending and released timestamps in the same VideoFrameProcessor time domain. It does not change EOS or frame scheduling, and it does not claim the Receiver has consumed the notification until the next device run.
+
+The next Receiver candidate confirmed upright, correctly proportioned moving H.264 frames and reported `1080×1920`, but its Exo `Player.Listener` reached `READY`/`isPlaying=true` without an `ENDED` event by 35 s for the 11.6 s sample. The Receiver debug position/duration fields are cached session state, not direct Exo clock reads, so their zero values do not diagnose EOS. A subsequent 0° display-matrix control using the same encoded video packets did not activate the GPU rotation path (`1920×1080 / rotation=0`) and also remained `PLAYING` without `ENDED` at 35 s. This rules out the GPU effect chain as the sole cause of the observed noncompletion. `MediaCodecVideoRenderer.isEnded()` does add a processed-last-frame condition when frame processing is enabled, but these runs do not establish whether codec EOS occurred, whether another renderer remained active, or whether the HTTP/container stream signaled end. An experimental QC-only frame-count EOS gate passed host tests but was removed before commit because the 0° control showed the same symptom without the gate. No EOS production change is included in this branch pending a discriminating observation.
+
+### QC HEVC/HLG color boundary (read-only, 2026-10-14)
+
+- The original HEVC Main10/Dolby Vision-compatible source is HLG/BT.2020. The separate QC neutral-OES HEVC probe decoded real pixels with `OMX.amlogic.hevc.decoder.awesome`; its explicit 90° output is upright but looks pale/yellow relative to the iOS-compatible H.264 reference. Its reported decoder output `MediaFormat` has no color-standard/transfer/range keys. Missing output keys do **not** establish that the source or sampled pixels are SDR, nor does a comparison with a separately converted H.264 file establish the precise color conversion fault. The probe is not a production Receiver color acceptance test.
+- The Cast-SDK device-side read-only `dumpsys SurfaceFlinger` check reported `GLES: ARM, Mali-450 MP, OpenGL ES 2.0`. Its extensions include `GL_OES_EGL_image_external` but not `GL_EXT_YUV_target`. This is the QC API 22 device used for the portrait probe, not a general claim about all API 22 devices.
+- The existing renderer maps HLG input to BT.2020 PQ display output in `experimentalGetVideoFrameProcessorColorConfiguration`. `DefaultVideoFrameProcessor` rejects HDR display output below API 33. Its existing HLG/BT.2020-to-SDR/BT.709 Gamma 2.2 shader path requires OpenGL ES 3 and raw-YUV external-texture sampling through `GL_EXT_YUV_target`. This QC device reports neither prerequisite, so the existing `library/effect` HDR-input path cannot safely perform that tone mapping on it. An OES RGB probe showing upright pixels does not prove it can supply the original HLG YUV or that the vendor has not already applied a conversion.
+- Keep the AVC SDR rotation switch restricted to its exact codec/color gate. Do not widen it to HEVC, label this HLG source as SDR to enter the ES 2 shader path, or change SYSTEM/NativeRTSP behavior on the strength of the probe. A future QC HEVC color fix needs a separately scoped, measured output path with verified input pixel/color semantics and HLG-to-SDR conversion; absent those facts, the minimal safe choice is to leave HEVC color behavior unchanged and report the limitation. This document-only finding introduces no shader, global transcode, or production behavior change.
+
+### Subsequent EOS and reuse evidence (Cast-SDK owner, 2026-10-14)
+
+The earlier EOS hypothesis is superseded by a bounded independent Debug probe: video ended,
+audio handled EOS with null input/output buffers, and written/head/endHead all equaled 556992,
+yet the audio sink still reported pending/not ended. A deterministic test reproduces this after
+AudioTrack.stop with nonzero latency. The isolated fix uses the existing simulated playback head
+only while stopTimestampUs is valid; normal playback clocks, caps, wrap and underrun logic stay
+unchanged. A separate floor-rounding experiment was disproved and removed, not incorporated.
+
+Rotation ownership is retained when onDisabled flushes but keeps the codec, and cleared on actual
+codec release. The exact GPU-rotation flush path also re-arms a known output size for its next real
+frame and clears the previous stream's PTS gate, because equal-size reuse need not trigger a new
+onOutputSizeChanged callback. No decoder/media-type gate is expanded.
+
+QC candidate6 (build 20261014-085725-593c42ed) completed five consecutive same-H.264/AAC SetURI/Play
+cycles with new real Exo ENDED events, no GetPositionInfo intervention, and upright moving pixels.
+Its missing reused size notification is addressed by the subsequent candidate7; that specific
+device check remains separate. The final isolated unit run passed 45 cases (audio tracker 6,
+renderer 34, output-size gate 5), core AAR SHA-256
+808be72db4062753190c273f06e87fcbb2355cdc4555386936b79913cb3bf910.
+Code is still uncommitted on top of 0ed838417d; no formal version or publication is advanced.
+Evidence lives in Cast-SDK qa/reports/receiver/functional/20261014-qc-portrait-retest/receiver-candidate/.
+Original HEVC/HDR, 5Y hardware, audible output and full surface/performance acceptance remain open.
 
 ## Verification and handoff
 
@@ -81,3 +132,36 @@ The next QC run confirmed upright, correctly proportioned moving H.264 frames at
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:testDebugUnitTest --tests com.google.android.exoplayer2.video.MediaCodecVideoRendererTest`: passed.
 - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/shenyingjun/Library/Android/sdk ./gradlew :library-core:assembleRelease`: passed.
 - This is a host-side configuration test only. 5Y must verify that `OMX.RTK.video.decoder` now configures and actually decodes the fixed sample; if it still fails, the existing SYSTEM fallback remains the receiver's recovery path. QC must verify actual upright pixels on the same SHA-256 sample under both Exo and SYSTEM routes before any device-scoped rotation rule is adopted. Device runs are coordinated by the Cast-SDK receiver task. No Maven artifact has been published.
+# 2026-10-14 API19 AVC 候选补充（未发布）
+
+最新候选 flush2 仅在下述精确 API19 旋转路径关闭迟到时的跳关键帧重建，继续使用现有
+逐帧丢弃/强制渲染策略；最后帧不丢弃，明确 seek/disable 仍执行 producer-first 释放。
+避免 GL 重建本身再次造成迟到。48 项 Fork 测试通过，Receiver 194 项测试及三个边界检查
+通过。5Y 无截图对照已取得真实 ENDED/COMPLETED、Stop 后 GL 线程退出；方向、运动和
+五次重播仍单独验收。私有 Maven `2.19.1-labi.35-portrait-api19-flush2`，不修改正式 `.35`。
+
+5Y Konka/rtd294x_tv035/API19 的独立 OES 0°/90°对照已取得真实像素；90°人物正立并
+解码到 EOS。复用既有有限视频 rotation output，仅增加精确 OMX.RTK.video.decoder AVC
+门禁与通用工厂 opt-in，保持 SDR/非保护/非 tunneling/无 caller effects 限制。
+API19 不支持 decoder rotation，不通过修改编码宽高或仅上报角度冒充像素旋转。
+Receiver 集成验收尚未完成；独立探针不是生产性能或内存结论。
+
+原始 HEVC configure-only 对照有/无 max-width/max-height 均失败，AVC 均成功且也出现
+adaptive 警告；撤销仅凭该警告移除 max 参数的推论。本次不改 HEVC 参数或路由。
+QC HEVC/HDR 原片仍未完成方向与色彩验收，不开放 HDR GPU 门禁，不伪造 SDR 元数据。
+
+API19 第一轮 Receiver 候选画面转正但不能推进，未验收。隔离探针确认11.6秒片源的
+SurfaceTexture 最终 timestamp 为32629592671微秒，属于设备运行时钟，而非媒体PTS。
+新候选只在已开启的API19精确旋转路径逐帧注册codec输出PTS；FrameInfo新增可选媒体
+时间覆盖值，默认不变，effect消费同一个已注册FrameInfo。原有API<29单pending帧约束
+继续保证对应关系；不引入第二个无界时间戳队列，
+不从诊断数据修正时钟，也不将该规则扩展到QC/API22或任何镜像。
+
+PTS候选fresh进程能自然完成，但再次播放出现确定的永久等待：5Y motion-r2的6/12/24秒
+及Stop后栈均为`maybeDropBuffersToKeyframe -> DefaultVideoFrameProcessor.flush -> latch.await`。
+8/14秒截图字节相同。API19 RTK codec flush会丢弃已注册但尚未交付的Surface帧，不能再
+等待其回调以完成processor flush。候选在共同`flushOrReleaseCodec`入口，仅API19且
+精确旋转路径已激活时释放codec，随后现有`onCodecReleased`释放processor/隔离旧代回调，
+原调用者在需要续播时重建。覆盖关键帧追赶、seek与disable；不更改其它API、媒体、QC、
+NativeRTSP或普通效果链。不能以超时忽略flush后继续复用旧Surface作为兜底。
+真机复验未通过前保持隔离候选，正式Maven坐标不变。

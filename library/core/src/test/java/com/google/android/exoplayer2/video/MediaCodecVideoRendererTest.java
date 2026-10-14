@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -184,6 +185,128 @@ public class MediaCodecVideoRendererTest {
   }
 
   @Test
+  @Config(sdk = 19)
+  public void lateFrame_api19Rotation_dropsIndividualOutputsWithoutCodecRebuild() {
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive", true);
+    assertThat(mediaCodecVideoRenderer.shouldDropBuffersToKeyframe(-1_000_000, 0, false)).isFalse();
+    assertThat(mediaCodecVideoRenderer.shouldDropOutputBuffer(-1_000_000, 0, false)).isTrue();
+    assertThat(mediaCodecVideoRenderer.shouldDropOutputBuffer(-1_000_000, 0, true)).isFalse();
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive", false);
+    assertThat(mediaCodecVideoRenderer.shouldDropBuffersToKeyframe(-1_000_000, 0, false)).isTrue();
+  }
+
+  @Test
+  @Config(sdk = 22)
+  public void lateFrame_qcRotation_keepsKeyframeCatchup() {
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive", true);
+    assertThat(mediaCodecVideoRenderer.shouldDropBuffersToKeyframe(-1_000_000, 0, false)).isTrue();
+    assertThat(mediaCodecVideoRenderer.shouldDropBuffersToKeyframe(-1_000_000, 0, true)).isFalse();
+  }
+
+  @Test
+  @Config(sdk = 19)
+  public void flush_api19Rotation_releasesCodecBeforeProcessorAndInvalidatesCallbacks() {
+    MediaCodecAdapter codec = mock(MediaCodecAdapter.class);
+    VideoFrameProcessor processor = mock(VideoFrameProcessor.class);
+    Object manager = installFlushTestState(codec, processor, true);
+    long generation = ReflectionHelpers.getField(manager, "processorGeneration");
+
+    assertThat(mediaCodecVideoRenderer.flushOrReleaseCodec()).isTrue();
+
+    org.mockito.InOrder order = inOrder(codec, processor);
+    order.verify(codec).release();
+    order.verify(processor).release();
+    verify(codec, never()).flush();
+    verify(processor, never()).flush();
+    assertThat((Object) ReflectionHelpers.getField(manager, "videoFrameProcessor")).isNull();
+    assertThat((Long) ReflectionHelpers.getField(manager, "processorGeneration"))
+        .isEqualTo(generation + 1);
+    assertThat((Boolean) ReflectionHelpers.getField(
+        mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive")).isFalse();
+    assertThat(mediaCodecVideoRenderer.flushOrReleaseCodec()).isFalse();
+    verify(codec, times(1)).release();
+    verify(processor, times(1)).release();
+  }
+
+  @Test
+  @Config(sdk = 19)
+  public void flush_api19WithoutRotation_keepsNormalCodecFlush() {
+    MediaCodecAdapter codec = mock(MediaCodecAdapter.class);
+    VideoFrameProcessor processor = mock(VideoFrameProcessor.class);
+    installFlushTestState(codec, processor, false);
+
+    assertThat(mediaCodecVideoRenderer.flushOrReleaseCodec()).isFalse();
+
+    verify(codec).flush();
+    verify(codec, never()).release();
+    verify(processor, never()).release();
+  }
+
+  @Test
+  @Config(sdk = 22)
+  public void flush_qcRotation_keepsExistingCodecFlush() {
+    MediaCodecAdapter codec = mock(MediaCodecAdapter.class);
+    VideoFrameProcessor processor = mock(VideoFrameProcessor.class);
+    installFlushTestState(codec, processor, true);
+
+    assertThat(mediaCodecVideoRenderer.flushOrReleaseCodec()).isFalse();
+
+    verify(codec).flush();
+    verify(codec, never()).release();
+    verify(processor, never()).release();
+  }
+
+  private Object installFlushTestState(
+      MediaCodecAdapter codec, VideoFrameProcessor processor, boolean rotationActive) {
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "codec", codec);
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "codecInfo", createQcAvcCodecInfo());
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "codecReceivedBuffers", true);
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "decoderCounters", new DecoderCounters());
+    ReflectionHelpers.setField(
+        mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive", rotationActive);
+    Object manager = ReflectionHelpers.getField(mediaCodecVideoRenderer, "videoFrameProcessorManager");
+    ReflectionHelpers.setField(manager, "videoFrameProcessor", processor);
+    ReflectionHelpers.setField(manager, "handler", new Handler(testMainLooper));
+    return manager;
+  }
+
+  @Test
+  public void flush_rotationProcessor_rearmsKnownSizeForNewStream() {
+    Object manager = ReflectionHelpers.getField(mediaCodecVideoRenderer, "videoFrameProcessorManager");
+    VideoFrameProcessor processor = mock(VideoFrameProcessor.class);
+    ReflectionHelpers.setField(manager, "videoFrameProcessor", processor);
+    ReflectionHelpers.setField(manager, "handler", new Handler(testMainLooper));
+    ReflectionHelpers.setField(manager, "processedFrameSize", new VideoSize(1080, 1920));
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "amlogicR34a0AvcRotationOutputActive", true);
+    MediaCodecVideoRenderer.OutputSizeNotificationGate gate =
+        ReflectionHelpers.getField(manager, "outputSizeNotificationGate");
+    gate.setPendingFramePresentationTimeUs(11_000_000);
+
+    ReflectionHelpers.callInstanceMethod(manager, "flush");
+
+    verify(processor).flush();
+    assertThat((Boolean) ReflectionHelpers.getField(manager, "pendingOutputSizeChange")).isTrue();
+    assertThat(gate.consumeForRelease(11_000_000, 1_000_000)).isFalse();
+    gate.setPendingFramePresentationTimeUs(0);
+    assertThat(gate.consumeForRelease(0, VideoFrameProcessor.RENDER_OUTPUT_FRAME_IMMEDIATELY)).isTrue();
+  }
+
+  @Test
+  public void disable_retainsCodecRotationOwner_untilCodecReleased() {
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "codecRotationUnappliedForSelectedDecoder", true);
+    ReflectionHelpers.setField(mediaCodecVideoRenderer, "decoderCounters",
+        new com.google.android.exoplayer2.decoder.DecoderCounters());
+
+    mediaCodecVideoRenderer.onDisabled();
+
+    assertThat((Boolean) ReflectionHelpers.getField(
+        mediaCodecVideoRenderer, "codecRotationUnappliedForSelectedDecoder")).isTrue();
+    mediaCodecVideoRenderer.onCodecReleased("test-codec");
+    assertThat((Boolean) ReflectionHelpers.getField(
+        mediaCodecVideoRenderer, "codecRotationUnappliedForSelectedDecoder")).isFalse();
+  }
+
+  @Test
   public void getMediaFormat_nativeDolbyVisionDecoder_setsDolbyVisionProfile() {
     Format format =
         new Format.Builder()
@@ -210,7 +333,7 @@ public class MediaCodecVideoRendererTest {
 
   @Test
   @Config(sdk = 19)
-  public void getMediaFormat_dolbyVisionHevcBaseLayer_omitsDolbyVisionProfile() {
+  public void getMediaFormat_dolbyVisionHevcBaseLayer_preservesBaselineProfile() {
     Format format =
         new Format.Builder()
             .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
@@ -235,14 +358,15 @@ public class MediaCodecVideoRendererTest {
             C.AUDIO_SESSION_ID_UNSET);
 
     assertThat(mediaFormat.getString(MediaFormat.KEY_MIME)).isEqualTo(MimeTypes.VIDEO_H265);
-    assertThat(mediaFormat.containsKey(MediaFormat.KEY_PROFILE)).isFalse();
+    assertThat(mediaFormat.getInteger(MediaFormat.KEY_PROFILE))
+        .isEqualTo(CodecProfileLevel.DolbyVisionProfileDvheSt);
     assertThat(mediaFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD))
         .isEqualTo(C.COLOR_SPACE_BT2020);
     assertThat(mediaFormat.getInteger(MediaFormat.KEY_COLOR_TRANSFER)).isEqualTo(C.COLOR_TRANSFER_HLG);
   }
 
   @Test
-  public void getMediaFormat_dolbyVisionAvcBaseLayer_omitsDolbyVisionProfile() {
+  public void getMediaFormat_dolbyVisionAvcBaseLayer_preservesBaselineProfile() {
     Format format =
         new Format.Builder()
             .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
@@ -261,7 +385,8 @@ public class MediaCodecVideoRendererTest {
             C.AUDIO_SESSION_ID_UNSET);
 
     assertThat(mediaFormat.getString(MediaFormat.KEY_MIME)).isEqualTo(MimeTypes.VIDEO_H264);
-    assertThat(mediaFormat.containsKey(MediaFormat.KEY_PROFILE)).isFalse();
+    assertThat(mediaFormat.getInteger(MediaFormat.KEY_PROFILE))
+        .isEqualTo(CodecProfileLevel.DolbyVisionProfileDvavSe);
   }
 
   @Test
@@ -365,6 +490,41 @@ public class MediaCodecVideoRendererTest {
         .isEqualTo(-180f);
     assertThat(MediaCodecVideoRenderer.getAmlogicR34a0RotationEffectDegrees(270))
         .isEqualTo(-270f);
+  }
+
+  @Test
+  public void legacyAvcRotationOutput_realtekApi19IsNarrowlyScoped() {
+    for (int angle : new int[] {90, 180, 270}) {
+      assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+          true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+          MimeTypes.VIDEO_H264, angle, false, false, false)).isTrue();
+    }
+    for (int api : new int[] {18, 20, 21, 22, 35}) {
+      assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+          true, api, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+          MimeTypes.VIDEO_H264, 90, false, false, false)).isFalse();
+    }
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "other", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 90, false, false, false)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H265, 90, false, false, false)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 0, false, false, false)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 90, true, false, false)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 90, false, true, false)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        true, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 90, false, false, true)).isFalse();
+    assertThat(MediaCodecVideoRenderer.shouldUseLegacyAvcRotationOutput(
+        false, 19, "Konka", "rtd294x_tv035", "OMX.RTK.video.decoder",
+        MimeTypes.VIDEO_H264, 90, false, false, false)).isFalse();
   }
 
   @Test

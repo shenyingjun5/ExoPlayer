@@ -31,6 +31,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowSystemClock;
+import org.robolectric.util.ReflectionHelpers;
 
 /**
  * Unit tests for {@link AudioTrackPositionTracker}.
@@ -146,6 +147,29 @@ public class AudioTrackPositionTrackerTest {
             samplePlaybackHeadPositionAndReadPosition(
                 /* playbackHeadPositionFrames= */ 2 * SAMPLE_RATE, writtenFrames))
         .isEqualTo(expectedPositionUs);
+  }
+
+  @Test
+  public void hasPendingData_afterStoppedTrackDrains_withLatency_returnsFalse() {
+    samplePlaybackHeadPositionAndReadPosition(SAMPLE_RATE / 2, SAMPLE_RATE);
+    audioTrackPositionTracker.handleEndOfStream(SAMPLE_RATE);
+    AudioTrack track = ReflectionHelpers.getField(audioTrackPositionTracker, "audioTrack");
+    when(track.getPlayState()).thenReturn(AudioTrack.PLAYSTATE_STOPPED);
+    ReflectionHelpers.callInstanceMethod(audioTrackPositionTracker, "resetSyncParams");
+    ReflectionHelpers.setField(audioTrackPositionTracker, "latencyUs", 50_000L);
+    ShadowSystemClock.advanceBy(Duration.ofSeconds(2));
+
+    assertThat(audioTrackPositionTracker.hasPendingData(SAMPLE_RATE)).isFalse();
+  }
+
+  @Test
+  public void hasPendingData_afterEndOfStream_beforeDrain_returnsTrue() {
+    samplePlaybackHeadPositionAndReadPosition(0, 5 * SAMPLE_RATE);
+    audioTrackPositionTracker.handleEndOfStream(5 * SAMPLE_RATE);
+    AudioTrack track = ReflectionHelpers.getField(audioTrackPositionTracker, "audioTrack");
+    when(track.getPlayState()).thenReturn(AudioTrack.PLAYSTATE_STOPPED);
+
+    assertThat(audioTrackPositionTracker.hasPendingData(5 * SAMPLE_RATE)).isTrue();
   }
 
   /** Samples the given playback head position and returns the position the tracker reports. */

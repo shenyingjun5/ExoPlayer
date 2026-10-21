@@ -1,12 +1,12 @@
 # RTSP Feedback Enhancement Plan
 
-## 2026-10-22：旧 API HLS TS 解复用优化（待正式批次）
+## 2026-10-22：2.19.1-labi.37 旧 API HLS TS 解复用优化
 
 原因：N7/API22 同源 HLS Seek 后，音频样本尚存而视频样本耗尽；原始 LAN 读取约0.89秒，独立 TS/SampleQueue 消耗约2.7秒 CPU。瓶颈在小块 TS/AVC 解析，不能仅通过增大缓存或增加 Sonic 线程解决。这是本 fork 原创优化，不是 Media3 backport。
 
 范围仅 `library/extractor` 的 `TsExtractor` 与 `PesReader`：API <=22 且 MODE_HLS 时，每次最多处理32个已经缓冲的TS包，不增加网络读取；H264 已解析、无界 PES 正文按8KiB有界合并，PES边界及分片EOF flush，seek丢弃旧尾部。有限PES、分片头、非AVC、普通TS和API23+保留原路径。适配字段0长度与越界单独处理，独立payload游标避免消费改变原始包游标。没有新增线程、公开API或依赖。
 
-基线固定已发布 `.36` Tag `02337204d3cbc70fa219f9b279540ee5b06dcd0e`，保留其中的旋转、时钟和生命周期修复。共享 Native Sonic 位于 Cast-SDK，不由本 fork 承载。正式候选需全模块同版本重建，不复用 N7 probe AAR，不覆盖任何已发布版本；版本与发布等待最终批次确认。
+基线固定已发布 `.36` Tag `02337204d3cbc70fa219f9b279540ee5b06dcd0e`，保留其中的旋转、时钟和生命周期修复。共享 Native Sonic 位于 Cast-SDK，不由本 fork 承载。用户已确认 `.37` 全模块本地正式候选，需全模块同版本重建，不复用 N7 probe AAR，不覆盖任何已发布版本。本轮不发布 Maven、Tag 或线上升级清单。
 
 验证：新增 `TsHlsBatchingTest` / `PesH264BatchingTest`，API19/22/23/29 共56项已通过，含真实TS样本与原路径输出对比、188/257/9400字节输入、边界/异常/seek/EOF/非AVC。完整Debug回归：extractor1614项、HLS148项、RTSP366项、core4896项；共7014通过、0失败、10项基线@Ignore跳过。新增56项已包含在extractor总数中。Release/Lint及全模块正式字节、消费者和真机物理视听仍待正式候选验证。N7私有候选同源1.5倍Seek后两轮30秒无二次BUFFERING；该证据不替代正式字节及物理视听验收。测试实现不进入生产AAR。
 

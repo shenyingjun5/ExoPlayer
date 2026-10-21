@@ -47,12 +47,17 @@ public final class PesReader implements TsPayloadReader {
   private static final int STATE_READING_HEADER_EXTENSION = 2;
   private static final int STATE_READING_BODY = 3;
 
+  private static final int MAX_H264_BODY_BYTES = 8192;
   private static final int HEADER_SIZE = 9;
   private static final int MAX_HEADER_EXTENSION_SIZE = 10;
   private static final int PES_SCRATCH_SIZE = 10; // max(HEADER_SIZE, MAX_HEADER_EXTENSION_SIZE)
 
   private final ElementaryStreamReader reader;
   private final ParsableBitArray pesScratch;
+
+  // Allocated only for old-API HLS AVC, before init; bounded to one small PES body block.
+  @Nullable private ParsableByteArray h264Body;
+  private int h264BodySize;
 
   private int state;
   private int bytesRead;
@@ -72,6 +77,34 @@ public final class PesReader implements TsPayloadReader {
     state = STATE_FINDING_HEADER;
   }
 
+  void enableH264BodyBatching() {
+    if (reader instanceof H264Reader && h264Body == null) {
+      h264Body = new ParsableByteArray(MAX_H264_BODY_BYTES);
+    }
+  }
+
+  void flushH264Body() throws ParserException {
+    if (h264Body == null || h264BodySize == 0) {
+      return;
+    }
+    h264Body.setPosition(0);
+    h264Body.setLimit(h264BodySize);
+    h264BodySize = 0;
+    reader.consume(h264Body);
+  }
+
+  @RequiresNonNull("h264Body")
+  private void appendH264Body(ParsableByteArray data) throws ParserException {
+    while (data.bytesLeft() > 0) {
+      int count = min(data.bytesLeft(), MAX_H264_BODY_BYTES - h264BodySize);
+      data.readBytes(h264Body.getData(), h264BodySize, count);
+      h264BodySize += count;
+      if (h264BodySize == MAX_H264_BODY_BYTES) {
+        flushH264Body();
+      }
+    }
+  }
+
   @Override
   public void init(
       TimestampAdjuster timestampAdjuster,
@@ -85,6 +118,7 @@ public final class PesReader implements TsPayloadReader {
 
   @Override
   public final void seek() {
+    h264BodySize = 0;
     state = STATE_FINDING_HEADER;
     bytesRead = 0;
     seenFirstDts = false;
@@ -94,6 +128,16 @@ public final class PesReader implements TsPayloadReader {
   @Override
   public final void consume(ParsableByteArray data, @Flags int flags) throws ParserException {
     Assertions.checkStateNotNull(timestampAdjuster); // Asserts init has been called.
+    if (h264Body != null) {
+      // Only the already-parsed, unbounded AVC body has no per-TS header/state work left.
+      // Header fragments and finite-length PES retain the original path and flag semantics.
+      if (state == STATE_READING_BODY && payloadSize == C.LENGTH_UNSET
+          && (flags & FLAG_PAYLOAD_UNIT_START_INDICATOR) == 0) {
+        appendH264Body(data);
+        return;
+      }
+      flushH264Body();
+    }
 
     if ((flags & FLAG_PAYLOAD_UNIT_START_INDICATOR) != 0) {
       switch (state) {

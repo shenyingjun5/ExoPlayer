@@ -122,12 +122,14 @@ public final class TsExtractor implements Extractor {
   private static final long HEVC_FORMAT_IDENTIFIER = 0x48455643;
 
   private static final int BUFFER_SIZE = TS_PACKET_SIZE * 50;
+  private static final int MAX_BUFFERED_HLS_PACKETS_PER_READ = 32;
   private static final int SNIFF_TS_PACKET_COUNT = 5;
 
   private final @Mode int mode;
   private final int timestampSearchBytes;
   private final List<TimestampAdjuster> timestampAdjusters;
   private final ParsableByteArray tsPacketBuffer;
+  @Nullable private final ParsableByteArray hlsPayloadBuffer;
   private final SparseIntArray continuityCounters;
   private final TsPayloadReader.Factory payloadReaderFactory;
   private final SparseArray<TsPayloadReader> tsPayloadReaders; // Indexed by pid
@@ -223,6 +225,7 @@ public final class TsExtractor implements Extractor {
       timestampAdjusters.add(timestampAdjuster);
     }
     tsPacketBuffer = new ParsableByteArray(new byte[BUFFER_SIZE], 0);
+    hlsPayloadBuffer = mode == MODE_HLS && Util.SDK_INT <= 22 ? new ParsableByteArray() : null;
     trackIds = new SparseBooleanArray();
     trackPids = new SparseBooleanArray();
     tsPayloadReaders = new SparseArray<>();
@@ -329,7 +332,20 @@ public final class TsExtractor implements Extractor {
     }
 
     if (!fillBufferWithAtLeastOnePacket(input)) {
+      if (hlsPayloadBuffer != null) {
+        // Flush the bounded AVC tail at every segment boundary, including the final segment.
+        for (int i = 0; i < tsPayloadReaders.size(); i++) {
+          TsPayloadReader reader = tsPayloadReaders.valueAt(i);
+          if (reader instanceof PesReader) {
+            ((PesReader) reader).flushH264Body();
+          }
+        }
+      }
       return RESULT_END_OF_INPUT;
+    }
+
+    if (hlsPayloadBuffer != null) {
+      return readBufferedHlsPackets(inputLength, hlsPayloadBuffer);
     }
 
     int endOfPacket = findEndOfFirstTsPacketInBuffer();
@@ -406,6 +422,62 @@ public final class TsExtractor implements Extractor {
   }
 
   // Internals.
+
+  /** Reads at most 32 already-buffered packets, without repeated cursor wrapper calls. */
+  private int readBufferedHlsPackets(long inputLength, ParsableByteArray payload)
+      throws ParserException {
+    byte[] data = tsPacketBuffer.getData();
+    int position = tsPacketBuffer.getPosition();
+    int limit = tsPacketBuffer.limit();
+    try {
+      for (int batch = 0;
+          batch < MAX_BUFFERED_HLS_PACKETS_PER_READ && limit - position >= TS_PACKET_SIZE;
+          batch++) {
+        if (tracksEnded && !hasOutputSeekMap) maybeOutputSeekMap(inputLength);
+        int searchStart = position;
+        while (position < limit && (data[position] & 0xff) != TS_SYNC_BYTE) position++;
+        int endOfPacket = position + TS_PACKET_SIZE;
+        if (endOfPacket > limit) {
+          bytesSinceLastSync += position - searchStart;
+          if (bytesSinceLastSync > TS_PACKET_SIZE * 2) {
+            throw ParserException.createForMalformedContainer(
+                "Cannot find sync byte. Most likely not a Transport Stream.", null);
+          }
+          return RESULT_CONTINUE;
+        }
+        bytesSinceLastSync = 0;
+        int header = (data[position] & 0xff) << 24
+            | (data[position + 1] & 0xff) << 16
+            | (data[position + 2] & 0xff) << 8 | (data[position + 3] & 0xff);
+        int body = position + 4;
+        position = endOfPacket;
+        if ((header & 0x800000) != 0) continue;
+        TsPayloadReader reader = (header & 0x10) != 0
+            ? tsPayloadReaders.get((header & 0x1fff00) >> 8) : null;
+        if (reader == null) continue;
+        int flags = (header & 0x400000) != 0 ? FLAG_PAYLOAD_UNIT_START_INDICATOR : 0;
+        if ((header & 0x20) != 0) {
+          int length = data[body++] & 0xff;
+          if (length > endOfPacket - body) {
+            throw ParserException.createForMalformedContainer(
+                "TS adaptation field exceeds packet", /* cause= */ null);
+          }
+          if (length > 0) {
+            int adaptationFlags = data[body] & 0xff;
+            flags |= (adaptationFlags & 0x40) != 0 ? TsPayloadReader.FLAG_RANDOM_ACCESS_INDICATOR : 0;
+          }
+          body += length;
+        }
+        // The payload cursor is separate: consuming it cannot change the packet loop cursor.
+        payload.reset(data, endOfPacket);
+        payload.setPosition(body);
+        reader.consume(payload, flags);
+      }
+      return RESULT_CONTINUE;
+    } finally {
+      tsPacketBuffer.setPosition(position);
+    }
+  }
 
   private void maybeOutputSeekMap(long inputLength) {
     if (!hasOutputSeekMap) {
@@ -682,6 +754,11 @@ public final class TsExtractor implements Extractor {
         trackPids.put(trackPid, true);
         @Nullable TsPayloadReader reader = trackIdToReaderScratch.valueAt(i);
         if (reader != null) {
+          if (hlsPayloadBuffer != null
+              && trackId == TS_STREAM_TYPE_H264 && reader instanceof PesReader) {
+            // Old Android interpreters spend most AVC demux CPU on tiny repeated reader calls.
+            ((PesReader) reader).enableH264BodyBatching();
+          }
           if (reader != id3Reader) {
             reader.init(
                 timestampAdjuster,
